@@ -1,0 +1,11 @@
+node_modules/
+data/
+uploads/*.mp3
+uploads/*.wav
+uploads/*.ogg
+uploads/*.aac
+uploads/*.flac
+uploads/*.m4a
+.env
+*.log
+.DS_Store

@@ -1,0 +1,2360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Radio Manager</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    :root {
+      --bg: #080b12;
+      --bg2: #0e1219;
+      --bg3: #131720;
+      --panel: #161c27;
+      --panel2: #1b2235;
+      --border: #232c3d;
+      --border2: #2a3549;
+      --cyan: #00e5ff;
+      --cyan2: #00b8d4;
+      --orange: #ff6d3b;
+      --orange2: #e05a2b;
+      --green: #00e676;
+      --red: #ff1744;
+      --yellow: #ffea00;
+      --purple: #d500f9;
+      --text: #e8eaf6;
+      --text2: #8fa3c0;
+      --text3: #4a6280;
+      --font: 'Space Grotesk', sans-serif;
+      --mono: 'Space Mono', monospace;
+      --radius: 10px;
+      --shadow: 0 4px 24px rgba(0,0,0,0.5);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      min-height: 100vh;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* SCROLLBAR */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: var(--bg2); }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 10px; }
+
+    /* SIDEBAR */
+    .sidebar {
+      width: 220px;
+      min-width: 220px;
+      background: var(--bg2);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+      height: 100vh;
+      overflow-y: auto;
+    }
+
+    .sidebar-logo {
+      padding: 20px 20px 18px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-icon {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, var(--cyan), var(--purple));
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+    }
+
+    .logo-text { 
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.2;
+    }
+    .logo-sub { font-size: 10px; color: var(--text3); font-family: var(--mono); }
+
+    .nav-section {
+      padding: 16px 10px 6px;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      color: var(--text3);
+      text-transform: uppercase;
+      font-family: var(--mono);
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      margin: 1px 8px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text2);
+      transition: all 0.15s;
+      position: relative;
+    }
+
+    .nav-item:hover { background: var(--panel); color: var(--text); }
+    .nav-item.active {
+      background: rgba(0, 229, 255, 0.1);
+      color: var(--cyan);
+      font-weight: 600;
+    }
+    .nav-item.active::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 3px;
+      height: 20px;
+      background: var(--cyan);
+      border-radius: 0 3px 3px 0;
+    }
+
+    .nav-icon { font-size: 16px; width: 20px; text-align: center; }
+
+    /* NOW PLAYING MINI (sidebar bottom) */
+    .sidebar-now-playing {
+      margin-top: auto;
+      border-top: 1px solid var(--border);
+      padding: 14px;
+    }
+
+    .snp-label { font-size: 9px; color: var(--text3); letter-spacing: 2px; text-transform: uppercase; font-family: var(--mono); margin-bottom: 8px; }
+
+    .snp-track { 
+      font-size: 12px; 
+      font-weight: 600; 
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .snp-artist { font-size: 11px; color: var(--text3); margin-top: 2px; }
+
+    .snp-controls { display: flex; gap: 6px; margin-top: 10px; }
+    .snp-btn {
+      flex: 1;
+      padding: 6px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--text2);
+      cursor: pointer;
+      font-size: 12px;
+      transition: all 0.15s;
+    }
+    .snp-btn:hover { background: var(--panel2); color: var(--text); }
+    .snp-btn.active { background: rgba(0,229,255,0.15); color: var(--cyan); border-color: var(--cyan); }
+
+    /* EQUALIZER ANIMATION */
+    .eq-bars {
+      display: flex;
+      gap: 2px;
+      align-items: flex-end;
+      height: 16px;
+      margin-top: 8px;
+    }
+    .eq-bar {
+      width: 3px;
+      background: var(--cyan);
+      border-radius: 2px;
+      animation: eqAnimate 0.8s ease-in-out infinite;
+    }
+    .eq-bar:nth-child(1) { animation-delay: 0s; }
+    .eq-bar:nth-child(2) { animation-delay: 0.1s; }
+    .eq-bar:nth-child(3) { animation-delay: 0.2s; }
+    .eq-bar:nth-child(4) { animation-delay: 0.15s; }
+    .eq-bar:nth-child(5) { animation-delay: 0.05s; }
+    @keyframes eqAnimate {
+      0%, 100% { height: 4px; opacity: 0.5; }
+      50% { height: 16px; opacity: 1; }
+    }
+    .eq-bars.paused .eq-bar { animation-play-state: paused; height: 4px; }
+
+    /* MAIN CONTENT */
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* TOP BAR */
+    .topbar {
+      height: 60px;
+      min-height: 60px;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 24px;
+      gap: 16px;
+    }
+
+    .topbar-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+      flex: 1;
+    }
+
+    .topbar-sub { font-size: 12px; color: var(--text3); font-weight: 400; margin-left: 8px; }
+
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: var(--mono);
+    }
+
+    .status-pill.live {
+      background: rgba(0,230,118,0.1);
+      color: var(--green);
+      border: 1px solid rgba(0,230,118,0.3);
+    }
+    .status-pill.offline {
+      background: rgba(255,23,68,0.1);
+      color: var(--red);
+      border: 1px solid rgba(255,23,68,0.3);
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .dot.pulse { animation: pulse 1.5s infinite; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.8); }
+    }
+
+    .listeners-badge {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 6px 12px;
+      background: var(--panel);
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--text2);
+    }
+
+    /* PAGE CONTENT */
+    .page-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+    }
+
+    .page { display: none; }
+    .page.active { display: block; }
+
+    /* CARDS */
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .card-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text2);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      font-family: var(--mono);
+    }
+
+    /* GRID LAYOUTS */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+    .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+
+    /* STATS */
+    .stat-block {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+
+    .stat-label { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; font-family: var(--mono); }
+    .stat-value { font-size: 28px; font-weight: 700; color: var(--text); font-family: var(--mono); }
+    .stat-sub { font-size: 11px; color: var(--text3); margin-top: 4px; }
+
+    /* NOW PLAYING BIG CARD */
+    .now-playing-card {
+      background: linear-gradient(135deg, rgba(0,229,255,0.07) 0%, rgba(213,0,249,0.05) 100%);
+      border: 1px solid rgba(0,229,255,0.2);
+      border-radius: var(--radius);
+      padding: 24px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .now-playing-card::before {
+      content: '';
+      position: absolute;
+      top: -40px;
+      right: -40px;
+      width: 150px;
+      height: 150px;
+      background: radial-gradient(circle, rgba(0,229,255,0.1), transparent 70%);
+      pointer-events: none;
+    }
+
+    .np-track { font-size: 20px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+    .np-artist { font-size: 14px; color: var(--cyan); }
+
+    .np-meta { display: flex; gap: 16px; margin-top: 16px; flex-wrap: wrap; }
+    .np-meta-item { font-size: 11px; color: var(--text3); display: flex; align-items: center; gap: 4px; font-family: var(--mono); }
+
+    .progress-bar-wrap { margin-top: 16px; position: relative; }
+    .progress-track { height: 3px; background: var(--border2); border-radius: 3px; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, var(--cyan), var(--purple)); border-radius: 3px; transition: width 1s linear; }
+
+    /* BUTTONS */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      font-family: var(--font);
+      font-size: 13px;
+      font-weight: 600;
+      transition: all 0.15s;
+    }
+
+    .btn-primary { background: var(--cyan); color: #000; }
+    .btn-primary:hover { background: var(--cyan2); }
+    .btn-secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
+    .btn-secondary:hover { background: var(--border); }
+    .btn-danger { background: rgba(255,23,68,0.1); color: var(--red); border: 1px solid rgba(255,23,68,0.3); }
+    .btn-danger:hover { background: rgba(255,23,68,0.2); }
+    .btn-orange { background: var(--orange); color: #fff; }
+    .btn-orange:hover { background: var(--orange2); }
+    .btn-sm { padding: 5px 10px; font-size: 11px; border-radius: 6px; }
+    .btn-icon { padding: 7px; }
+
+    /* TABS */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 20px;
+    }
+
+    .tab {
+      padding: 10px 16px;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--text3);
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      font-weight: 500;
+      transition: all 0.15s;
+    }
+
+    .tab:hover { color: var(--text2); }
+    .tab.active { color: var(--cyan); border-bottom-color: var(--cyan); }
+
+    /* TABLE */
+    .table-wrap { overflow-x: auto; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    thead th {
+      text-align: left;
+      padding: 10px 14px;
+      color: var(--text3);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--mono);
+    }
+
+    tbody tr {
+      border-bottom: 1px solid rgba(35,44,61,0.5);
+      transition: background 0.1s;
+    }
+
+    tbody tr:hover { background: rgba(255,255,255,0.02); }
+
+    tbody td {
+      padding: 10px 14px;
+      color: var(--text);
+      vertical-align: middle;
+    }
+
+    .track-title-cell { font-weight: 500; }
+    .track-artist-cell { color: var(--text3); }
+    .duration-cell { font-family: var(--mono); font-size: 12px; color: var(--text3); }
+
+    /* DRAG OVER */
+    .drag-over { background: rgba(0,229,255,0.05) !important; border: 1px dashed var(--cyan) !important; }
+
+    /* UPLOAD ZONE */
+    .upload-zone {
+      border: 2px dashed var(--border2);
+      border-radius: var(--radius);
+      padding: 48px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .upload-zone:hover, .upload-zone.drag-active {
+      border-color: var(--cyan);
+      background: rgba(0,229,255,0.03);
+    }
+
+    .upload-icon { font-size: 40px; margin-bottom: 12px; }
+    .upload-text { font-size: 15px; font-weight: 500; color: var(--text2); margin-bottom: 6px; }
+    .upload-sub { font-size: 12px; color: var(--text3); }
+
+    /* BADGE */
+    .badge {
+      display: inline-flex;
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .badge-cyan { background: rgba(0,229,255,0.12); color: var(--cyan); }
+    .badge-orange { background: rgba(255,109,59,0.12); color: var(--orange); }
+    .badge-green { background: rgba(0,230,118,0.12); color: var(--green); }
+    .badge-purple { background: rgba(213,0,249,0.12); color: var(--purple); }
+
+    /* PLANNING CALENDAR */
+    .planning-calendar {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .cal-header {
+      display: grid;
+      grid-template-columns: 60px repeat(7, 1fr);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .cal-day-header {
+      padding: 12px 8px;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text3);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      font-family: var(--mono);
+      border-right: 1px solid var(--border);
+    }
+
+    .cal-day-header.today { color: var(--cyan); }
+    .cal-day-header:last-child { border-right: none; }
+
+    .cal-body {
+      display: flex;
+      height: 600px;
+      overflow-y: auto;
+      position: relative;
+    }
+
+    .cal-times {
+      width: 60px;
+      min-width: 60px;
+      border-right: 1px solid var(--border);
+      position: sticky;
+      left: 0;
+      background: var(--panel);
+      z-index: 2;
+    }
+
+    .cal-time-slot {
+      height: 40px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: flex-end;
+      padding: 2px 8px 0 0;
+      font-size: 10px;
+      color: var(--text3);
+      font-family: var(--mono);
+      border-bottom: 1px solid rgba(35,44,61,0.4);
+    }
+
+    .cal-grid {
+      flex: 1;
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+    }
+
+    .cal-col {
+      border-right: 1px solid var(--border);
+      position: relative;
+    }
+
+    .cal-col:last-child { border-right: none; }
+
+    .cal-hour-line {
+      height: 40px;
+      border-bottom: 1px solid rgba(35,44,61,0.4);
+    }
+
+    .cal-slot {
+      position: absolute;
+      left: 2px;
+      right: 2px;
+      border-radius: 6px;
+      padding: 4px 6px;
+      font-size: 10px;
+      font-weight: 600;
+      overflow: hidden;
+      cursor: pointer;
+      transition: opacity 0.15s;
+      z-index: 1;
+    }
+
+    .cal-slot:hover { opacity: 0.85; }
+    .cal-slot-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cal-slot-time { font-family: var(--mono); opacity: 0.7; margin-top: 2px; font-size: 9px; }
+
+    /* CURRENT TIME LINE */
+    .current-time-line {
+      position: absolute;
+      height: 2px;
+      background: var(--red);
+      left: 0;
+      right: 0;
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    .current-time-line::before {
+      content: '';
+      position: absolute;
+      left: -4px;
+      top: -4px;
+      width: 10px;
+      height: 10px;
+      background: var(--red);
+      border-radius: 50%;
+    }
+
+    /* MODAL */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      backdrop-filter: blur(4px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+    }
+
+    .modal-overlay.open { opacity: 1; pointer-events: all; }
+
+    .modal {
+      background: var(--bg3);
+      border: 1px solid var(--border2);
+      border-radius: 14px;
+      padding: 28px;
+      width: 480px;
+      max-width: 95vw;
+      max-height: 90vh;
+      overflow-y: auto;
+      transform: translateY(20px) scale(0.97);
+      transition: transform 0.2s;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.7);
+    }
+
+    .modal-overlay.open .modal {
+      transform: translateY(0) scale(1);
+    }
+
+    .modal-title {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .modal-close {
+      cursor: pointer;
+      color: var(--text3);
+      font-size: 20px;
+      padding: 4px;
+      line-height: 1;
+    }
+
+    .modal-close:hover { color: var(--text); }
+
+    /* FORM ELEMENTS */
+    .form-group { margin-bottom: 16px; }
+    .form-label { display: block; font-size: 12px; color: var(--text3); margin-bottom: 6px; font-weight: 500; letter-spacing: 0.5px; }
+
+    .form-control {
+      width: 100%;
+      padding: 10px 12px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 13px;
+      transition: border-color 0.15s;
+    }
+
+    .form-control:focus {
+      outline: none;
+      border-color: var(--cyan);
+    }
+
+    select.form-control option { background: var(--bg3); }
+
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+    .checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--text2);
+    }
+
+    .checkbox-label input { accent-color: var(--cyan); width: 15px; height: 15px; }
+
+    /* COLOR PICKER ROW */
+    .color-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+    .color-dot {
+      width: 24px; height: 24px;
+      border-radius: 50%;
+      cursor: pointer;
+      border: 2px solid transparent;
+      transition: border-color 0.1s;
+    }
+    .color-dot.selected { border-color: #fff; }
+
+    /* HISTORY LIST */
+    .history-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(35,44,61,0.5);
+    }
+
+    .history-time { font-family: var(--mono); font-size: 11px; color: var(--text3); min-width: 80px; }
+    .history-title { font-size: 13px; font-weight: 500; }
+    .history-artist { font-size: 11px; color: var(--text3); }
+
+    /* TRAY SELECTOR */
+    .tray-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+    .tray-chip {
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      cursor: pointer;
+      color: var(--text3);
+      transition: all 0.15s;
+    }
+    .tray-chip.active { background: rgba(0,229,255,0.1); color: var(--cyan); border-color: var(--cyan); }
+
+    /* PLAYLIST COLOR SWATCH */
+    .playlist-swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+      display: inline-block;
+    }
+
+    /* EMPTY STATE */
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--text3);
+    }
+
+    .empty-icon { font-size: 48px; margin-bottom: 12px; }
+    .empty-title { font-size: 16px; color: var(--text2); margin-bottom: 6px; }
+    .empty-sub { font-size: 13px; }
+
+    /* TOAST */
+    .toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 2000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .toast {
+      padding: 12px 18px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      border: 1px solid var(--border);
+      max-width: 320px;
+      animation: slideInRight 0.3s ease;
+      box-shadow: var(--shadow);
+    }
+
+    @keyframes slideInRight {
+      from { transform: translateX(100px); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+
+    .toast-success { background: rgba(0,230,118,0.1); border-color: rgba(0,230,118,0.3); color: var(--green); }
+    .toast-error { background: rgba(255,23,68,0.1); border-color: rgba(255,23,68,0.3); color: var(--red); }
+    .toast-info { background: rgba(0,229,255,0.1); border-color: rgba(0,229,255,0.3); color: var(--cyan); }
+
+    /* RESPONSIVE */
+    @media (max-width: 768px) {
+      .sidebar { width: 60px; min-width: 60px; }
+      .sidebar-logo .logo-text, .sidebar-logo .logo-sub,
+      .nav-item span:last-child, .sidebar-now-playing { display: none; }
+      .nav-section { display: none; }
+      .nav-item { justify-content: center; padding: 12px; }
+      .grid-4 { grid-template-columns: 1fr 1fr; }
+      .grid-3 { grid-template-columns: 1fr 1fr; }
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- SIDEBAR -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-logo">
+    <img src="/logo.png" alt="LETW" style="width:36px;height:36px;border-radius:8px;object-fit:cover;border:1px solid rgba(212,168,67,0.4);">
+    <div>
+      <div class="logo-text" id="sidebar-radio-name">LETW Radio</div>
+      <div class="logo-sub">Radio Manager</div>
+    </div>
+  </div>
+
+  <div class="nav-section">Overview</div>
+  <div class="nav-item active" data-page="dashboard">
+    <span class="nav-icon">📊</span><span>Dashboard</span>
+  </div>
+
+  <div class="nav-section">Content</div>
+  <div class="nav-item" data-page="library">
+    <span class="nav-icon">🎵</span><span>Library</span>
+  </div>
+  <div class="nav-item" data-page="playlists">
+    <span class="nav-icon">📂</span><span>Playlists</span>
+  </div>
+  <div class="nav-item" data-page="programs">
+    <span class="nav-icon">🎙️</span><span>Programs</span>
+  </div>
+
+  <div class="nav-section">Scheduling</div>
+  <div class="nav-item" data-page="planning">
+    <span class="nav-icon">📅</span><span>Planning</span>
+  </div>
+  <div class="nav-item" data-page="breaks">
+    <span class="nav-icon">⏱️</span><span>Breaks</span>
+  </div>
+  <div class="nav-item" data-page="dailygen">
+    <span class="nav-icon">🔄</span><span>Daily Gen.</span>
+  </div>
+
+  <div class="nav-section">Other</div>
+  <div class="nav-item" data-page="history">
+    <span class="nav-icon">📜</span><span>History</span>
+  </div>
+  <div class="nav-item" data-page="settings">
+    <span class="nav-icon">⚙️</span><span>Settings</span>
+  </div>
+  <div class="nav-item" onclick="location.href='/admin-logout'" style="color:var(--text3);margin-top:4px;">
+    <span class="nav-icon">🔒</span><span>Logout</span>
+  </div>
+
+  <!-- NOW PLAYING MINI -->
+  <div class="sidebar-now-playing">
+    <div class="snp-label">Now Playing</div>
+    <div id="snp-track" class="snp-track">No track playing</div>
+    <div id="snp-artist" class="snp-artist">—</div>
+    <div class="eq-bars" id="eq-bars">
+      <div class="eq-bar"></div>
+      <div class="eq-bar"></div>
+      <div class="eq-bar"></div>
+      <div class="eq-bar"></div>
+      <div class="eq-bar"></div>
+    </div>
+    <div class="snp-controls">
+      <button class="snp-btn" id="btn-play-stop" title="Play/Stop">▶</button>
+      <button class="snp-btn" onclick="skipTrack()" title="Skip">⏭</button>
+      <a href="/listen" target="_blank" class="snp-btn" style="text-decoration:none;text-align:center;" title="Listen">🔊</a>
+    </div>
+  </div>
+</aside>
+
+<!-- MAIN -->
+<main class="main">
+  <!-- TOP BAR -->
+  <div class="topbar">
+    <div class="topbar-title" id="topbar-title">Dashboard</div>
+    <div id="status-pill" class="status-pill offline">
+      <div class="dot"></div>
+      <span>Offline</span>
+    </div>
+    <div class="listeners-badge">
+      👤 <span id="listener-count">0</span> listeners
+    </div>
+  </div>
+
+  <!-- PAGE CONTENT -->
+  <div class="page-content">
+
+    <!-- ===== DASHBOARD ===== -->
+    <div class="page active" id="page-dashboard">
+      <div class="grid-4" style="margin-bottom:20px;">
+        <div class="stat-block">
+          <div class="stat-label">Listeners</div>
+          <div class="stat-value" id="stat-listeners">0</div>
+          <div class="stat-sub">Connected now</div>
+        </div>
+        <div class="stat-block">
+          <div class="stat-label">Queue</div>
+          <div class="stat-value" id="stat-queue">0</div>
+          <div class="stat-sub">Tracks remaining</div>
+        </div>
+        <div class="stat-block">
+          <div class="stat-label">Library</div>
+          <div class="stat-value" id="stat-tracks">0</div>
+          <div class="stat-sub">Total tracks</div>
+        </div>
+        <div class="stat-block">
+          <div class="stat-label">Playlists</div>
+          <div class="stat-value" id="stat-playlists">0</div>
+          <div class="stat-sub">Created</div>
+        </div>
+      </div>
+
+      <!-- NOW PLAYING BIG -->
+      <div class="now-playing-card" style="margin-bottom:20px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px;">
+          <div style="flex:1;">
+            <div style="font-size:11px;color:var(--cyan);letter-spacing:2px;text-transform:uppercase;font-family:var(--mono);margin-bottom:8px;">
+              ● ON AIR NOW
+            </div>
+            <div class="np-track" id="np-track">No track playing</div>
+            <div class="np-artist" id="np-artist">—</div>
+            <div class="np-meta">
+              <div class="np-meta-item">⏱ <span id="np-duration">0:00</span></div>
+              <div class="np-meta-item">📡 <span id="np-bitrate">128kbps</span></div>
+              <div class="np-meta-item">🎚 <span id="np-format">MP3</span></div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button class="btn btn-primary" onclick="playRadio()" id="dash-play-btn">▶ Start Radio</button>
+            <button class="btn btn-secondary" onclick="skipTrack()">⏭ Skip</button>
+            <a href="/listen" target="_blank" class="btn btn-secondary">🎧 Listen</a>
+          </div>
+        </div>
+        <div class="progress-bar-wrap">
+          <div class="progress-track">
+            <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <!-- RECENT HISTORY -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Recently Played</div>
+          </div>
+          <div id="history-mini-list">
+            <div class="empty-state" style="padding:30px;">
+              <div>No play history yet</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- QUICK ACTIONS -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Quick Actions</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <button class="btn btn-secondary" style="justify-content:flex-start;" onclick="navigate('library')">
+              🎵 Upload Tracks to Library
+            </button>
+            <button class="btn btn-secondary" style="justify-content:flex-start;" onclick="navigate('playlists')">
+              📂 Create Playlist
+            </button>
+            <button class="btn btn-secondary" style="justify-content:flex-start;" onclick="navigate('planning')">
+              📅 Add to Planning
+            </button>
+            <button class="btn btn-secondary" style="justify-content:flex-start;" onclick="navigate('breaks')">
+              ⏱ Schedule a Break
+            </button>
+            <button class="btn btn-secondary" style="justify-content:flex-start;" onclick="navigate('dailygen')">
+              🔄 Generate Today's Queue
+            </button>
+            <a href="/listen" target="_blank" class="btn btn-secondary" style="justify-content:flex-start;text-decoration:none;">
+              🔗 Share Radio Link
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== LIBRARY ===== -->
+    <div class="page" id="page-library">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap;">
+        <div class="tray-chips" id="tray-chips">
+          <div class="tray-chip active" data-tray="">All</div>
+          <div class="tray-chip" data-tray="music">Music</div>
+          <div class="tray-chip" data-tray="jingles">Jingles</div>
+          <div class="tray-chip" data-tray="ads">Ads</div>
+          <div class="tray-chip" data-tray="recordings">Recordings</div>
+        </div>
+        <div style="flex:1;"></div>
+        <input type="text" class="form-control" style="width:200px;" placeholder="🔍 Search tracks..." id="track-search" oninput="filterTracks()">
+        <button class="btn btn-primary" onclick="openUploadModal()">⬆ Upload Files</button>
+      </div>
+
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:40px;">#</th>
+                <th>Title</th>
+                <th>Artist</th>
+                <th>Album</th>
+                <th>Duration</th>
+                <th>Tray</th>
+                <th style="width:120px;">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="tracks-tbody">
+              <tr><td colspan="7" style="text-align:center;padding:40px;color:var(--text3);">Loading tracks...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== PLAYLISTS ===== -->
+    <div class="page" id="page-playlists">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+        <div></div>
+        <button class="btn btn-primary" onclick="openPlaylistModal()">+ New Playlist</button>
+      </div>
+      <div class="grid-3" id="playlists-grid">
+        <div class="empty-state"><div class="empty-icon">📂</div><div class="empty-title">No playlists yet</div><div class="empty-sub">Create your first playlist</div></div>
+      </div>
+    </div>
+
+    <!-- ===== PROGRAMS ===== -->
+    <div class="page" id="page-programs">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+        <div></div>
+        <button class="btn btn-primary" onclick="openProgramModal()">+ New Program</button>
+      </div>
+      <div class="grid-3" id="programs-grid">
+        <div class="empty-state"><div class="empty-icon">🎙️</div><div class="empty-title">No programs yet</div><div class="empty-sub">Create a show template</div></div>
+      </div>
+    </div>
+
+    <!-- ===== PLANNING ===== -->
+    <div class="page" id="page-planning">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+        <div style="font-size:13px;color:var(--text3);">Drag playlists/programs onto the calendar or click a time slot to schedule</div>
+        <button class="btn btn-primary" onclick="openPlanningModal()">+ Add Time Slot</button>
+      </div>
+
+      <div class="planning-calendar" id="planning-calendar">
+        <div class="cal-header">
+          <div class="cal-day-header" style="text-align:center;font-size:10px;">Time</div>
+          <div class="cal-day-header" id="cal-sun">SUN</div>
+          <div class="cal-day-header" id="cal-mon">MON</div>
+          <div class="cal-day-header" id="cal-tue">TUE</div>
+          <div class="cal-day-header" id="cal-wed">WED</div>
+          <div class="cal-day-header" id="cal-thu">THU</div>
+          <div class="cal-day-header" id="cal-fri">FRI</div>
+          <div class="cal-day-header" id="cal-sat">SAT</div>
+        </div>
+        <div class="cal-body" id="cal-body">
+          <div class="cal-times" id="cal-times"></div>
+          <div class="cal-grid" id="cal-grid">
+            <div class="cal-col" id="col-0"></div>
+            <div class="cal-col" id="col-1"></div>
+            <div class="cal-col" id="col-2"></div>
+            <div class="cal-col" id="col-3"></div>
+            <div class="cal-col" id="col-4"></div>
+            <div class="cal-col" id="col-5"></div>
+            <div class="cal-col" id="col-6"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== BREAKS ===== -->
+    <div class="page" id="page-breaks">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+        <div style="font-size:13px;color:var(--text3);">Schedule jingles, ads, or announcements at exact times</div>
+        <button class="btn btn-primary" onclick="openBreakModal()">+ Add Break</button>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Time</th>
+                <th>Days</th>
+                <th>Content</th>
+                <th>Priority</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="breaks-tbody">
+              <tr><td colspan="7" style="text-align:center;padding:40px;color:var(--text3);">No breaks scheduled</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== DAILY GENERATION ===== -->
+    <div class="page" id="page-dailygen">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap;">
+        <input type="date" class="form-control" style="width:180px;" id="dailygen-date">
+        <button class="btn btn-primary" onclick="generateDay()">🔄 Generate Day</button>
+        <button class="btn btn-orange" onclick="playDay()">▶ Play This Day</button>
+        <div style="flex:1;"></div>
+        <div id="dailygen-stats" style="font-size:12px;color:var(--text3);"></div>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Title</th>
+                <th>Artist</th>
+                <th>Duration</th>
+                <th>Time Slot</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="dailygen-tbody">
+              <tr><td colspan="6" style="text-align:center;padding:40px;color:var(--text3);">Select a date and generate to see the queue</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== HISTORY ===== -->
+    <div class="page" id="page-history">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Broadcast History (Last 100)</div>
+          <button class="btn btn-secondary btn-sm" onclick="loadHistory()">Refresh</button>
+        </div>
+        <div id="history-list">
+          <div class="empty-state"><div class="empty-icon">📜</div><div class="empty-title">No history yet</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== SETTINGS ===== -->
+    <div class="page" id="page-settings">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-header"><div class="card-title">Radio Information</div></div>
+          <div class="form-group">
+            <label class="form-label">Radio Name</label>
+            <input class="form-control" id="set-name" placeholder="My Online Radio">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Description</label>
+            <textarea class="form-control" id="set-desc" rows="3" placeholder="Welcome to my radio station"></textarea>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Genre</label>
+              <input class="form-control" id="set-genre" placeholder="Music">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Language</label>
+              <input class="form-control" id="set-lang" placeholder="English">
+            </div>
+          </div>
+          <button class="btn btn-primary" onclick="saveSettings()">Save Changes</button>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><div class="card-title">Streaming</div></div>
+          <div class="form-group">
+            <label class="form-label">Stream URL</label>
+            <div style="display:flex;gap:8px;">
+              <input class="form-control" id="stream-url" readonly>
+              <button class="btn btn-secondary btn-sm" onclick="copyStreamUrl()">Copy</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Player URL</label>
+            <div style="display:flex;gap:8px;">
+              <input class="form-control" id="player-url" readonly>
+              <a id="player-url-link" href="/listen" target="_blank" class="btn btn-secondary btn-sm">Open</a>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Bitrate</label>
+            <select class="form-control" id="set-bitrate">
+              <option value="64">64 kbps</option>
+              <option value="128" selected>128 kbps</option>
+              <option value="192">192 kbps</option>
+              <option value="320">320 kbps</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="set-filler" checked>
+              Enable Auto-Filler (prevent dead air)
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /page-content -->
+</main>
+
+<!-- =================== MODALS =================== -->
+
+<!-- UPLOAD MODAL -->
+<div class="modal-overlay" id="upload-modal">
+  <div class="modal">
+    <div class="modal-title">Upload Audio Files <span class="modal-close" onclick="closeModal('upload-modal')">✕</span></div>
+    <div class="form-group">
+      <label class="form-label">Tray</label>
+      <select class="form-control" id="upload-tray">
+        <option value="music">Music</option>
+        <option value="jingles">Jingles</option>
+        <option value="ads">Ads</option>
+        <option value="recordings">Recordings</option>
+      </select>
+    </div>
+    <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
+      <div class="upload-icon">🎵</div>
+      <div class="upload-text">Click or drag and drop audio files</div>
+      <div class="upload-sub">MP3, WAV, OGG, AAC, FLAC · Max 300MB per file</div>
+    </div>
+    <input type="file" id="file-input" multiple accept=".mp3,.wav,.ogg,.aac,.flac,.m4a" style="display:none;" onchange="handleFileSelect(event)">
+    <div id="upload-progress" style="margin-top:12px;display:none;">
+      <div style="font-size:12px;color:var(--text3);margin-bottom:8px;" id="upload-status">Uploading...</div>
+      <div style="height:4px;background:var(--border);border-radius:3px;">
+        <div id="upload-bar" style="height:100%;background:var(--cyan);border-radius:3px;width:0%;transition:width 0.3s;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- PLAYLIST MODAL -->
+<div class="modal-overlay" id="playlist-modal">
+  <div class="modal">
+    <div class="modal-title"><span id="playlist-modal-title">New Playlist</span> <span class="modal-close" onclick="closeModal('playlist-modal')">✕</span></div>
+    <input type="hidden" id="playlist-edit-id">
+    <div class="form-group">
+      <label class="form-label">Name</label>
+      <input class="form-control" id="pl-name" placeholder="My Playlist">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Color</label>
+      <div class="color-row" id="pl-color-row">
+        <div class="color-dot selected" data-color="#00e5ff" style="background:#00e5ff;"></div>
+        <div class="color-dot" data-color="#ff6d3b" style="background:#ff6d3b;"></div>
+        <div class="color-dot" data-color="#00e676" style="background:#00e676;"></div>
+        <div class="color-dot" data-color="#d500f9" style="background:#d500f9;"></div>
+        <div class="color-dot" data-color="#ffea00" style="background:#ffea00;"></div>
+        <div class="color-dot" data-color="#ff1744" style="background:#ff1744;"></div>
+        <div class="color-dot" data-color="#7c4dff" style="background:#7c4dff;"></div>
+        <div class="color-dot" data-color="#76ff03" style="background:#76ff03;"></div>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px;">
+      <button class="btn btn-secondary" onclick="closeModal('playlist-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="savePlaylist()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- PROGRAM MODAL -->
+<div class="modal-overlay" id="program-modal">
+  <div class="modal">
+    <div class="modal-title"><span>New Program</span> <span class="modal-close" onclick="closeModal('program-modal')">✕</span></div>
+    <input type="hidden" id="prog-edit-id">
+    <div class="form-group">
+      <label class="form-label">Name</label>
+      <input class="form-control" id="prog-name" placeholder="Morning Show">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Description</label>
+      <textarea class="form-control" id="prog-desc" rows="2" placeholder="Program description..."></textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Color</label>
+      <div class="color-row" id="prog-color-row">
+        <div class="color-dot" data-color="#00e5ff" style="background:#00e5ff;"></div>
+        <div class="color-dot selected" data-color="#ff6d3b" style="background:#ff6d3b;"></div>
+        <div class="color-dot" data-color="#00e676" style="background:#00e676;"></div>
+        <div class="color-dot" data-color="#d500f9" style="background:#d500f9;"></div>
+        <div class="color-dot" data-color="#ffea00" style="background:#ffea00;"></div>
+        <div class="color-dot" data-color="#ff1744" style="background:#ff1744;"></div>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px;">
+      <button class="btn btn-secondary" onclick="closeModal('program-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveProgram()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- PLANNING MODAL -->
+<div class="modal-overlay" id="planning-modal">
+  <div class="modal">
+    <div class="modal-title"><span id="plan-modal-title">Add Time Slot</span> <span class="modal-close" onclick="closeModal('planning-modal')">✕</span></div>
+    <input type="hidden" id="plan-edit-id">
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Day of Week</label>
+        <select class="form-control" id="plan-day">
+          <option value="0">Sunday</option>
+          <option value="1">Monday</option>
+          <option value="2">Tuesday</option>
+          <option value="3">Wednesday</option>
+          <option value="4">Thursday</option>
+          <option value="5">Friday</option>
+          <option value="6">Saturday</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Content Type</label>
+        <select class="form-control" id="plan-type" onchange="loadPlanContent()">
+          <option value="playlist">Playlist</option>
+          <option value="program">Program</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Start Time</label>
+        <input class="form-control" type="time" id="plan-start">
+      </div>
+      <div class="form-group">
+        <label class="form-label">End Time</label>
+        <input class="form-control" type="time" id="plan-end">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Content</label>
+      <select class="form-control" id="plan-content"></select>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Play Order</label>
+        <select class="form-control" id="plan-order">
+          <option value="sequential">Sequential</option>
+          <option value="random">Random</option>
+        </select>
+      </div>
+      <div class="form-group" style="display:flex;align-items:flex-end;">
+        <label class="checkbox-label">
+          <input type="checkbox" id="plan-fixed-time">
+          Play at Fixed Time
+        </label>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px;">
+      <button class="btn btn-secondary" onclick="closeModal('planning-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="savePlanSlot()">Save Slot</button>
+    </div>
+  </div>
+</div>
+
+<!-- BREAK MODAL -->
+<div class="modal-overlay" id="break-modal">
+  <div class="modal">
+    <div class="modal-title"><span id="break-modal-title">Add Break</span> <span class="modal-close" onclick="closeModal('break-modal')">✕</span></div>
+    <input type="hidden" id="break-edit-id">
+    <div class="form-group">
+      <label class="form-label">Break Name</label>
+      <input class="form-control" id="brk-name" placeholder="Hourly Jingle">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Broadcast Time</label>
+        <input class="form-control" type="time" id="brk-time">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Priority</label>
+        <input class="form-control" type="number" id="brk-priority" min="1" max="10" value="1">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Track</label>
+      <select class="form-control" id="brk-track">
+        <option value="">— Select a track —</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Active Days</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;" id="brk-days">
+        <label class="checkbox-label"><input type="checkbox" value="mon" checked> Mon</label>
+        <label class="checkbox-label"><input type="checkbox" value="tue" checked> Tue</label>
+        <label class="checkbox-label"><input type="checkbox" value="wed" checked> Wed</label>
+        <label class="checkbox-label"><input type="checkbox" value="thu" checked> Thu</label>
+        <label class="checkbox-label"><input type="checkbox" value="fri" checked> Fri</label>
+        <label class="checkbox-label"><input type="checkbox" value="sat" checked> Sat</label>
+        <label class="checkbox-label"><input type="checkbox" value="sun" checked> Sun</label>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="checkbox-label">
+        <input type="checkbox" id="brk-stop" checked>
+        Can stop current track
+      </label>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px;">
+      <button class="btn btn-secondary" onclick="closeModal('break-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveBreak()">Save Break</button>
+    </div>
+  </div>
+</div>
+
+<!-- TRACK EDIT MODAL -->
+<div class="modal-overlay" id="track-modal">
+  <div class="modal">
+    <div class="modal-title">Edit Track <span class="modal-close" onclick="closeModal('track-modal')">✕</span></div>
+    <input type="hidden" id="track-edit-id">
+    <div class="form-group">
+      <label class="form-label">Title</label>
+      <input class="form-control" id="track-title">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Artist</label>
+      <input class="form-control" id="track-artist">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Album</label>
+        <input class="form-control" id="track-album">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Tray</label>
+        <select class="form-control" id="track-tray">
+          <option value="music">Music</option>
+          <option value="jingles">Jingles</option>
+          <option value="ads">Ads</option>
+          <option value="recordings">Recordings</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px;">
+      <button class="btn btn-secondary" onclick="closeModal('track-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveTrack()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD TO PLAYLIST MODAL -->
+<div class="modal-overlay" id="add-to-playlist-modal">
+  <div class="modal">
+    <div class="modal-title">Add to Playlist <span class="modal-close" onclick="closeModal('add-to-playlist-modal')">✕</span></div>
+    <input type="hidden" id="atp-track-id">
+    <div id="atp-list" style="display:flex;flex-direction:column;gap:8px;max-height:300px;overflow-y:auto;"></div>
+    <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
+      <button class="btn btn-primary" style="width:100%;" onclick="openPlaylistModal()">+ Create New Playlist</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST CONTAINER -->
+<div class="toast-container" id="toast-container"></div>
+
+<script>
+// =================== STATE ===================
+let state = {
+  currentPage: 'dashboard',
+  tracks: [],
+  playlists: [],
+  programs: [],
+  planning: [],
+  breaks: [],
+  settings: {},
+  status: {},
+  currentTray: '',
+  selectedPlanColor: '#00d4ff',
+  currentTrackInfo: null,
+  progressInterval: null,
+  trackStartTime: null,
+  trackDuration: 0,
+};
+
+const COLORS = ['#00e5ff','#ff6d3b','#00e676','#d500f9','#ffea00','#ff1744','#7c4dff','#76ff03'];
+
+// =================== SOCKET ===================
+const socket = io();
+
+socket.on('status', (s) => {
+  state.status = s;
+  updateStatusUI(s);
+});
+
+socket.on('trackStart', (track) => {
+  state.currentTrackInfo = track;
+  state.trackStartTime = Date.now();
+  state.trackDuration = (track.duration || 0) * 1000;
+  updateNowPlaying(track);
+  startProgressUpdate();
+  loadHistoryMini();
+});
+
+socket.on('trackEnd', () => {});
+
+socket.on('listenerChange', (count) => {
+  document.getElementById('listener-count').textContent = count;
+  document.getElementById('stat-listeners').textContent = count;
+});
+
+// =================== NAVIGATION ===================
+function navigate(page) {
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.page === page));
+  document.querySelectorAll('.page').forEach(el => el.classList.toggle('active', el.id === `page-${page}`));
+  state.currentPage = page;
+
+  const titles = {
+    dashboard: 'Dashboard', library: 'Library', playlists: 'Playlists',
+    programs: 'Programs', planning: 'Planning', breaks: 'Breaks',
+    dailygen: 'Daily Generation', history: 'History', settings: 'Settings'
+  };
+  document.getElementById('topbar-title').textContent = titles[page] || page;
+
+  const loaders = {
+    library: loadTracks,
+    playlists: loadPlaylists,
+    programs: loadPrograms,
+    planning: loadPlanning,
+    breaks: loadBreaks,
+    history: loadHistory,
+    settings: loadSettings,
+    dashboard: loadDashboardStats,
+    dailygen: () => { document.getElementById('dailygen-date').valueAsDate = new Date(); loadDailyGen(); }
+  };
+  if (loaders[page]) loaders[page]();
+}
+
+document.querySelectorAll('.nav-item').forEach(el => {
+  el.addEventListener('click', () => navigate(el.dataset.page));
+});
+
+// =================== API HELPERS ===================
+async function api(method, path, body = null) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(`/api${path}`, opts);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'API error');
+  return data;
+}
+
+// =================== STATUS ===================
+function updateStatusUI(s) {
+  const pill = document.getElementById('status-pill');
+  const isLive = s.isPlaying;
+  pill.className = `status-pill ${isLive ? 'live' : 'offline'}`;
+  pill.innerHTML = `<div class="dot ${isLive ? 'pulse' : ''}"></div><span>${isLive ? 'LIVE' : 'Offline'}</span>`;
+
+  document.getElementById('stat-queue').textContent = s.queueLength || 0;
+  document.getElementById('listener-count').textContent = s.listeners || 0;
+  document.getElementById('stat-listeners').textContent = s.listeners || 0;
+
+  const playBtn = document.getElementById('dash-play-btn');
+  const sideBtn = document.getElementById('btn-play-stop');
+  if (isLive) {
+    playBtn.textContent = '⏹ Stop Radio';
+    playBtn.onclick = stopRadio;
+    sideBtn.textContent = '⏹';
+    sideBtn.classList.add('active');
+    document.getElementById('eq-bars').classList.remove('paused');
+  } else {
+    playBtn.textContent = '▶ Start Radio';
+    playBtn.onclick = playRadio;
+    sideBtn.textContent = '▶';
+    sideBtn.classList.remove('active');
+    document.getElementById('eq-bars').classList.add('paused');
+  }
+
+  if (s.currentTrack) {
+    updateNowPlaying(s.currentTrack);
+    if (s.startTime && !state.progressInterval) {
+      state.trackStartTime = s.startTime;
+      state.trackDuration = (s.currentTrack.duration || 0) * 1000;
+      startProgressUpdate();
+    }
+  }
+}
+
+function updateNowPlaying(track) {
+  if (!track) return;
+  const title = track.title || 'Unknown';
+  const artist = track.artist || 'Unknown Artist';
+  document.getElementById('np-track').textContent = title;
+  document.getElementById('np-artist').textContent = artist;
+  document.getElementById('snp-track').textContent = title;
+  document.getElementById('snp-artist').textContent = artist;
+  document.getElementById('np-duration').textContent = formatDuration(track.duration || 0);
+  document.getElementById('np-bitrate').textContent = `${track.bitrate || 128}kbps`;
+}
+
+function startProgressUpdate() {
+  if (state.progressInterval) clearInterval(state.progressInterval);
+  state.progressInterval = setInterval(() => {
+    if (!state.trackStartTime || !state.trackDuration) return;
+    const elapsed = Date.now() - state.trackStartTime;
+    const pct = Math.min(100, (elapsed / state.trackDuration) * 100);
+    document.getElementById('progress-fill').style.width = pct + '%';
+    if (pct >= 100) clearInterval(state.progressInterval);
+  }, 1000);
+}
+
+// =================== PLAYER CONTROLS ===================
+async function playRadio() {
+  try {
+    await api('POST', '/player/play');
+    toast('Radio started', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function stopRadio() {
+  try {
+    await api('POST', '/player/stop');
+    document.getElementById('progress-fill').style.width = '0%';
+    document.getElementById('np-track').textContent = 'No track playing';
+    document.getElementById('np-artist').textContent = '—';
+    document.getElementById('snp-track').textContent = 'No track playing';
+    document.getElementById('snp-artist').textContent = '—';
+    toast('Radio stopped', 'info');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function skipTrack() {
+  try { await api('POST', '/player/skip'); } catch (e) { toast(e.message, 'error'); }
+}
+
+document.getElementById('btn-play-stop').onclick = async () => {
+  const s = await api('GET', '/status');
+  if (s.isPlaying) stopRadio(); else playRadio();
+};
+
+// =================== DASHBOARD ===================
+async function loadDashboardStats() {
+  try {
+    const [tracks, playlists, status] = await Promise.all([
+      api('GET', '/tracks'),
+      api('GET', '/playlists'),
+      api('GET', '/status'),
+    ]);
+    document.getElementById('stat-tracks').textContent = tracks.length;
+    document.getElementById('stat-playlists').textContent = playlists.length;
+    updateStatusUI(status);
+    loadHistoryMini();
+
+    // Set stream/player URLs
+    const base = window.location.origin;
+    const streamEl = document.getElementById('stream-url');
+    const playerEl = document.getElementById('player-url');
+    if (streamEl) streamEl.value = `${base}/stream`;
+    if (playerEl) playerEl.value = `${base}/listen`;
+  } catch (e) { console.error(e); }
+}
+
+async function loadHistoryMini() {
+  try {
+    const rows = await api('GET', '/history');
+    const el = document.getElementById('history-mini-list');
+    if (!rows.length) {
+      el.innerHTML = `<div class="empty-state" style="padding:30px;">No play history yet</div>`;
+      return;
+    }
+    el.innerHTML = rows.slice(0, 8).map(r => `
+      <div class="history-item">
+        <div class="history-time">${new Date(r.played_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</div>
+        <div>
+          <div class="history-title">${esc(r.title)}</div>
+          <div class="history-artist">${esc(r.artist)}</div>
+        </div>
+      </div>`).join('');
+  } catch {}
+}
+
+// =================== LIBRARY ===================
+async function loadTracks() {
+  try {
+    const tray = state.currentTray;
+    const search = document.getElementById('track-search')?.value || '';
+    const params = new URLSearchParams();
+    if (tray) params.set('tray', tray);
+    if (search) params.set('search', search);
+    const tracks = await api('GET', `/tracks?${params}`);
+    state.tracks = tracks;
+    renderTracks(tracks);
+  } catch (e) { toast('Failed to load tracks', 'error'); }
+}
+
+function renderTracks(tracks) {
+  const tbody = document.getElementById('tracks-tbody');
+  if (!tracks.length) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:40px;"><div class="empty-state"><div class="empty-icon">🎵</div><div class="empty-title">No tracks found</div><div class="empty-sub">Upload your first audio file</div></div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = tracks.map((t, i) => `
+    <tr>
+      <td style="color:var(--text3);font-family:var(--mono);">${i+1}</td>
+      <td class="track-title-cell">${esc(t.title)}</td>
+      <td class="track-artist-cell">${esc(t.artist)}</td>
+      <td style="color:var(--text3);">${esc(t.album || '—')}</td>
+      <td class="duration-cell">${formatDuration(t.duration)}</td>
+      <td><span class="badge badge-cyan">${t.tray}</span></td>
+      <td>
+        <div style="display:flex;gap:4px;">
+          <button class="btn btn-secondary btn-sm" onclick="editTrack('${t.id}')">✏</button>
+          <button class="btn btn-secondary btn-sm" onclick="addToPlaylistModal('${t.id}')">📂</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteTrack('${t.id}')">🗑</button>
+        </div>
+      </td>
+    </tr>`).join('');
+}
+
+function filterTracks() { loadTracks(); }
+
+// Tray chips
+document.querySelectorAll('.tray-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('.tray-chip').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+    state.currentTray = chip.dataset.tray || '';
+    loadTracks();
+  });
+});
+
+function openUploadModal() { openModal('upload-modal'); }
+
+function handleFileSelect(e) { uploadFiles(Array.from(e.target.files)); }
+
+// Drag & Drop upload zone
+const uploadZone = document.getElementById('upload-zone');
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-active'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-active'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadZone.classList.remove('drag-active');
+  uploadFiles(Array.from(e.dataTransfer.files));
+});
+
+async function uploadFiles(files) {
+  if (!files.length) return;
+  const prog = document.getElementById('upload-progress');
+  const bar = document.getElementById('upload-bar');
+  const status = document.getElementById('upload-status');
+  prog.style.display = 'block';
+
+  const fd = new FormData();
+  files.forEach(f => fd.append('files', f));
+  fd.append('tray', document.getElementById('upload-tray').value);
+
+  status.textContent = `Uploading ${files.length} file(s)...`;
+  bar.style.width = '30%';
+
+  try {
+    const res = await fetch('/api/tracks/upload', { method: 'POST', body: fd });
+    bar.style.width = '100%';
+    const data = await res.json();
+    if (data.success) {
+      status.textContent = `✅ ${data.tracks.length} track(s) uploaded`;
+      toast(`${data.tracks.length} track(s) uploaded successfully`, 'success');
+      setTimeout(() => { closeModal('upload-modal'); prog.style.display = 'none'; bar.style.width = '0%'; }, 1500);
+      loadTracks();
+    } else {
+      status.textContent = '❌ Upload failed';
+      toast('Upload failed', 'error');
+    }
+  } catch (e) {
+    status.textContent = '❌ ' + e.message;
+    toast('Upload error: ' + e.message, 'error');
+  }
+}
+
+async function editTrack(id) {
+  const t = state.tracks.find(t => t.id === id);
+  if (!t) return;
+  document.getElementById('track-edit-id').value = id;
+  document.getElementById('track-title').value = t.title;
+  document.getElementById('track-artist').value = t.artist;
+  document.getElementById('track-album').value = t.album || '';
+  document.getElementById('track-tray').value = t.tray;
+  openModal('track-modal');
+}
+
+async function saveTrack() {
+  const id = document.getElementById('track-edit-id').value;
+  try {
+    await api('PUT', `/tracks/${id}`, {
+      title: document.getElementById('track-title').value,
+      artist: document.getElementById('track-artist').value,
+      album: document.getElementById('track-album').value,
+      tray: document.getElementById('track-tray').value,
+    });
+    toast('Track updated', 'success');
+    closeModal('track-modal');
+    loadTracks();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteTrack(id) {
+  if (!confirm('Delete this track permanently?')) return;
+  try {
+    await api('DELETE', `/tracks/${id}`);
+    toast('Track deleted', 'success');
+    loadTracks();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function addToPlaylistModal(trackId) {
+  document.getElementById('atp-track-id').value = trackId;
+  const playlists = await api('GET', '/playlists');
+  const list = document.getElementById('atp-list');
+  if (!playlists.length) {
+    list.innerHTML = `<div class="empty-state" style="padding:20px;">No playlists yet. Create one first.</div>`;
+  } else {
+    list.innerHTML = playlists.map(pl => `
+      <button class="btn btn-secondary" style="justify-content:flex-start;" onclick="addTrackToPlaylist('${pl.id}')">
+        <span class="playlist-swatch" style="background:${pl.color};"></span>
+        ${esc(pl.name)} <small style="color:var(--text3);margin-left:auto;">${pl.trackCount} tracks</small>
+      </button>`).join('');
+  }
+  openModal('add-to-playlist-modal');
+}
+
+async function addTrackToPlaylist(playlistId) {
+  const trackId = document.getElementById('atp-track-id').value;
+  try {
+    await api('POST', `/playlists/${playlistId}/tracks`, { track_ids: [trackId] });
+    toast('Added to playlist', 'success');
+    closeModal('add-to-playlist-modal');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// =================== PLAYLISTS ===================
+async function loadPlaylists() {
+  const playlists = await api('GET', '/playlists');
+  state.playlists = playlists;
+  const grid = document.getElementById('playlists-grid');
+  if (!playlists.length) {
+    grid.innerHTML = `<div class="empty-state"><div class="empty-icon">📂</div><div class="empty-title">No playlists</div></div>`;
+    return;
+  }
+  grid.innerHTML = playlists.map(pl => `
+    <div class="card" style="border-left:4px solid ${pl.color};">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div>
+          <div style="font-size:15px;font-weight:700;margin-bottom:4px;">${esc(pl.name)}</div>
+          <div style="font-size:12px;color:var(--text3);">${pl.trackCount} tracks</div>
+        </div>
+        <div style="display:flex;gap:4px;">
+          <button class="btn btn-secondary btn-sm" onclick="editPlaylistModal('${pl.id}')">✏</button>
+          <button class="btn btn-danger btn-sm" onclick="deletePlaylist('${pl.id}')">🗑</button>
+        </div>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:6px;">
+        <span class="badge badge-cyan">${pl.type}</span>
+      </div>
+    </div>`).join('');
+}
+
+function openPlaylistModal(edit = false) {
+  if (!edit) {
+    document.getElementById('playlist-edit-id').value = '';
+    document.getElementById('pl-name').value = '';
+    document.getElementById('playlist-modal-title').textContent = 'New Playlist';
+    document.querySelectorAll('#pl-color-row .color-dot').forEach((d,i) => d.classList.toggle('selected', i===0));
+  }
+  openModal('playlist-modal');
+}
+
+async function editPlaylistModal(id) {
+  const pl = state.playlists.find(p => p.id === id);
+  if (!pl) return;
+  document.getElementById('playlist-edit-id').value = id;
+  document.getElementById('pl-name').value = pl.name;
+  document.getElementById('playlist-modal-title').textContent = 'Edit Playlist';
+  document.querySelectorAll('#pl-color-row .color-dot').forEach(d => d.classList.toggle('selected', d.dataset.color === pl.color));
+  openModal('playlist-modal');
+}
+
+async function savePlaylist() {
+  const id = document.getElementById('playlist-edit-id').value;
+  const name = document.getElementById('pl-name').value.trim();
+  const color = document.querySelector('#pl-color-row .color-dot.selected')?.dataset.color || '#00e5ff';
+  if (!name) return toast('Playlist name required', 'error');
+  try {
+    if (id) {
+      await api('PUT', `/playlists/${id}`, { name, color });
+    } else {
+      await api('POST', '/playlists', { name, color, type: 'manual' });
+    }
+    toast('Playlist saved', 'success');
+    closeModal('playlist-modal');
+    loadPlaylists();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deletePlaylist(id) {
+  if (!confirm('Delete this playlist?')) return;
+  await api('DELETE', `/playlists/${id}`);
+  toast('Deleted', 'success');
+  loadPlaylists();
+}
+
+// Color dot selection
+document.querySelectorAll('.color-row').forEach(row => {
+  row.addEventListener('click', e => {
+    if (!e.target.classList.contains('color-dot')) return;
+    row.querySelectorAll('.color-dot').forEach(d => d.classList.remove('selected'));
+    e.target.classList.add('selected');
+  });
+});
+
+// =================== PROGRAMS ===================
+async function loadPrograms() {
+  const programs = await api('GET', '/programs');
+  state.programs = programs;
+  const grid = document.getElementById('programs-grid');
+  if (!programs.length) {
+    grid.innerHTML = `<div class="empty-state"><div class="empty-icon">🎙️</div><div class="empty-title">No programs</div></div>`;
+    return;
+  }
+  grid.innerHTML = programs.map(p => `
+    <div class="card" style="border-left:4px solid ${p.color};">
+      <div style="display:flex;justify-content:space-between;">
+        <div>
+          <div style="font-size:15px;font-weight:700;">${esc(p.name)}</div>
+          <div style="font-size:12px;color:var(--text3);margin-top:4px;">${esc(p.description || 'No description')}</div>
+        </div>
+        <div style="display:flex;gap:4px;">
+          <button class="btn btn-danger btn-sm" onclick="deleteProgram('${p.id}')">🗑</button>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+function openProgramModal() {
+  document.getElementById('prog-edit-id').value = '';
+  document.getElementById('prog-name').value = '';
+  document.getElementById('prog-desc').value = '';
+  openModal('program-modal');
+}
+
+async function saveProgram() {
+  const name = document.getElementById('prog-name').value.trim();
+  const color = document.querySelector('#prog-color-row .color-dot.selected')?.dataset.color || '#ff6d3b';
+  const description = document.getElementById('prog-desc').value;
+  if (!name) return toast('Program name required', 'error');
+  await api('POST', '/programs', { name, color, description });
+  toast('Program created', 'success');
+  closeModal('program-modal');
+  loadPrograms();
+}
+
+async function deleteProgram(id) {
+  if (!confirm('Delete this program?')) return;
+  await api('DELETE', `/programs/${id}`);
+  toast('Deleted', 'success');
+  loadPrograms();
+}
+
+// =================== PLANNING CALENDAR ===================
+const HOURS = Array.from({length:24},(_,i) => i);
+const PX_PER_HOUR = 40;
+const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+function buildCalendarStructure() {
+  const timesEl = document.getElementById('cal-times');
+  timesEl.innerHTML = '';
+  const today = new Date().getDay();
+
+  HOURS.forEach(h => {
+    const div = document.createElement('div');
+    div.className = 'cal-time-slot';
+    div.textContent = `${String(h).padStart(2,'0')}:00`;
+    timesEl.appendChild(div);
+  });
+
+  // Add 24 hour lines to each column
+  for (let d = 0; d < 7; d++) {
+    const col = document.getElementById(`col-${d}`);
+    col.innerHTML = '';
+    col.style.position = 'relative';
+    col.style.minHeight = (HOURS.length * PX_PER_HOUR) + 'px';
+    HOURS.forEach(() => {
+      const line = document.createElement('div');
+      line.className = 'cal-hour-line';
+      col.appendChild(line);
+    });
+    // Make column clickable
+    col.addEventListener('click', (e) => {
+      if (!e.target.classList.contains('cal-slot')) {
+        const rect = col.getBoundingClientRect();
+        const bodyEl = document.getElementById('cal-body');
+        const scrollTop = bodyEl.scrollTop;
+        const y = e.clientY - rect.top + scrollTop;
+        const hour = Math.floor(y / PX_PER_HOUR);
+        const minutes = Math.floor((y % PX_PER_HOUR) / PX_PER_HOUR * 60 / 15) * 15;
+        const hh = String(hour).padStart(2,'0');
+        const mm = String(minutes).padStart(2,'0');
+        document.getElementById('plan-day').value = d;
+        document.getElementById('plan-start').value = `${hh}:${mm}`;
+        const endH = hour < 23 ? hour + 1 : 23;
+        document.getElementById('plan-end').value = `${String(endH).padStart(2,'0')}:${mm}`;
+        openPlanningModal();
+      }
+    });
+
+    // Today highlight
+    if (d === today) {
+      document.getElementById(`cal-${DAYS[d].toLowerCase()}`).classList.add('today');
+    }
+  }
+
+  updateCurrentTimeLine();
+  setInterval(updateCurrentTimeLine, 60000);
+}
+
+function updateCurrentTimeLine() {
+  document.querySelectorAll('.current-time-line').forEach(el => el.remove());
+  const now = new Date();
+  const dayIndex = now.getDay(); // 0=Sun
+  const col = document.getElementById(`col-${dayIndex}`);
+  if (!col) return;
+  const totalMins = now.getHours() * 60 + now.getMinutes();
+  const top = (totalMins / 60) * PX_PER_HOUR;
+  const line = document.createElement('div');
+  line.className = 'current-time-line';
+  line.style.top = top + 'px';
+  col.appendChild(line);
+}
+
+async function loadPlanning() {
+  buildCalendarStructure();
+  const slots = await api('GET', '/planning');
+  state.planning = slots;
+  renderCalendarSlots(slots);
+}
+
+function timeToMinutes(t) {
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function renderCalendarSlots(slots) {
+  // Clear existing slots
+  for (let d = 0; d < 7; d++) {
+    const col = document.getElementById(`col-${d}`);
+    col.querySelectorAll('.cal-slot').forEach(s => s.remove());
+  }
+
+  slots.forEach(slot => {
+    const col = document.getElementById(`col-${slot.day_of_week}`);
+    if (!col) return;
+    const startMins = timeToMinutes(slot.start_time);
+    const endMins = timeToMinutes(slot.end_time);
+    const top = (startMins / 60) * PX_PER_HOUR;
+    const height = Math.max(20, ((endMins - startMins) / 60) * PX_PER_HOUR);
+
+    const slotEl = document.createElement('div');
+    slotEl.className = 'cal-slot';
+    slotEl.style.top = top + 'px';
+    slotEl.style.height = height + 'px';
+    slotEl.style.background = hexToRgba(slot.color || '#00e5ff', 0.2);
+    slotEl.style.border = `1px solid ${slot.color || '#00e5ff'}`;
+    slotEl.style.color = slot.color || '#00e5ff';
+    slotEl.innerHTML = `
+      <div class="cal-slot-title">${esc(slot.content_name)}</div>
+      <div class="cal-slot-time">${slot.start_time}–${slot.end_time}</div>`;
+    slotEl.title = `${slot.content_name} | ${slot.start_time}–${slot.end_time}`;
+
+    slotEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (confirm(`Delete slot "${slot.content_name}"?`)) {
+        api('DELETE', `/planning/${slot.id}`).then(() => {
+          toast('Slot deleted', 'success');
+          loadPlanning();
+        });
+      }
+    });
+
+    col.appendChild(slotEl);
+  });
+}
+
+async function openPlanningModal() {
+  await loadPlanContent();
+  openModal('planning-modal');
+}
+
+async function loadPlanContent() {
+  const type = document.getElementById('plan-type').value;
+  const select = document.getElementById('plan-content');
+  const items = type === 'playlist' ? state.playlists || await api('GET', '/playlists') : state.programs || await api('GET', '/programs');
+  select.innerHTML = items.map(i => `<option value="${i.id}" data-name="${esc(i.name)}">${esc(i.name)}</option>`).join('');
+}
+
+async function savePlanSlot() {
+  const day = parseInt(document.getElementById('plan-day').value);
+  const start = document.getElementById('plan-start').value;
+  const end = document.getElementById('plan-end').value;
+  const type = document.getElementById('plan-type').value;
+  const contentSel = document.getElementById('plan-content');
+  const contentId = contentSel.value;
+  const contentName = contentSel.options[contentSel.selectedIndex]?.text || '';
+
+  if (!start || !end || !contentId) return toast('Fill in all fields', 'error');
+  if (start >= end) return toast('End time must be after start time', 'error');
+
+  const items = type === 'playlist' ? (state.playlists || []) : (state.programs || []);
+  const item = items.find(i => i.id === contentId);
+  const color = item?.color || '#00e5ff';
+
+  try {
+    await api('POST', '/planning', {
+      day_of_week: day, start_time: start, end_time: end,
+      content_type: type, content_id: contentId, content_name: contentName,
+      color, play_order: document.getElementById('plan-order').value,
+      play_at_fixed_time: document.getElementById('plan-fixed-time').checked ? 1 : 0,
+    });
+    toast('Slot added to planning', 'success');
+    closeModal('planning-modal');
+    loadPlanning();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// =================== BREAKS ===================
+async function loadBreaks() {
+  const breaks = await api('GET', '/breaks');
+  state.breaks = breaks;
+  const tbody = document.getElementById('breaks-tbody');
+  if (!breaks.length) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--text3);">No breaks scheduled</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = breaks.map(b => {
+    let days = [];
+    try { days = JSON.parse(b.days); } catch {}
+    return `
+      <tr>
+        <td style="font-weight:600;">${esc(b.name)}</td>
+        <td><span class="badge badge-orange" style="font-family:var(--mono);">${b.broadcast_time}</span></td>
+        <td><div style="display:flex;gap:3px;flex-wrap:wrap;">${days.map(d=>`<span class="badge badge-cyan" style="font-size:9px;">${d.toUpperCase()}</span>`).join('')}</div></td>
+        <td style="color:var(--text3);">${b.content_type}</td>
+        <td><span class="badge badge-purple">${b.priority}</span></td>
+        <td><span class="badge ${b.active ? 'badge-green' : 'badge-orange'}">${b.active ? 'Active' : 'Paused'}</span></td>
+        <td>
+          <div style="display:flex;gap:4px;">
+            <button class="btn btn-danger btn-sm" onclick="deleteBreak('${b.id}')">🗑</button>
+          </div>
+        </td>
+      </tr>`;
+  }).join('');
+}
+
+async function openBreakModal() {
+  // Populate track selector
+  const tracks = await api('GET', '/tracks');
+  const sel = document.getElementById('brk-track');
+  sel.innerHTML = `<option value="">— Select a track —</option>` +
+    tracks.map(t => `<option value="${t.id}">${esc(t.artist)} - ${esc(t.title)}</option>`).join('');
+  openModal('break-modal');
+}
+
+async function saveBreak() {
+  const name = document.getElementById('brk-name').value.trim();
+  const time = document.getElementById('brk-time').value;
+  const trackId = document.getElementById('brk-track').value;
+  const priority = parseInt(document.getElementById('brk-priority').value) || 1;
+  const canStop = document.getElementById('brk-stop').checked;
+  const days = Array.from(document.querySelectorAll('#brk-days input:checked')).map(i => i.value);
+
+  if (!name || !time) return toast('Fill in all required fields', 'error');
+  if (!days.length) return toast('Select at least one day', 'error');
+
+  try {
+    await api('POST', '/breaks', {
+      name, broadcast_time: time, days, content_type: 'track',
+      content_id: trackId, can_stop_music: canStop, priority
+    });
+    toast('Break scheduled', 'success');
+    closeModal('break-modal');
+    loadBreaks();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteBreak(id) {
+  if (!confirm('Delete this break?')) return;
+  await api('DELETE', `/breaks/${id}`);
+  toast('Break deleted', 'success');
+  loadBreaks();
+}
+
+// =================== DAILY GENERATION ===================
+async function loadDailyGen() {
+  const date = document.getElementById('dailygen-date').value;
+  if (!date) return;
+  try {
+    const rows = await api('GET', `/daily-queue?date=${date}`);
+    const tbody = document.getElementById('dailygen-tbody');
+    const stats = document.getElementById('dailygen-stats');
+    stats.textContent = `${rows.length} tracks in queue`;
+
+    if (!rows.length) {
+      tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--text3);">No tracks generated for this date. Click "Generate Day" to create the queue.</td></tr>`;
+      return;
+    }
+
+    let totalDuration = 0;
+    tbody.innerHTML = rows.map((r, i) => {
+      totalDuration += r.duration || 0;
+      return `
+        <tr style="${r.played ? 'opacity:0.5;' : ''}">
+          <td style="color:var(--text3);font-family:var(--mono);">${i+1}</td>
+          <td style="font-weight:500;">${esc(r.title)}</td>
+          <td style="color:var(--text3);">${esc(r.artist)}</td>
+          <td style="font-family:var(--mono);color:var(--text3);">${formatDuration(r.duration)}</td>
+          <td><span class="badge badge-cyan" style="font-family:var(--mono);">${r.start_time || '—'}</span></td>
+          <td><span class="badge ${r.played ? 'badge-orange' : 'badge-green'}">${r.played ? 'Played' : 'Pending'}</span></td>
+        </tr>`;
+    }).join('');
+
+    stats.textContent = `${rows.length} tracks · ${formatDuration(totalDuration)} total`;
+  } catch (e) { toast('Failed to load queue', 'error'); }
+}
+
+async function generateDay() {
+  const date = document.getElementById('dailygen-date').value;
+  if (!date) return toast('Select a date', 'error');
+  try {
+    const r = await api('POST', '/daily-queue/generate', { date });
+    toast(`Generated ${r.trackCount} tracks for ${date}`, 'success');
+    loadDailyGen();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function playDay() {
+  const date = document.getElementById('dailygen-date').value;
+  if (!date) return toast('Select a date', 'error');
+  try {
+    const r = await api('POST', '/daily-queue/play', { date });
+    toast(`Playing ${r.queueLength} tracks`, 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+document.getElementById('dailygen-date').addEventListener('change', loadDailyGen);
+
+// =================== HISTORY ===================
+async function loadHistory() {
+  const rows = await api('GET', '/history');
+  const el = document.getElementById('history-list');
+  if (!rows.length) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">📜</div><div class="empty-title">No history</div></div>`;
+    return;
+  }
+  el.innerHTML = rows.map(r => `
+    <div class="history-item">
+      <div class="history-time">${new Date(r.played_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</div>
+      <div>
+        <div class="history-title">${esc(r.title)}</div>
+        <div class="history-artist">${esc(r.artist)}</div>
+      </div>
+    </div>`).join('');
+}
+
+// =================== SETTINGS ===================
+async function loadSettings() {
+  const s = await api('GET', '/settings');
+  state.settings = s;
+  document.getElementById('set-name').value = s.radio_name || '';
+  document.getElementById('set-desc').value = s.radio_description || '';
+  document.getElementById('set-genre').value = s.radio_genre || '';
+  document.getElementById('set-lang').value = s.radio_language || '';
+  document.getElementById('set-bitrate').value = s.stream_bitrate || '128';
+  document.getElementById('set-filler').checked = s.filler_enabled === '1';
+
+  const base = window.location.origin;
+  document.getElementById('stream-url').value = `${base}/stream`;
+  document.getElementById('player-url').value = `${base}/listen`;
+
+  document.getElementById('sidebar-radio-name').textContent = s.radio_name || 'LETW Radio';
+}
+
+async function saveSettings() {
+  const data = {
+    radio_name: document.getElementById('set-name').value,
+    radio_description: document.getElementById('set-desc').value,
+    radio_genre: document.getElementById('set-genre').value,
+    radio_language: document.getElementById('set-lang').value,
+    stream_bitrate: document.getElementById('set-bitrate').value,
+    filler_enabled: document.getElementById('set-filler').checked ? '1' : '0',
+  };
+  await api('PUT', '/settings', data);
+  toast('Settings saved', 'success');
+  document.getElementById('sidebar-radio-name').textContent = data.radio_name;
+}
+
+function copyStreamUrl() {
+  const url = document.getElementById('stream-url').value;
+  navigator.clipboard.writeText(url).then(() => toast('Stream URL copied!', 'success'));
+}
+
+// =================== MODAL HELPERS ===================
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+// Close on overlay click
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.remove('open'); });
+});
+
+// =================== TOAST ===================
+function toast(msg, type = 'info') {
+  const container = document.getElementById('toast-container');
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.textContent = msg;
+  container.appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+// =================== UTILS ===================
+function formatDuration(secs) {
+  if (!secs) return '0:00';
+  const m = Math.floor(secs / 60);
+  const s = Math.floor(secs % 60);
+  return `${m}:${String(s).padStart(2,'0')}`;
+}
+
+function esc(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+// =================== INIT ===================
+(async function init() {
+  // Load settings for radio name
+  try {
+    const s = await api('GET', '/settings');
+    state.settings = s;
+    document.getElementById('sidebar-radio-name').textContent = s.radio_name || 'LETW Radio';
+    const base = window.location.origin;
+    const streamEl = document.getElementById('stream-url');
+    const playerEl = document.getElementById('player-url');
+    if (streamEl) streamEl.value = `${base}/stream`;
+    if (playerEl) playerEl.value = `${base}/listen`;
+  } catch {}
+
+  // Load initial status
+  try {
+    const status = await api('GET', '/status');
+    updateStatusUI(status);
+    if (status.currentTrack) updateNowPlaying(status.currentTrack);
+  } catch {}
+
+  loadDashboardStats();
+  buildCalendarStructure();
+
+  // Preload data for planning modal
+  api('GET', '/playlists').then(p => state.playlists = p).catch(() => {});
+  api('GET', '/programs').then(p => state.programs = p).catch(() => {});
+})();
+</script>
+</body>
+</html>
