@@ -16,7 +16,27 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3000;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'letw-admin-2024';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Segun123@';
+
+// ── Session store — maps random token → expiry time ──────────────────────────
+// This means the actual password never touches the cookie.
+// Special characters like @ in the password cannot break anything.
+const sessions = new Map();
+
+function createSession() {
+  const token = Math.random().toString(36).slice(2) + Date.now().toString(36) + Math.random().toString(36).slice(2);
+  sessions.set(token, Date.now() + 86400000); // expires in 24 hours
+  return token;
+}
+
+function isValidSession(token) {
+  if (!token || !sessions.has(token)) return false;
+  if (Date.now() > sessions.get(token)) {
+    sessions.delete(token);
+    return false;
+  }
+  return true;
+}
 
 // ── Cookie parser ─────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
@@ -47,10 +67,10 @@ function getSettings() {
   }
 }
 
-// ── Admin auth ────────────────────────────────────────────────────────────────
+// ── Admin auth middleware ─────────────────────────────────────────────────────
 function requireAdmin(req, res, next) {
   const token = req.cookies?.admin_token || req.headers['x-admin-token'];
-  if (token === ADMIN_PASSWORD) return next();
+  if (isValidSession(token)) return next();
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -72,6 +92,7 @@ function requireAdmin(req, res, next) {
     button{width:100%;padding:12px;background:linear-gradient(135deg,#8b6914,#d4a843,#f0c85a,#d4a843);color:#1a0f00;font-weight:700;font-size:14px;font-family:'Lato',sans-serif;border:none;border-radius:8px;cursor:pointer;letter-spacing:1px;transition:opacity .2s;}
     button:hover{opacity:.9;}
     .err{color:#e05070;font-size:12px;margin-bottom:12px;display:none;}
+    .loading{opacity:.6;pointer-events:none;}
   </style>
 </head>
 <body>
@@ -82,11 +103,16 @@ function requireAdmin(req, res, next) {
     <div class="err" id="err">Incorrect password. Please try again.</div>
     <label>ADMIN PASSWORD</label>
     <input type="password" id="pw" placeholder="Enter admin password" onkeydown="if(event.key==='Enter')login()">
-    <button onclick="login()">ACCESS MANAGER</button>
+    <button id="btn" onclick="login()">ACCESS MANAGER</button>
   </div>
   <script>
-    function login(){
-      const pw = document.getElementById('pw').value;
+    function login() {
+      const pw  = document.getElementById('pw').value;
+      const btn = document.getElementById('btn');
+      const err = document.getElementById('err');
+      err.style.display = 'none';
+      btn.textContent = 'Checking...';
+      btn.classList.add('loading');
       fetch('/admin-login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -94,20 +120,37 @@ function requireAdmin(req, res, next) {
       })
       .then(r => r.json())
       .then(d => {
-        if (d.ok) { window.location.href = '/'; }
-        else { document.getElementById('err').style.display = 'block'; }
+        if (d.ok) {
+          btn.textContent = 'Welcome!';
+          window.location.href = '/';
+        } else {
+          err.style.display = 'block';
+          btn.textContent = 'ACCESS MANAGER';
+          btn.classList.remove('loading');
+        }
       })
-      .catch(() => { document.getElementById('err').style.display = 'block'; });
+      .catch(() => {
+        err.textContent = 'Connection error. Is the server running?';
+        err.style.display = 'block';
+        btn.textContent = 'ACCESS MANAGER';
+        btn.classList.remove('loading');
+      });
     }
+    // Auto-focus password field
+    window.onload = () => document.getElementById('pw').focus();
   </script>
 </body>
 </html>`);
 }
 
-// ── Admin login (FIX: SameSite=Lax so re-login works after logout) ────────────
+// ── Admin login ───────────────────────────────────────────────────────────────
+// The password is checked here but a SAFE RANDOM TOKEN is stored in the cookie.
+// This fixes the @ symbol and any other special characters breaking the cookie.
 app.post('/admin-login', (req, res) => {
-  if (req.body.password === ADMIN_PASSWORD) {
-    res.setHeader('Set-Cookie', `admin_token=${ADMIN_PASSWORD}; Path=/; HttpOnly; Max-Age=86400; SameSite=Lax`);
+  const submitted = (req.body.password || '').trim();
+  if (submitted === ADMIN_PASSWORD) {
+    const token = createSession();
+    res.setHeader('Set-Cookie', `admin_token=${token}; Path=/; HttpOnly; Max-Age=86400; SameSite=Lax`);
     res.json({ ok: true });
   } else {
     res.status(401).json({ ok: false });
@@ -116,6 +159,8 @@ app.post('/admin-login', (req, res) => {
 
 // ── Admin logout ──────────────────────────────────────────────────────────────
 app.get('/admin-logout', (req, res) => {
+  const token = req.cookies?.admin_token;
+  if (token) sessions.delete(token); // invalidate the session immediately
   res.setHeader('Set-Cookie', 'admin_token=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax');
   res.redirect('/listen');
 });
@@ -148,7 +193,6 @@ app.get('/stream', (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 📋  PLS PLAYLIST — Winamp, VLC, most desktop and mobile radio apps
-// Usage: download file → open in VLC/Winamp → auto-connects to stream
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/stream.pls', (req, res) => {
   const settings = getSettings();
@@ -169,7 +213,6 @@ app.get('/stream.pls', (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 📋  M3U PLAYLIST — Apple Music, iPhone, most mobile radio apps
-// Usage: download file → open in any media player
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/stream.m3u', (req, res) => {
   const settings = getSettings();
@@ -248,9 +291,9 @@ app.get('/tune-in', (req, res) => {
     .btn:hover{opacity:.85;}
     .btn-gold{background:linear-gradient(135deg,#8b6914,#d4a843);color:#1a0f00;}
     .btn-outline{background:transparent;border:1px solid rgba(212,168,67,.4);color:#d4a843;}
-    .url-box{background:#060402;border:1px solid rgba(212,168,67,.15);border-radius:8px;padding:10px 40px 10px 12px;font-family:monospace;font-size:11px;color:#c9b88a;word-break:break-all;margin-bottom:12px;cursor:pointer;position:relative;transition:border-color .2s;line-height:1.5;}
+    .url-box{background:#060402;border:1px solid rgba(212,168,67,.15);border-radius:8px;padding:10px 52px 10px 12px;font-family:monospace;font-size:11px;color:#c9b88a;word-break:break-all;margin-bottom:12px;position:relative;transition:border-color .2s;line-height:1.5;}
     .url-box:hover{border-color:rgba(212,168,67,.4);}
-    .copy-btn{position:absolute;top:50%;right:8px;transform:translateY(-50%);background:rgba(212,168,67,.1);border:1px solid rgba(212,168,67,.2);border-radius:4px;padding:2px 7px;font-size:10px;color:#d4a843;cursor:pointer;white-space:nowrap;font-family:'Lato',sans-serif;}
+    .copy-btn{position:absolute;top:50%;right:8px;transform:translateY(-50%);background:rgba(212,168,67,.1);border:1px solid rgba(212,168,67,.2);border-radius:4px;padding:3px 8px;font-size:10px;color:#d4a843;cursor:pointer;white-space:nowrap;font-family:'Lato',sans-serif;transition:all .2s;}
     .copy-btn:hover{background:rgba(212,168,67,.2);}
     .copy-btn.copied{color:#00e676;border-color:rgba(0,230,118,.3);background:rgba(0,230,118,.08);}
     .section-label{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:rgba(201,184,138,.4);margin-bottom:8px;}
@@ -265,7 +308,6 @@ app.get('/tune-in', (req, res) => {
   </style>
 </head>
 <body>
-
   <div class="hero">
     <img class="logo" src="/logo.png" alt="${name}">
     <h1>${name}</h1>
@@ -274,8 +316,6 @@ app.get('/tune-in', (req, res) => {
   </div>
 
   <div class="grid">
-
-    <!-- Browser / PWA -->
     <div class="card">
       <div class="card-icon">🌐</div>
       <div class="card-title">Browser &amp; Mobile App</div>
@@ -283,7 +323,6 @@ app.get('/tune-in', (req, res) => {
       <a class="btn btn-gold" href="/listen">▶ Open Live Player</a>
     </div>
 
-    <!-- Raw Stream -->
     <div class="card">
       <div class="card-icon">⚡</div>
       <div class="card-title">Direct Stream URL</div>
@@ -293,11 +332,10 @@ app.get('/tune-in', (req, res) => {
       <a class="btn btn-outline" href="/stream" target="_blank">▶ Open Stream</a>
     </div>
 
-    <!-- VLC -->
     <div class="card">
       <div class="card-icon">🎛️</div>
       <div class="card-title">VLC Media Player</div>
-      <div class="card-desc">Download the playlist file below, double-click it, and VLC will connect automatically. Or go to Media → Open Network Stream and paste the URL.</div>
+      <div class="card-desc">Download the playlist file below, double-click it, and VLC connects automatically. Or go to Media → Open Network Stream and paste the URL.</div>
       <ul class="steps" style="margin-bottom:14px;">
         <li>Download the .PLS file below</li>
         <li>Double-click to open in VLC</li>
@@ -308,7 +346,6 @@ app.get('/tune-in', (req, res) => {
       <a class="btn btn-outline" href="/stream.xspf" download>⬇ Download .XSPF</a>
     </div>
 
-    <!-- Mobile Radio Apps -->
     <div class="card">
       <div class="card-icon">📻</div>
       <div class="card-title">Radio Apps (Android &amp; iOS)</div>
@@ -317,7 +354,6 @@ app.get('/tune-in', (req, res) => {
       <div class="url-box" id="box-radio">${streamUrl}<button class="copy-btn" onclick="copyText('box-radio','${streamUrl}')">Copy</button></div>
     </div>
 
-    <!-- Smart Speakers -->
     <div class="card">
       <div class="card-icon">🔊</div>
       <div class="card-title">Smart Speakers &amp; Alexa</div>
@@ -330,19 +366,16 @@ app.get('/tune-in', (req, res) => {
       <div class="url-box" id="box-speaker">${streamUrl}<button class="copy-btn" onclick="copyText('box-speaker','${streamUrl}')">Copy</button></div>
     </div>
 
-    <!-- Embed -->
     <div class="card">
       <div class="card-icon">🖥️</div>
       <div class="card-title">Embed on Your Website</div>
-      <div class="card-desc">Add the LETW Radio player to any webpage — your church website, blog, or ministry page. Just paste this one line of code.</div>
+      <div class="card-desc">Add the LETW Radio player to any webpage — your church website, blog, or ministry page. Just paste this one line of HTML code.</div>
       <div class="section-label">Copy this HTML code</div>
-      <div class="url-box" id="box-embed" style="font-size:10px;">${iframeCode.replace(/</g,'&lt;').replace(/>/g,'&gt;')}<button class="copy-btn" onclick="copyText('box-embed','${iframeCode.replace(/'/g,"\\'")}')">Copy</button></div>
+      <div class="url-box" id="box-embed" style="font-size:10px;">${iframeCode.replace(/</g,'&lt;').replace(/>/g,'&gt;')}<button class="copy-btn" onclick="copyEmbed()">Copy</button></div>
     </div>
-
   </div>
 
   <div class="divider"></div>
-
   <footer>
     © 2026 Light Encounter Tabernacle Worldwide &nbsp;·&nbsp;
     <a href="https://letw.org" target="_blank">letw.org</a> &nbsp;·&nbsp;
@@ -350,26 +383,45 @@ app.get('/tune-in', (req, res) => {
   </footer>
 
   <script>
+    const IFRAME_CODE = ${JSON.stringify(iframeCode)};
+
     function copyText(boxId, text) {
       navigator.clipboard.writeText(text).then(() => {
-        const btn = document.querySelector('#' + boxId + ' .copy-btn');
-        if (btn) {
-          btn.textContent = 'Copied ✓';
-          btn.classList.add('copied');
-          setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
-        }
+        showCopied(boxId);
       }).catch(() => {
-        // Fallback for older browsers
-        const el = document.createElement('textarea');
-        el.value = text;
-        document.body.appendChild(el);
-        el.select();
-        document.execCommand('copy');
-        document.body.removeChild(el);
+        fallbackCopy(text);
+        showCopied(boxId);
       });
     }
-  </script>
 
+    function copyEmbed() {
+      navigator.clipboard.writeText(IFRAME_CODE).then(() => {
+        showCopied('box-embed');
+      }).catch(() => {
+        fallbackCopy(IFRAME_CODE);
+        showCopied('box-embed');
+      });
+    }
+
+    function showCopied(boxId) {
+      const btn = document.querySelector('#' + boxId + ' .copy-btn');
+      if (!btn) return;
+      btn.textContent = 'Copied ✓';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+    }
+
+    function fallbackCopy(text) {
+      const el = document.createElement('textarea');
+      el.value = text;
+      el.style.position = 'fixed';
+      el.style.opacity = '0';
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+    }
+  </script>
 </body>
 </html>`);
 });
