@@ -18,7 +18,7 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Segun123@';
 
-// Safe base64 token — encodes special chars like @ so cookies never break
+// Base64 encode the password so special chars like @ never break cookie values
 const SESSION_TOKEN = Buffer.from(ADMIN_PASSWORD).toString('base64');
 
 // ── Cookie parser ─────────────────────────────────────────────────────────────
@@ -26,10 +26,11 @@ app.use((req, res, next) => {
   const cookieHeader = req.headers.cookie || '';
   req.cookies = {};
   cookieHeader.split(';').forEach(c => {
-    const parts = c.trim().split('=');
-    const k = parts.shift();
-    const v = parts.join('='); // handles = signs in base64
-    if (k) req.cookies[k.trim()] = decodeURIComponent((v || '').trim());
+    const idx = c.indexOf('=');
+    if (idx < 0) return;
+    const k = c.slice(0, idx).trim();
+    const v = c.slice(idx + 1).trim();
+    if (k) req.cookies[k] = decodeURIComponent(v);
   });
   next();
 });
@@ -52,13 +53,22 @@ function getSettings() {
   }
 }
 
-// ── Admin auth middleware ─────────────────────────────────────────────────────
-function requireAdmin(req, res, next) {
+// ── Admin check ───────────────────────────────────────────────────────────────
+function isAdmin(req) {
   const token = req.cookies?.admin_token || req.headers['x-admin-token'];
-  if (token === SESSION_TOKEN) return next();
+  return token === SESSION_TOKEN;
+}
 
-  // Not logged in — serve login page
-  res.send(`<!DOCTYPE html>
+// ── No-cache headers helper ───────────────────────────────────────────────────
+function noCache(res) {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+}
+
+// ── Login page ────────────────────────────────────────────────────────────────
+function loginPage(error) {
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -78,8 +88,7 @@ function requireAdmin(req, res, next) {
     input:focus{border-color:rgba(212,168,67,.6);}
     button{width:100%;padding:12px;background:linear-gradient(135deg,#8b6914,#d4a843,#f0c85a,#d4a843);color:#1a0f00;font-weight:700;font-size:14px;font-family:'Lato',sans-serif;border:none;border-radius:8px;cursor:pointer;letter-spacing:1px;transition:opacity .2s;}
     button:hover{opacity:.9;}
-    button:disabled{opacity:.5;cursor:not-allowed;}
-    .err{color:#e05070;font-size:12px;margin-bottom:12px;display:none;text-align:center;}
+    .err{color:#e05070;font-size:12px;margin-bottom:16px;text-align:center;background:rgba(125,22,48,.15);border:1px solid rgba(125,22,48,.3);border-radius:6px;padding:8px 12px;}
   </style>
 </head>
 <body>
@@ -87,83 +96,68 @@ function requireAdmin(req, res, next) {
     <img class="logo" src="/logo.png" alt="LETW">
     <h1>RADIO MANAGER</h1>
     <div class="sub">LIGHT ENCOUNTER TABERNACLE WORLDWIDE</div>
-    <div class="err" id="err">Incorrect password. Please try again.</div>
-    <label>ADMIN PASSWORD</label>
-    <input type="password" id="pw" placeholder="Enter admin password" onkeydown="if(event.key==='Enter')login()">
-    <button id="btn" onclick="login()">ACCESS MANAGER</button>
+    ${error ? `<div class="err">${error}</div>` : ''}
+    <form method="POST" action="/admin-login" autocomplete="off">
+      <label>ADMIN PASSWORD</label>
+      <input type="password" name="password" placeholder="Enter admin password" autofocus>
+      <button type="submit">ACCESS MANAGER</button>
+    </form>
   </div>
-  <script>
-    document.getElementById('pw').focus();
-    function login() {
-      const pw  = document.getElementById('pw').value;
-      const btn = document.getElementById('btn');
-      const err = document.getElementById('err');
-      if (!pw) { err.textContent = 'Please enter your password.'; err.style.display = 'block'; return; }
-      err.style.display = 'none';
-      btn.disabled = true;
-      btn.textContent = 'Verifying...';
-      fetch('/admin-login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: pw })
-      })
-      .then(r => r.json())
-      .then(d => {
-        if (d.ok) {
-          btn.textContent = 'Welcome!';
-          // Small delay so cookie is fully set before redirect
-          setTimeout(() => { window.location.replace('/'); }, 300);
-        } else {
-          err.textContent = 'Incorrect password. Please try again.';
-          err.style.display = 'block';
-          btn.disabled = false;
-          btn.textContent = 'ACCESS MANAGER';
-        }
-      })
-      .catch(() => {
-        err.textContent = 'Connection error. Please try again.';
-        err.style.display = 'block';
-        btn.disabled = false;
-        btn.textContent = 'ACCESS MANAGER';
-      });
-    }
-  </script>
 </body>
-</html>`);
+</html>`;
 }
 
-// ── Admin login ───────────────────────────────────────────────────────────────
-app.post('/admin-login', (req, res) => {
-  const submitted = (req.body.password || '').trim();
-  if (submitted === ADMIN_PASSWORD) {
-    res.setHeader('Set-Cookie', `admin_token=${SESSION_TOKEN}; Path=/; HttpOnly; Max-Age=86400; SameSite=Lax`);
-    res.json({ ok: true });
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN ROUTES
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET / — show dashboard if logged in, otherwise show login page
+app.get('/', (req, res) => {
+  noCache(res);
+  if (isAdmin(req)) {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
   } else {
-    res.status(401).json({ ok: false });
+    res.send(loginPage());
   }
 });
 
-// ── Admin logout ──────────────────────────────────────────────────────────────
+// POST /admin-login — HTML form submission
+// Server sets cookie AND sends redirect in one atomic response.
+// No JavaScript timing issues possible with this approach.
+app.post('/admin-login', (req, res) => {
+  noCache(res);
+  const submitted = (req.body.password || '').trim();
+  if (submitted === ADMIN_PASSWORD) {
+    res.setHeader('Set-Cookie', `admin_token=${SESSION_TOKEN}; Path=/; HttpOnly; Max-Age=86400; SameSite=Lax`);
+    res.redirect(302, '/');
+  } else {
+    res.send(loginPage('Incorrect password. Please try again.'));
+  }
+});
+
+// GET /admin-logout — clear cookie and redirect to listener page
 app.get('/admin-logout', (req, res) => {
+  noCache(res);
   res.setHeader('Set-Cookie', 'admin_token=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax');
-  res.redirect('/listen');
+  res.redirect(302, '/listen');
 });
 
-// ── Admin panel (protected) ───────────────────────────────────────────────────
-app.get('/', requireAdmin, (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
+// ─────────────────────────────────────────────────────────────────────────────
+// PUBLIC ROUTES
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ── Public listener player ────────────────────────────────────────────────────
+// GET /listen — public listener player
 app.get('/listen', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'player.html'));
 });
 
-// ── API routes ────────────────────────────────────────────────────────────────
+// API routes
 app.use('/api', apiRoutes);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 📻  LIVE AUDIO STREAM
+// Supports plain browsers AND ICY-aware clients (VLC, Winamp, RadioApp etc.)
+// ICY clients send header: Icy-MetaData: 1
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/stream', (req, res) => {
   const wantsIcy = req.headers['icy-metadata'] === '1';
@@ -174,46 +168,68 @@ app.get('/stream', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 📋  PLS PLAYLIST
+// 📋  PLS PLAYLIST — VLC, Winamp, most desktop and mobile radio apps
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/stream.pls', (req, res) => {
   const settings = getSettings();
   const name = settings.radio_name || 'LETW Radio';
   const base = `${req.protocol}://${req.get('host')}`;
-  const pls = ['[playlist]', `File1=${base}/stream`, `Title1=${name}`, 'Length1=-1', 'NumberOfEntries=1', 'Version=2'].join('\r\n');
+  const pls = [
+    '[playlist]',
+    `File1=${base}/stream`,
+    `Title1=${name}`,
+    'Length1=-1',
+    'NumberOfEntries=1',
+    'Version=2',
+  ].join('\r\n');
   res.set('Content-Type', 'audio/x-scpls');
   res.set('Content-Disposition', 'attachment; filename="letw-radio.pls"');
   res.send(pls);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 📋  M3U PLAYLIST
+// 📋  M3U PLAYLIST — Apple Music, iPhone, most mobile apps
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/stream.m3u', (req, res) => {
   const settings = getSettings();
   const name = settings.radio_name || 'LETW Radio';
   const base = `${req.protocol}://${req.get('host')}`;
-  const m3u = ['#EXTM3U', `#EXTINF:-1,${name}`, `${base}/stream`].join('\r\n');
+  const m3u = [
+    '#EXTM3U',
+    `#EXTINF:-1,${name}`,
+    `${base}/stream`,
+  ].join('\r\n');
   res.set('Content-Type', 'audio/x-mpegurl');
   res.set('Content-Disposition', 'attachment; filename="letw-radio.m3u"');
   res.send(m3u);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 📋  XSPF PLAYLIST
+// 📋  XSPF PLAYLIST — VLC alternative format
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/stream.xspf', (req, res) => {
   const settings = getSettings();
   const name = settings.radio_name || 'LETW Radio';
   const base = `${req.protocol}://${req.get('host')}`;
-  const xspf = `<?xml version="1.0" encoding="UTF-8"?>\n<playlist xmlns="http://xspf.org/ns/0/" version="1">\n  <title>${name}</title>\n  <trackList><track><title>${name}</title><location>${base}/stream</location><duration>-1</duration></track></trackList>\n</playlist>`;
+  const xspf = `<?xml version="1.0" encoding="UTF-8"?>
+<playlist xmlns="http://xspf.org/ns/0/" version="1">
+  <title>${name}</title>
+  <trackList>
+    <track>
+      <title>${name}</title>
+      <location>${base}/stream</location>
+      <duration>-1</duration>
+    </track>
+  </trackList>
+</playlist>`;
   res.set('Content-Type', 'application/xspf+xml');
   res.set('Content-Disposition', 'attachment; filename="letw-radio.xspf"');
   res.send(xspf);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 📡  TUNE-IN PAGE
+// 📡  TUNE-IN PAGE — all ways to listen
+// Share with congregation: radio.letw.org/tune-in
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/tune-in', (req, res) => {
   const settings = getSettings();
@@ -275,24 +291,27 @@ app.get('/tune-in', (req, res) => {
     <div class="hero-desc">${desc}</div>
   </div>
   <div class="grid">
+
     <div class="card">
       <div class="card-icon">🌐</div>
       <div class="card-title">Browser &amp; Mobile App</div>
       <div class="card-desc">Listen directly in your browser. On iOS or Android tap "Add to Home Screen" to install as a full-screen app — no app store needed.</div>
       <a class="btn btn-gold" href="/listen">▶ Open Live Player</a>
     </div>
+
     <div class="card">
       <div class="card-icon">⚡</div>
       <div class="card-title">Direct Stream URL</div>
-      <div class="card-desc">The raw ICY audio stream. Paste into VLC, Winamp, Foobar2000, or any Shoutcast / Icecast compatible player.</div>
+      <div class="card-desc">Raw ICY audio stream — paste into VLC, Winamp, Foobar2000, or any Shoutcast/Icecast compatible player.</div>
       <div class="section-label">Stream URL</div>
       <div class="url-box" id="box-stream">${streamUrl}<button class="copy-btn" onclick="cp('box-stream','${streamUrl}')">Copy</button></div>
       <a class="btn btn-outline" href="/stream" target="_blank">▶ Open Stream</a>
     </div>
+
     <div class="card">
       <div class="card-icon">🎛️</div>
       <div class="card-title">VLC Media Player</div>
-      <div class="card-desc">Download the playlist file below, double-click it, and VLC connects automatically.</div>
+      <div class="card-desc">Download the playlist below, double-click it and VLC connects automatically.</div>
       <ul class="steps">
         <li>Download the .PLS file below</li>
         <li>Double-click to open in VLC</li>
@@ -302,6 +321,7 @@ app.get('/tune-in', (req, res) => {
       <a class="btn btn-outline" href="/stream.m3u" download>⬇ .M3U</a>
       <a class="btn btn-outline" href="/stream.xspf" download>⬇ .XSPF</a>
     </div>
+
     <div class="card">
       <div class="card-icon">📻</div>
       <div class="card-title">Radio Apps (Android &amp; iOS)</div>
@@ -309,10 +329,11 @@ app.get('/tune-in', (req, res) => {
       <div class="section-label">Paste this in the app</div>
       <div class="url-box" id="box-radio">${streamUrl}<button class="copy-btn" onclick="cp('box-radio','${streamUrl}')">Copy</button></div>
     </div>
+
     <div class="card">
       <div class="card-icon">🔊</div>
       <div class="card-title">Smart Speakers &amp; Alexa</div>
-      <div class="card-desc">Add the stream URL to Alexa via the TuneIn skill, or to Google Home via the app under "My Stations".</div>
+      <div class="card-desc">Add to Amazon Alexa via the TuneIn skill, or Google Home via the app under "My Stations".</div>
       <ul class="steps">
         <li>Open Alexa or Google Home app</li>
         <li>Find "Add custom station" or TuneIn</li>
@@ -320,6 +341,7 @@ app.get('/tune-in', (req, res) => {
       </ul>
       <div class="url-box" id="box-speaker">${streamUrl}<button class="copy-btn" onclick="cp('box-speaker','${streamUrl}')">Copy</button></div>
     </div>
+
     <div class="card">
       <div class="card-icon">🖥️</div>
       <div class="card-title">Embed on Your Website</div>
@@ -327,17 +349,22 @@ app.get('/tune-in', (req, res) => {
       <div class="section-label">Copy this HTML code</div>
       <div class="url-box" id="box-embed" style="font-size:10px;">${iframeCode.replace(/</g,'&lt;').replace(/>/g,'&gt;')}<button class="copy-btn" onclick="cpEmbed()">Copy</button></div>
     </div>
+
   </div>
   <div class="divider"></div>
-  <footer>© 2026 Light Encounter Tabernacle Worldwide &nbsp;·&nbsp; <a href="https://letw.org" target="_blank">letw.org</a> &nbsp;·&nbsp; <a href="/listen">Listen Live</a></footer>
+  <footer>
+    © 2026 Light Encounter Tabernacle Worldwide &nbsp;·&nbsp;
+    <a href="https://letw.org" target="_blank">letw.org</a> &nbsp;·&nbsp;
+    <a href="/listen">Listen Live</a>
+  </footer>
   <script>
     const EMBED = ${JSON.stringify(iframeCode)};
     function cp(id, text) {
-      navigator.clipboard.writeText(text).catch(() => fallback(text));
+      navigator.clipboard.writeText(text).catch(() => fb(text));
       mark(id);
     }
     function cpEmbed() {
-      navigator.clipboard.writeText(EMBED).catch(() => fallback(EMBED));
+      navigator.clipboard.writeText(EMBED).catch(() => fb(EMBED));
       mark('box-embed');
     }
     function mark(id) {
@@ -347,10 +374,12 @@ app.get('/tune-in', (req, res) => {
       btn.classList.add('copied');
       setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
     }
-    function fallback(text) {
+    function fb(text) {
       const el = document.createElement('textarea');
-      el.value = text; el.style.opacity = '0';
-      document.body.appendChild(el); el.select();
+      el.value = text;
+      el.style.opacity = '0';
+      document.body.appendChild(el);
+      el.select();
       document.execCommand('copy');
       document.body.removeChild(el);
     }
@@ -359,11 +388,14 @@ app.get('/tune-in', (req, res) => {
 </html>`);
 });
 
-// ── Socket.io ─────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// SOCKET.IO — real-time track and listener updates
+// ─────────────────────────────────────────────────────────────────────────────
 io.on('connection', (socket) => {
   socket.emit('status', audioEngine.getStatus());
   socket.on('disconnect', () => {});
 });
+
 audioEngine.on('trackStart', (track) => {
   io.emit('trackStart', track);
   io.emit('status', audioEngine.getStatus());
@@ -371,7 +403,9 @@ audioEngine.on('trackStart', (track) => {
 audioEngine.on('trackEnd',       (track) => { io.emit('trackEnd', track); });
 audioEngine.on('listenerChange', (count) => { io.emit('listenerChange', count); });
 
-// ── Start ─────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// START SERVER
+// ─────────────────────────────────────────────────────────────────────────────
 db.init().then(() => {
   server.listen(PORT, () => {
     console.log(`\n🎙️  LETW Radio is running!\n`);
