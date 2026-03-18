@@ -18,7 +18,7 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'letw-admin-2024';
 
-// ── Cookie parser (lightweight) ──────────────────────────────────────────────
+// ── Cookie parser ─────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
   const cookieHeader = req.headers.cookie || '';
   req.cookies = {};
@@ -29,23 +29,25 @@ app.use((req, res, next) => {
   next();
 });
 
-// ── Core middleware ──────────────────────────────────────────────────────────
+// ── Core middleware ───────────────────────────────────────────────────────────
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Static files — index:false so / stays protected by admin auth
 app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
-// ── Helper: fetch radio settings from DB ─────────────────────────────────────
+// ── Settings helper ───────────────────────────────────────────────────────────
 function getSettings() {
-  const rows = db.prepare(`SELECT key, value FROM settings`).all();
-  const s = {};
-  rows.forEach(r => s[r.key] = r.value);
-  return s;
+  try {
+    const rows = db.prepare(`SELECT key, value FROM settings`).all();
+    const s = {};
+    rows.forEach(r => s[r.key] = r.value);
+    return s;
+  } catch (e) {
+    return {};
+  }
 }
 
-// ── Admin auth ───────────────────────────────────────────────────────────────
+// ── Admin auth ────────────────────────────────────────────────────────────────
 function requireAdmin(req, res, next) {
   const token = req.cookies?.admin_token || req.headers['x-admin-token'];
   if (token === ADMIN_PASSWORD) return next();
@@ -77,45 +79,53 @@ function requireAdmin(req, res, next) {
     <img class="logo" src="/logo.png" alt="LETW">
     <h1>RADIO MANAGER</h1>
     <div class="sub">LIGHT ENCOUNTER TABERNACLE WORLDWIDE</div>
-    <div class="err" id="err">❌ Incorrect password. Please try again.</div>
+    <div class="err" id="err">Incorrect password. Please try again.</div>
     <label>ADMIN PASSWORD</label>
     <input type="password" id="pw" placeholder="Enter admin password" onkeydown="if(event.key==='Enter')login()">
     <button onclick="login()">ACCESS MANAGER</button>
   </div>
   <script>
     function login(){
-      const pw=document.getElementById('pw').value;
-      fetch('/admin-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})})
-        .then(r=>r.json()).then(d=>{
-          if(d.ok){location.reload();}
-          else{document.getElementById('err').style.display='block';}
-        });
+      const pw = document.getElementById('pw').value;
+      fetch('/admin-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pw })
+      })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) { window.location.href = '/'; }
+        else { document.getElementById('err').style.display = 'block'; }
+      })
+      .catch(() => { document.getElementById('err').style.display = 'block'; });
     }
   </script>
 </body>
 </html>`);
 }
 
-// ── Admin login / logout ──────────────────────────────────────────────────────
-app.post('/admin-login', express.json(), (req, res) => {
+// ── Admin login (FIX: SameSite=Lax so re-login works after logout) ────────────
+app.post('/admin-login', (req, res) => {
   if (req.body.password === ADMIN_PASSWORD) {
-    res.setHeader('Set-Cookie', `admin_token=${ADMIN_PASSWORD}; Path=/; HttpOnly; Max-Age=86400`);
+    res.setHeader('Set-Cookie', `admin_token=${ADMIN_PASSWORD}; Path=/; HttpOnly; Max-Age=86400; SameSite=Lax`);
     res.json({ ok: true });
   } else {
     res.status(401).json({ ok: false });
   }
 });
 
+// ── Admin logout ──────────────────────────────────────────────────────────────
 app.get('/admin-logout', (req, res) => {
-  res.setHeader('Set-Cookie', 'admin_token=; Path=/; Max-Age=0');
+  res.setHeader('Set-Cookie', 'admin_token=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax');
   res.redirect('/listen');
 });
 
-// ── Pages ─────────────────────────────────────────────────────────────────────
+// ── Admin panel (protected) ───────────────────────────────────────────────────
 app.get('/', requireAdmin, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// ── Public listener player ────────────────────────────────────────────────────
 app.get('/listen', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'player.html'));
 });
@@ -123,22 +133,23 @@ app.get('/listen', (req, res) => {
 // ── API routes ────────────────────────────────────────────────────────────────
 app.use('/api', apiRoutes);
 
-// ── 🎙️  LIVE AUDIO STREAM  ────────────────────────────────────────────────────
-// Supports both plain HTTP clients (browsers) and ICY-aware clients
-// (VLC, Winamp, RadioApp, TuneIn, etc.) that send "Icy-MetaData: 1".
+// ─────────────────────────────────────────────────────────────────────────────
+// 📻  LIVE AUDIO STREAM
+// Works with plain browsers AND ICY-aware clients (VLC, Winamp, RadioApp etc.)
+// ICY-aware clients send header: Icy-MetaData: 1
+// ─────────────────────────────────────────────────────────────────────────────
 app.get('/stream', (req, res) => {
   const wantsIcy = req.headers['icy-metadata'] === '1';
   const clientId = `${Date.now()}-${Math.random()}`;
   const settings = getSettings();
-
   console.log(`[Stream] Client connected: ${clientId} | ICY: ${wantsIcy} | Total: ${audioEngine.clients.size + 1}`);
-
   audioEngine.addClient(clientId, res, wantsIcy, settings);
 });
 
-// ── 📻  PLAYLIST FILES for external radio apps ────────────────────────────────
-
-// PLS format — used by Winamp, VLC, most desktop/mobile radio apps
+// ─────────────────────────────────────────────────────────────────────────────
+// 📋  PLS PLAYLIST — Winamp, VLC, most desktop and mobile radio apps
+// Usage: download file → open in VLC/Winamp → auto-connects to stream
+// ─────────────────────────────────────────────────────────────────────────────
 app.get('/stream.pls', (req, res) => {
   const settings = getSettings();
   const name = settings.radio_name || 'LETW Radio';
@@ -156,18 +167,27 @@ app.get('/stream.pls', (req, res) => {
   res.send(pls);
 });
 
-// M3U format — used by Apple Music, many mobile apps
+// ─────────────────────────────────────────────────────────────────────────────
+// 📋  M3U PLAYLIST — Apple Music, iPhone, most mobile radio apps
+// Usage: download file → open in any media player
+// ─────────────────────────────────────────────────────────────────────────────
 app.get('/stream.m3u', (req, res) => {
   const settings = getSettings();
   const name = settings.radio_name || 'LETW Radio';
   const base = `${req.protocol}://${req.get('host')}`;
-  const m3u = ['#EXTM3U', `#EXTINF:-1,${name}`, `${base}/stream`].join('\r\n');
+  const m3u = [
+    '#EXTM3U',
+    `#EXTINF:-1,${name}`,
+    `${base}/stream`,
+  ].join('\r\n');
   res.set('Content-Type', 'audio/x-mpegurl');
   res.set('Content-Disposition', 'attachment; filename="letw-radio.m3u"');
   res.send(m3u);
 });
 
-// XSPF format — used by VLC as an alternative
+// ─────────────────────────────────────────────────────────────────────────────
+// 📋  XSPF PLAYLIST — VLC alternative format
+// ─────────────────────────────────────────────────────────────────────────────
 app.get('/stream.xspf', (req, res) => {
   const settings = getSettings();
   const name = settings.radio_name || 'LETW Radio';
@@ -188,11 +208,18 @@ app.get('/stream.xspf', (req, res) => {
   res.send(xspf);
 });
 
-// ── 📡  TUNE IN PAGE — human-readable "how to listen" landing ──────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// 📡  TUNE-IN PAGE — public landing showing all ways to listen
+// Share this URL with your congregation: radio.letw.org/tune-in
+// ─────────────────────────────────────────────────────────────────────────────
 app.get('/tune-in', (req, res) => {
   const settings = getSettings();
   const name = settings.radio_name || 'LETW Radio';
+  const desc = settings.radio_description || 'Live worship, sermons and messages from Light Encounter Tabernacle Worldwide';
   const base = `${req.protocol}://${req.get('host')}`;
+  const streamUrl = `${base}/stream`;
+  const listenUrl = `${base}/listen`;
+  const iframeCode = `<iframe src="${listenUrl}" width="100%" height="640" style="border:none;border-radius:16px;" allow="autoplay"></iframe>`;
 
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -200,37 +227,50 @@ app.get('/tune-in', (req, res) => {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Tune In — ${name}</title>
-  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Lato:wght@300;400;700&display=swap" rel="stylesheet">
+  <meta name="description" content="${desc}">
+  <link rel="icon" href="/logo.png" type="image/png">
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Lato:wght@300;400;700&display=swap" rel="stylesheet">
   <style>
     *{box-sizing:border-box;margin:0;padding:0;}
-    body{background:#0a0806;color:#fdf6e3;font-family:'Lato',sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:40px 20px;}
+    body{background:#0a0806;color:#fdf6e3;font-family:'Lato',sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:48px 20px 40px;}
     .hero{text-align:center;margin-bottom:48px;}
-    .logo{width:80px;height:80px;border-radius:16px;border:2px solid rgba(212,168,67,.4);margin:0 auto 20px;display:block;}
-    h1{font-family:'Cinzel',serif;font-size:26px;color:#f0c85a;letter-spacing:2px;margin-bottom:8px;}
-    .sub{font-size:14px;color:#c9b88a;letter-spacing:1px;}
-    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px;width:100%;max-width:860px;}
-    .card{background:rgba(18,14,8,.95);border:1px solid rgba(212,168,67,.2);border-radius:14px;padding:28px;transition:border-color .2s;}
-    .card:hover{border-color:rgba(212,168,67,.5);}
-    .card-icon{font-size:36px;margin-bottom:14px;}
-    .card-title{font-family:'Cinzel',serif;font-size:15px;color:#f0c85a;margin-bottom:8px;}
-    .card-desc{font-size:13px;color:#c9b88a;line-height:1.6;margin-bottom:18px;}
-    .btn{display:inline-flex;align-items:center;gap:6px;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:700;text-decoration:none;cursor:pointer;border:none;font-family:'Lato',sans-serif;transition:opacity .2s;letter-spacing:.5px;}
+    .logo{width:88px;height:88px;border-radius:18px;border:2px solid rgba(212,168,67,.4);margin:0 auto 20px;display:block;object-fit:cover;box-shadow:0 8px 32px rgba(0,0,0,.6);}
+    h1{font-family:'Cinzel',serif;font-size:28px;color:#f0c85a;letter-spacing:2px;margin-bottom:8px;}
+    .hero-sub{font-size:14px;color:#c9b88a;letter-spacing:1px;}
+    .hero-desc{font-size:13px;color:rgba(201,184,138,.6);margin-top:10px;line-height:1.6;max-width:480px;}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px;width:100%;max-width:900px;}
+    .card{background:rgba(18,14,8,.95);border:1px solid rgba(212,168,67,.18);border-radius:16px;padding:28px;transition:border-color .2s,transform .2s;}
+    .card:hover{border-color:rgba(212,168,67,.45);transform:translateY(-2px);}
+    .card-icon{font-size:34px;margin-bottom:14px;}
+    .card-title{font-family:'Cinzel',serif;font-size:14px;color:#f0c85a;margin-bottom:8px;letter-spacing:.5px;}
+    .card-desc{font-size:12px;color:#c9b88a;line-height:1.7;margin-bottom:16px;}
+    .btn{display:inline-flex;align-items:center;gap:6px;padding:9px 18px;border-radius:8px;font-size:12px;font-weight:700;text-decoration:none;cursor:pointer;border:none;font-family:'Lato',sans-serif;transition:opacity .2s;letter-spacing:.5px;margin-right:6px;margin-bottom:6px;}
     .btn:hover{opacity:.85;}
     .btn-gold{background:linear-gradient(135deg,#8b6914,#d4a843);color:#1a0f00;}
     .btn-outline{background:transparent;border:1px solid rgba(212,168,67,.4);color:#d4a843;}
-    .url-box{background:#0e0b07;border:1px solid rgba(212,168,67,.15);border-radius:8px;padding:10px 14px;font-family:monospace;font-size:12px;color:#c9b88a;word-break:break-all;margin-bottom:12px;cursor:pointer;position:relative;}
+    .url-box{background:#060402;border:1px solid rgba(212,168,67,.15);border-radius:8px;padding:10px 40px 10px 12px;font-family:monospace;font-size:11px;color:#c9b88a;word-break:break-all;margin-bottom:12px;cursor:pointer;position:relative;transition:border-color .2s;line-height:1.5;}
     .url-box:hover{border-color:rgba(212,168,67,.4);}
-    .copied{position:absolute;top:50%;right:10px;transform:translateY(-50%);font-size:10px;color:#d4a843;opacity:0;transition:opacity .3s;}
-    .divider{height:1px;background:linear-gradient(90deg,transparent,rgba(212,168,67,.2),transparent);margin:40px 0;width:100%;max-width:860px;}
-    footer{text-align:center;font-size:11px;color:rgba(201,184,138,.3);letter-spacing:1px;}
+    .copy-btn{position:absolute;top:50%;right:8px;transform:translateY(-50%);background:rgba(212,168,67,.1);border:1px solid rgba(212,168,67,.2);border-radius:4px;padding:2px 7px;font-size:10px;color:#d4a843;cursor:pointer;white-space:nowrap;font-family:'Lato',sans-serif;}
+    .copy-btn:hover{background:rgba(212,168,67,.2);}
+    .copy-btn.copied{color:#00e676;border-color:rgba(0,230,118,.3);background:rgba(0,230,118,.08);}
+    .section-label{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:rgba(201,184,138,.4);margin-bottom:8px;}
+    .divider{height:1px;background:linear-gradient(90deg,transparent,rgba(212,168,67,.15),transparent);margin:40px 0;width:100%;max-width:900px;}
+    .steps{list-style:none;padding:0;}
+    .steps li{font-size:12px;color:#c9b88a;line-height:1.8;padding-left:16px;position:relative;}
+    .steps li::before{content:'→';position:absolute;left:0;color:rgba(212,168,67,.5);}
+    footer{text-align:center;font-size:11px;color:rgba(201,184,138,.25);letter-spacing:1px;margin-top:8px;}
     footer a{color:rgba(212,168,67,.3);text-decoration:none;}
+    footer a:hover{color:rgba(212,168,67,.6);}
+    @media(max-width:500px){h1{font-size:22px;}.card{padding:20px;}}
   </style>
 </head>
 <body>
+
   <div class="hero">
     <img class="logo" src="/logo.png" alt="${name}">
     <h1>${name}</h1>
-    <div class="sub">Light Encounter Tabernacle Worldwide · Online Radio</div>
+    <div class="hero-sub">Light Encounter Tabernacle Worldwide · Online Radio</div>
+    <div class="hero-desc">${desc}</div>
   </div>
 
   <div class="grid">
@@ -238,89 +278,103 @@ app.get('/tune-in', (req, res) => {
     <!-- Browser / PWA -->
     <div class="card">
       <div class="card-icon">🌐</div>
-      <div class="card-title">Browser / Mobile App</div>
-      <div class="card-desc">Listen directly in your browser or install as a home screen app on iOS and Android — no download needed.</div>
-      <a class="btn btn-gold" href="/listen">Open Player ▶</a>
+      <div class="card-title">Browser &amp; Mobile App</div>
+      <div class="card-desc">Listen directly in your browser. On iOS or Android, tap "Add to Home Screen" to install as a full-screen app — no app store needed.</div>
+      <a class="btn btn-gold" href="/listen">▶ Open Live Player</a>
     </div>
 
-    <!-- VLC / Desktop -->
+    <!-- Raw Stream -->
+    <div class="card">
+      <div class="card-icon">⚡</div>
+      <div class="card-title">Direct Stream URL</div>
+      <div class="card-desc">The raw ICY audio stream. Paste this into VLC, Winamp, Foobar2000, or any Shoutcast / Icecast compatible player.</div>
+      <div class="section-label">Stream URL</div>
+      <div class="url-box" id="box-stream">${streamUrl}<button class="copy-btn" onclick="copyText('box-stream','${streamUrl}')">Copy</button></div>
+      <a class="btn btn-outline" href="/stream" target="_blank">▶ Open Stream</a>
+    </div>
+
+    <!-- VLC -->
     <div class="card">
       <div class="card-icon">🎛️</div>
       <div class="card-title">VLC Media Player</div>
-      <div class="card-desc">Open VLC → Media → Open Network Stream, paste the stream URL below, or download the playlist file.</div>
-      <div class="url-box" onclick="copyUrl(this, '${base}/stream')">
-        ${base}/stream
-        <span class="copied">Copied ✓</span>
-      </div>
+      <div class="card-desc">Download the playlist file below, double-click it, and VLC will connect automatically. Or go to Media → Open Network Stream and paste the URL.</div>
+      <ul class="steps" style="margin-bottom:14px;">
+        <li>Download the .PLS file below</li>
+        <li>Double-click to open in VLC</li>
+        <li>VLC connects and shows track info</li>
+      </ul>
       <a class="btn btn-gold" href="/stream.pls" download>⬇ Download .PLS</a>
-      &nbsp;
-      <a class="btn btn-outline" href="/stream.m3u" download>⬇ .M3U</a>
+      <a class="btn btn-outline" href="/stream.m3u" download>⬇ Download .M3U</a>
+      <a class="btn btn-outline" href="/stream.xspf" download>⬇ Download .XSPF</a>
     </div>
 
-    <!-- External radio apps -->
+    <!-- Mobile Radio Apps -->
     <div class="card">
       <div class="card-icon">📻</div>
-      <div class="card-title">Radio Apps (RadioApp, etc.)</div>
-      <div class="card-desc">Use this stream URL directly inside any internet radio app. Look for "Add custom station" or "Open URL".</div>
-      <div class="url-box" onclick="copyUrl(this, '${base}/stream')">
-        ${base}/stream
-        <span class="copied">Copied ✓</span>
-      </div>
-      <a class="btn btn-outline" href="/stream.xspf" download>⬇ .XSPF (VLC)</a>
+      <div class="card-title">Radio Apps (Android &amp; iOS)</div>
+      <div class="card-desc">Works with RadioApp, TuneIn, Simple Radio, and any internet radio app. Look for "Add custom station" or "Open URL" and paste the stream URL.</div>
+      <div class="section-label">Paste this in the app</div>
+      <div class="url-box" id="box-radio">${streamUrl}<button class="copy-btn" onclick="copyText('box-radio','${streamUrl}')">Copy</button></div>
     </div>
 
-    <!-- Smart speakers -->
+    <!-- Smart Speakers -->
     <div class="card">
       <div class="card-icon">🔊</div>
-      <div class="card-title">Smart Speakers & Alexa</div>
-      <div class="card-desc">Ask Alexa or Google Home to play a custom station by adding the stream URL in the respective app's "My Stations" or TuneIn skill.</div>
-      <div class="url-box" onclick="copyUrl(this, '${base}/stream')">
-        ${base}/stream
-        <span class="copied">Copied ✓</span>
-      </div>
+      <div class="card-title">Smart Speakers &amp; Alexa</div>
+      <div class="card-desc">Add the stream URL to Amazon Alexa via the TuneIn skill, or to Google Home via the Google Home app under "My Stations".</div>
+      <ul class="steps" style="margin-bottom:14px;">
+        <li>Open Alexa or Google Home app</li>
+        <li>Find "Add custom station" or TuneIn</li>
+        <li>Paste the stream URL</li>
+      </ul>
+      <div class="url-box" id="box-speaker">${streamUrl}<button class="copy-btn" onclick="copyText('box-speaker','${streamUrl}')">Copy</button></div>
     </div>
 
     <!-- Embed -->
     <div class="card">
       <div class="card-icon">🖥️</div>
       <div class="card-title">Embed on Your Website</div>
-      <div class="card-desc">Add the player to any webpage with a single iframe line — no plugins needed.</div>
-      <div class="url-box" id="iframe-code" onclick="copyUrl(this, document.getElementById('iframe-code').textContent.trim())">
-        &lt;iframe src="${base}/listen" width="100%" height="620" style="border:none;border-radius:16px;" allow="autoplay"&gt;&lt;/iframe&gt;
-        <span class="copied">Copied ✓</span>
-      </div>
-    </div>
-
-    <!-- Direct stream -->
-    <div class="card">
-      <div class="card-icon">⚡</div>
-      <div class="card-title">Direct Stream URL</div>
-      <div class="card-desc">The raw ICY audio stream. Compatible with all Shoutcast / Icecast-compatible players, apps, and hardware receivers.</div>
-      <div class="url-box" onclick="copyUrl(this, '${base}/stream')">
-        ${base}/stream
-        <span class="copied">Copied ✓</span>
-      </div>
-      <a class="btn btn-outline" href="/stream">▶ Open Raw Stream</a>
+      <div class="card-desc">Add the LETW Radio player to any webpage — your church website, blog, or ministry page. Just paste this one line of code.</div>
+      <div class="section-label">Copy this HTML code</div>
+      <div class="url-box" id="box-embed" style="font-size:10px;">${iframeCode.replace(/</g,'&lt;').replace(/>/g,'&gt;')}<button class="copy-btn" onclick="copyText('box-embed','${iframeCode.replace(/'/g,"\\'")}')">Copy</button></div>
     </div>
 
   </div>
 
   <div class="divider"></div>
-  <footer>© 2026 Light Encounter Tabernacle Worldwide · <a href="https://letw.org">letw.org</a> · <a href="/listen">Listen Live</a></footer>
+
+  <footer>
+    © 2026 Light Encounter Tabernacle Worldwide &nbsp;·&nbsp;
+    <a href="https://letw.org" target="_blank">letw.org</a> &nbsp;·&nbsp;
+    <a href="/listen">Listen Live</a>
+  </footer>
 
   <script>
-    function copyUrl(el, text) {
+    function copyText(boxId, text) {
       navigator.clipboard.writeText(text).then(() => {
-        const badge = el.querySelector('.copied');
-        if (badge) { badge.style.opacity = '1'; setTimeout(() => badge.style.opacity = '0', 1800); }
-      }).catch(() => {});
+        const btn = document.querySelector('#' + boxId + ' .copy-btn');
+        if (btn) {
+          btn.textContent = 'Copied ✓';
+          btn.classList.add('copied');
+          setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+        }
+      }).catch(() => {
+        // Fallback for older browsers
+        const el = document.createElement('textarea');
+        el.value = text;
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+      });
     }
   </script>
+
 </body>
 </html>`);
 });
 
-// ── Socket.io ─────────────────────────────────────────────────────────────────
+// ── Socket.io real-time events ────────────────────────────────────────────────
 io.on('connection', (socket) => {
   socket.emit('status', audioEngine.getStatus());
   socket.on('disconnect', () => {});
@@ -330,18 +384,19 @@ audioEngine.on('trackStart', (track) => {
   io.emit('trackStart', track);
   io.emit('status', audioEngine.getStatus());
 });
-audioEngine.on('trackEnd', (track) => { io.emit('trackEnd', track); });
+audioEngine.on('trackEnd',       (track) => { io.emit('trackEnd', track); });
 audioEngine.on('listenerChange', (count) => { io.emit('listenerChange', count); });
 
-// ── Start ─────────────────────────────────────────────────────────────────────
+// ── Start server ──────────────────────────────────────────────────────────────
 db.init().then(() => {
   server.listen(PORT, () => {
-    console.log(`\n🎙️  LETW Radio running at http://localhost:${PORT}`);
+    console.log(`\n🎙️  LETW Radio is running!\n`);
     console.log(`📻  Stream URL  : http://localhost:${PORT}/stream`);
     console.log(`🎧  Player      : http://localhost:${PORT}/listen`);
     console.log(`📡  Tune In     : http://localhost:${PORT}/tune-in`);
     console.log(`📋  PLS playlist: http://localhost:${PORT}/stream.pls`);
-    console.log(`📋  M3U playlist: http://localhost:${PORT}/stream.m3u\n`);
+    console.log(`📋  M3U playlist: http://localhost:${PORT}/stream.m3u`);
+    console.log(`📊  Admin panel : http://localhost:${PORT}\n`);
   });
   startScheduler(io);
 }).catch(err => {

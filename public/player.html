@@ -80,6 +80,7 @@
     .live-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;margin-bottom:20px;transition:all .3s;}
     .live-badge.live{background:rgba(212,168,67,.12);border:1px solid rgba(212,168,67,.35);color:var(--gold2);}
     .live-badge.offline{background:rgba(125,22,48,.12);border:1px solid rgba(125,22,48,.35);color:#e05070;}
+    .live-badge.connecting{background:rgba(212,168,67,.06);border:1px solid rgba(212,168,67,.2);color:rgba(212,168,67,.5);}
     .live-dot{width:6px;height:6px;border-radius:50%;background:currentColor;animation:liveBlink 1.2s infinite;}
     @keyframes liveBlink{0%,100%{opacity:1;}50%{opacity:.2;}}
     .now-playing-label{font-size:9px;color:var(--text2);letter-spacing:3px;text-transform:uppercase;margin-bottom:8px;}
@@ -109,25 +110,7 @@
     .info-links{display:flex;justify-content:center;gap:12px;flex-wrap:wrap;}
     .info-link{font-size:11px;color:rgba(212,168,67,.6);text-decoration:none;letter-spacing:.5px;transition:color .2s;padding:4px 0;border-bottom:1px solid rgba(212,168,67,.15);}
     .info-link:hover{color:var(--gold2);border-bottom-color:var(--gold2);}
-
-    /* PWA Install Banner */
-    .install-banner{
-      display:none;
-      position:fixed;
-      bottom:20px;
-      left:50%;
-      transform:translateX(-50%);
-      background:linear-gradient(135deg,rgba(18,14,8,.98),rgba(25,18,8,.98));
-      border:1px solid rgba(212,168,67,.4);
-      border-radius:14px;
-      padding:14px 18px;
-      width:calc(100% - 40px);
-      max-width:440px;
-      z-index:100;
-      box-shadow:0 8px 32px rgba(0,0,0,.7);
-      align-items:center;
-      gap:12px;
-    }
+    .install-banner{display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:linear-gradient(135deg,rgba(18,14,8,.98),rgba(25,18,8,.98));border:1px solid rgba(212,168,67,.4);border-radius:14px;padding:14px 18px;width:calc(100% - 40px);max-width:440px;z-index:100;box-shadow:0 8px 32px rgba(0,0,0,.7);align-items:center;gap:12px;}
     .install-banner.show{display:flex;}
     .install-banner img{width:40px;height:40px;border-radius:8px;border:1px solid rgba(212,168,67,.3);}
     .install-text{flex:1;}
@@ -135,7 +118,6 @@
     .install-sub{font-size:10px;color:var(--text2);}
     .install-btn{padding:8px 16px;background:linear-gradient(135deg,var(--gold3),var(--gold));color:#1a0f00;border:none;border-radius:8px;font-weight:700;font-size:12px;cursor:pointer;white-space:nowrap;font-family:'Lato',sans-serif;}
     .install-dismiss{background:none;border:none;color:var(--text2);cursor:pointer;font-size:18px;padding:0 4px;line-height:1;}
-
     .footer{margin-top:20px;text-align:center;font-size:10px;color:rgba(201,184,138,.3);letter-spacing:1px;}
     .footer a{color:rgba(212,168,67,.3);text-decoration:none;}
     .fade-in{animation:fadeIn .5s ease;}
@@ -194,7 +176,6 @@
         <a class="info-link" href="https://letw.org/giving" target="_blank">🙏 Give</a>
         <a class="info-link" href="https://letw.org/join" target="_blank">✉ Join Us</a>
       </div>
-      <!-- Tune-in / external player options -->
       <div style="margin-top:16px;padding-top:14px;border-top:1px solid rgba(212,168,67,.1);">
         <div style="font-size:9px;letter-spacing:2px;text-transform:uppercase;color:rgba(201,184,138,.4);margin-bottom:10px;">Listen on other devices</div>
         <div style="display:flex;justify-content:center;gap:10px;flex-wrap:wrap;">
@@ -219,92 +200,124 @@
   <button class="install-dismiss" onclick="dismissInstall()">✕</button>
 </div>
 
-<audio id="audio" preload="none"></audio>
+<audio id="audio" preload="none" x-webkit-airplay="allow"></audio>
 
 <script>
   // ===== SERVICE WORKER =====
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').then(reg => {
-      console.log('SW registered:', reg.scope);
-    }).catch(err => console.warn('SW failed:', err));
+    navigator.serviceWorker.register('/sw.js').catch(err => console.warn('SW failed:', err));
   }
 
   // ===== PWA INSTALL PROMPT =====
   let deferredPrompt = null;
-
   window.addEventListener('beforeinstallprompt', e => {
     e.preventDefault();
     deferredPrompt = e;
-    // Show install banner after 3 seconds
-    setTimeout(() => {
-      document.getElementById('install-banner').classList.add('show');
-    }, 3000);
+    if (!localStorage.getItem('install-dismissed')) {
+      setTimeout(() => document.getElementById('install-banner').classList.add('show'), 3000);
+    }
   });
-
   document.getElementById('install-btn').addEventListener('click', async () => {
     if (!deferredPrompt) return;
     deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
+    await deferredPrompt.userChoice;
     deferredPrompt = null;
     dismissInstall();
   });
-
   function dismissInstall() {
     document.getElementById('install-banner').classList.remove('show');
     localStorage.setItem('install-dismissed', '1');
   }
-
-  // Don't show if already dismissed
-  if (localStorage.getItem('install-dismissed')) {
-    window.removeEventListener('beforeinstallprompt', () => {});
-  }
-
-  window.addEventListener('appinstalled', () => {
-    dismissInstall();
-    console.log('LETW Radio installed as PWA');
-  });
+  window.addEventListener('appinstalled', dismissInstall);
 
   // ===== MEDIA SESSION API (lock screen controls) =====
   function updateMediaSession(title, artist) {
-    if ('mediaSession' in navigator) {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: title || 'LETW Radio',
-        artist: artist || 'Light Encounter Tabernacle Worldwide',
-        album: 'Live Broadcast',
-        artwork: [
-          { src: '/logo.png', sizes: '192x192', type: 'image/png' },
-          { src: '/logo.png', sizes: '512x512', type: 'image/png' }
-        ]
-      });
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: title || 'LETW Radio',
+      artist: artist || 'Light Encounter Tabernacle Worldwide',
+      album: 'Live Broadcast',
+      artwork: [
+        { src: '/logo.png', sizes: '192x192', type: 'image/png' },
+        { src: '/logo.png', sizes: '512x512', type: 'image/png' }
+      ]
+    });
+    navigator.mediaSession.setActionHandler('play',  () => startAudio());
+    navigator.mediaSession.setActionHandler('pause', () => stopAudio());
+    navigator.mediaSession.setActionHandler('stop',  () => stopAudio());
+    navigator.mediaSession.setActionHandler('nexttrack', null);
+    navigator.mediaSession.setActionHandler('previoustrack', null);
+  }
 
-      navigator.mediaSession.setActionHandler('play', () => startAudio());
-      navigator.mediaSession.setActionHandler('pause', () => stopAudio());
-      navigator.mediaSession.setActionHandler('stop', () => stopAudio());
-      navigator.mediaSession.setActionHandler('nexttrack', null);
-      navigator.mediaSession.setActionHandler('previoustrack', null);
-    }
+  // ===== WAKE LOCK — prevents screen/tab from sleeping and killing audio =====
+  let wakeLock = null;
+  async function requestWakeLock() {
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { if (isPlaying) requestWakeLock(); });
+      }
+    } catch (e) { /* wakeLock not supported — audio still works */ }
+  }
+  async function releaseWakeLock() {
+    if (wakeLock) { try { await wakeLock.release(); } catch(e){} wakeLock = null; }
   }
 
   // ===== SOCKET & AUDIO =====
   const socket = io();
-  const audio = document.getElementById('audio');
-  let isPlaying = false;
+  const audio  = document.getElementById('audio');
+  const volInput = document.getElementById('volume');
+  let isPlaying  = false;
+  let retryTimer = null;
+  let stallTimer = null;
+  let lastAudioTime = 0;
 
-  document.getElementById('volume').addEventListener('input', e => {
+  // Restore saved volume
+  const savedVol = parseFloat(localStorage.getItem('letw_vol') || '0.85');
+  audio.volume   = savedVol;
+  volInput.value = savedVol;
+  volInput.addEventListener('input', e => {
     audio.volume = parseFloat(e.target.value);
+    localStorage.setItem('letw_vol', e.target.value);
   });
-  audio.volume = 0.85;
 
+  // ===== INITIAL STATUS =====
   fetch('/api/status').then(r => r.json()).then(s => {
     setLive(s.isPlaying);
     if (s.currentTrack) updateTrack(s.currentTrack);
     setMeta(s.listeners || 0);
   }).catch(() => {});
 
-  socket.on('trackStart', t => { setLive(true); updateTrack(t); if (isPlaying) reconnect(); });
+  // ===== SOCKET EVENTS =====
+  socket.on('trackStart', t => {
+    setLive(true);
+    updateTrack(t);
+    if (isPlaying) reconnect(); // new track started — reconnect to get fresh stream
+  });
   socket.on('status', s => { setLive(s.isPlaying); setMeta(s.listeners || 0); });
   socket.on('listenerChange', c => setMeta(c));
 
+  // ===== VISIBILITY CHANGE — resume audio when tab comes back into focus =====
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      fetch('/api/status').then(r => r.json()).then(s => {
+        setLive(s.isPlaying);
+        setMeta(s.listeners || 0);
+        if (s.currentTrack) updateTrack(s.currentTrack);
+      }).catch(() => {});
+      // If audio should be playing but stopped due to backgrounding, restart it
+      if (isPlaying && audio.paused) {
+        reconnect();
+      }
+    }
+  });
+
+  // ===== NETWORK STATUS =====
+  window.addEventListener('online', () => {
+    if (isPlaying) reconnect();
+  });
+
+  // ===== UI HELPERS =====
   function setLive(live) {
     const b = document.getElementById('live-badge');
     b.className = 'live-badge ' + (live ? 'live' : 'offline');
@@ -312,7 +325,7 @@
     document.getElementById('meta-signal').textContent = live ? '●●●●' : '—';
     document.getElementById('meta-signal').style.color = live ? 'var(--gold)' : 'var(--text2)';
     if (!live) {
-      document.getElementById('track-title').textContent = 'No broadcast active';
+      document.getElementById('track-title').textContent  = 'No broadcast active';
       document.getElementById('track-artist').textContent = 'Light Encounter Tabernacle Worldwide';
     }
   }
@@ -334,34 +347,105 @@
     updateMediaSession(t.title, t.artist);
   }
 
+  function setPlayingUI(playing) {
+    document.getElementById('play-btn').textContent = playing ? '⏸' : '▶';
+    document.getElementById('visualizer').classList.toggle('paused', !playing);
+    document.getElementById('rings').classList.toggle('playing', playing);
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+    }
+  }
+
+  // ===== AUDIO CONTROLS =====
   function togglePlay() { isPlaying ? stopAudio() : startAudio(); }
 
   function startAudio() {
+    clearTimeout(retryTimer);
+    document.getElementById('live-badge').className = 'live-badge connecting';
+    document.getElementById('badge-text').textContent = 'CONNECTING';
+    // Cache-bust forces a fresh stream connection every time
     audio.src = window.location.origin + '/stream?t=' + Date.now();
     audio.load();
     audio.play().then(() => {
       isPlaying = true;
-      document.getElementById('play-btn').textContent = '⏸';
-      document.getElementById('visualizer').classList.remove('paused');
-      document.getElementById('rings').classList.add('playing');
-      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
-    }).catch(() => {
+      setPlayingUI(true);
+      setLive(true);
+      requestWakeLock();
+      startStallDetection();
+    }).catch(err => {
+      isPlaying = false;
+      setPlayingUI(false);
       document.getElementById('track-title').textContent = 'Tap ▶ to listen live';
+      if (err.name !== 'AbortError') {
+        // Auto-retry once after 3 seconds on non-user-abort errors
+        retryTimer = setTimeout(startAudio, 3000);
+      }
     });
   }
 
   function stopAudio() {
+    clearTimeout(retryTimer);
+    clearTimeout(stallTimer);
     audio.pause();
     audio.src = '';
     isPlaying = false;
-    document.getElementById('play-btn').textContent = '▶';
-    document.getElementById('visualizer').classList.add('paused');
-    document.getElementById('rings').classList.remove('playing');
-    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+    setPlayingUI(false);
+    releaseWakeLock();
   }
 
-  function reconnect() { stopAudio(); setTimeout(startAudio, 1200); }
-  audio.addEventListener('error', () => { if (isPlaying) setTimeout(startAudio, 3000); });
+  function reconnect() {
+    clearTimeout(retryTimer);
+    clearTimeout(stallTimer);
+    audio.pause();
+    audio.src = '';
+    retryTimer = setTimeout(startAudio, 1500);
+  }
+
+  // ===== STALL DETECTION — catches frozen streams =====
+  // If audio.currentTime doesn't move for 8 seconds while playing, reconnect
+  function startStallDetection() {
+    clearTimeout(stallTimer);
+    lastAudioTime = audio.currentTime;
+    stallTimer = setTimeout(checkStall, 8000);
+  }
+
+  function checkStall() {
+    if (!isPlaying) return;
+    if (audio.currentTime === lastAudioTime && !audio.paused) {
+      console.warn('[LETW Radio] Stream stalled — reconnecting');
+      reconnect();
+    } else {
+      lastAudioTime = audio.currentTime;
+      stallTimer = setTimeout(checkStall, 8000);
+    }
+  }
+
+  // ===== AUDIO EVENT LISTENERS =====
+  audio.addEventListener('playing', () => {
+    setPlayingUI(true);
+    setLive(true);
+    startStallDetection();
+  });
+
+  audio.addEventListener('waiting', () => {
+    // Stream is buffering — show connecting state but don't stop
+    if (isPlaying) {
+      document.getElementById('live-badge').className = 'live-badge connecting';
+      document.getElementById('badge-text').textContent = 'BUFFERING';
+    }
+  });
+
+  audio.addEventListener('error', () => {
+    if (!isPlaying) return;
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(startAudio, 3000);
+  });
+
+  audio.addEventListener('ended', () => {
+    if (!isPlaying) return;
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(startAudio, 2000);
+  });
 </script>
 </body>
 </html>
