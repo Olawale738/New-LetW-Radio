@@ -770,7 +770,14 @@ io.on('connection', (socket) => {
   // so unauthenticated sockets can still receive status updates.
   function isAdminSocket() {
     const token = socket.handshake.auth?.token || socket.handshake.headers['x-admin-token'];
-    return token === SESSION_TOKEN;
+    if (token === SESSION_TOKEN) return true;
+    // Fallback: check cookie header (admin page sends Cookie automatically on WS upgrade)
+    const cookieHeader = socket.handshake.headers.cookie || '';
+    const match = cookieHeader.match(/admin_token=([^;]+)/);
+    if (match) {
+      try { return decodeURIComponent(match[1]) === SESSION_TOKEN; } catch {}
+    }
+    return false;
   }
 
   // Admin signals "going live"

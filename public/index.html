@@ -1774,7 +1774,7 @@ let state = {
 const COLORS = ['#00e5ff','#ff6d3b','#00e676','#d500f9','#ffea00','#ff1744','#7c4dff','#76ff03'];
 
 // =================== SOCKET ===================
-const socket = io();
+const socket = io({ auth: { token: getAdminToken() } });
 
 socket.on('status', (s) => {
   state.status = s;
