@@ -6,187 +6,417 @@
   <title>LETW Radio — Light Encounter Tabernacle Worldwide</title>
   <meta name="description" content="Listen live to Light Encounter Tabernacle Worldwide Radio — worship, sermons and messages.">
 
-  <!-- PWA Meta Tags -->
+  <!-- PWA -->
   <meta name="application-name" content="LETW Radio">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="LETW Radio">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#d4a843">
-  <meta name="msapplication-TileColor" content="#0a0806">
-  <meta name="msapplication-TileImage" content="/logo.png">
 
   <!-- Open Graph -->
-  <meta property="og:title" content="LETW Radio">
+  <meta property="og:title" content="LETW Radio — Live Broadcast">
   <meta property="og:description" content="Live worship, sermons and messages from Light Encounter Tabernacle Worldwide">
   <meta property="og:image" content="/logo.png">
   <meta property="og:url" content="https://radio.letw.org/listen">
   <meta property="og:type" content="website">
 
-  <!-- Twitter Card -->
-  <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="LETW Radio">
-  <meta name="twitter:description" content="Live from Light Encounter Tabernacle Worldwide">
-  <meta name="twitter:image" content="/logo.png">
-
-  <!-- Icons -->
   <link rel="icon" href="/logo.png" type="image/png">
   <link rel="apple-touch-icon" href="/logo.png">
-  <link rel="apple-touch-startup-image" href="/logo.png">
-
-  <!-- PWA Manifest -->
   <link rel="manifest" href="/manifest.json">
 
-  <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Lato:wght@300;400;700&display=swap" rel="stylesheet">
-
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Lato:wght@300;400;700&family=Space+Mono&display=swap" rel="stylesheet">
   <script src="/socket.io/socket.io.js"></script>
 
   <style>
     :root {
-      --gold:#4a7fd4;--gold2:#ffffff;--gold3:#1a3a8f;
-      --blue:#1a3a8f;--maroon:#0d2060;
-      --dark:#06080f;--dark2:#090d1c;
-      --text:#ffffff;--text2:#b8c8e8;
+      --gold:#d4a843; --gold2:#f0c85a; --gold3:#8b6914;
+      --dark:#070508; --dark2:#0e0a0f; --dark3:#150f18;
+      --text:#f5f0ff; --text2:#c0a8d8; --text3:#7a5a9a;
+      --live:#e05070; --live2:#ff6b8a;
+      --radius:16px;
     }
     *{box-sizing:border-box;margin:0;padding:0;}
     html,body{height:100%;font-family:'Lato',sans-serif;background:var(--dark);color:var(--text);overflow:hidden;}
-    .bg{position:fixed;inset:0;background:radial-gradient(ellipse 80% 60% at 50% 0%,rgba(74,127,212,0.15) 0%,transparent 60%),radial-gradient(ellipse 60% 80% at 20% 100%,rgba(26,58,143,0.12) 0%,transparent 50%),radial-gradient(ellipse 60% 80% at 80% 100%,rgba(13,32,96,0.10) 0%,transparent 50%),linear-gradient(180deg,#06080f 0%,#090d1c 100%);pointer-events:none;z-index:0;}
-    .rays{position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden;}
-    .ray{position:absolute;bottom:0;width:2px;height:70%;background:linear-gradient(to top,transparent,rgba(212,168,67,0.04),transparent);transform-origin:bottom center;animation:rayPulse 6s ease-in-out infinite;}
-    .ray:nth-child(1){left:20%;transform:rotate(-15deg);animation-delay:0s;}
-    .ray:nth-child(2){left:35%;transform:rotate(-5deg);animation-delay:1s;}
-    .ray:nth-child(3){left:50%;transform:rotate(0deg);animation-delay:2s;}
-    .ray:nth-child(4){left:65%;transform:rotate(5deg);animation-delay:.5s;}
-    .ray:nth-child(5){left:80%;transform:rotate(15deg);animation-delay:1.5s;}
+
+    /* ── CINEMATIC BACKGROUND ── */
+    .bg-canvas{position:fixed;inset:0;z-index:0;pointer-events:none;}
+    .bg-glow{
+      position:fixed;inset:0;z-index:0;pointer-events:none;
+      background:
+        radial-gradient(ellipse 70% 50% at 50% -5%, rgba(212,168,67,0.12) 0%,transparent 65%),
+        radial-gradient(ellipse 45% 60% at 10% 110%, rgba(139,105,20,0.10) 0%,transparent 55%),
+        radial-gradient(ellipse 45% 60% at 90% 110%, rgba(139,105,20,0.08) 0%,transparent 55%),
+        linear-gradient(180deg,#070508 0%,#0e0a0f 60%,#130d10 100%);
+    }
+    /* Animated floating particles */
+    .particles{position:fixed;inset:0;z-index:1;pointer-events:none;overflow:hidden;}
+    .p{position:absolute;border-radius:50%;animation:floatUp linear infinite;}
+    @keyframes floatUp{0%{transform:translateY(0) scale(1);opacity:0;}15%{opacity:1;}85%{opacity:.4;}100%{transform:translateY(-110vh) scale(.3);opacity:0;}}
+
+    /* Gold rays from bottom */
+    .rays{position:fixed;bottom:-10%;left:50%;transform:translateX(-50%);z-index:1;pointer-events:none;width:900px;height:500px;}
+    .ray{position:absolute;bottom:0;width:1px;background:linear-gradient(to top,transparent,rgba(212,168,67,0.06),rgba(212,168,67,0.02),transparent);transform-origin:bottom center;animation:rayPulse 8s ease-in-out infinite;}
     @keyframes rayPulse{0%,100%{opacity:0;}50%{opacity:1;}}
-    .rings{position:fixed;top:42%;left:50%;transform:translate(-50%,-50%);pointer-events:none;z-index:0;}
-    .ring{position:absolute;border-radius:50%;border:1px solid rgba(212,168,67,0.08);top:50%;left:50%;transform:translate(-50%,-50%);animation:ringPulse 4s ease-in-out infinite;}
-    .ring:nth-child(1){width:340px;height:340px;animation-delay:0s;}
-    .ring:nth-child(2){width:480px;height:480px;animation-delay:.7s;}
-    .ring:nth-child(3){width:620px;height:620px;animation-delay:1.4s;}
-    .ring:nth-child(4){width:760px;height:760px;animation-delay:2.1s;}
-    @keyframes ringPulse{0%,100%{opacity:.2;transform:translate(-50%,-50%) scale(1);}50%{opacity:.6;transform:translate(-50%,-50%) scale(1.02);}}
-    .rings.playing .ring{animation-duration:2s;border-color:rgba(212,168,67,0.15);}
-    .page{position:relative;z-index:10;height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;overflow-y:auto;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);}
-    .player-card{width:100%;max-width:480px;background:linear-gradient(160deg,rgba(9,13,28,.97) 0%,rgba(6,8,15,.99) 100%);border:1px solid rgba(74,127,212,.3);border-radius:20px;padding:36px 36px 28px;box-shadow:0 0 0 1px rgba(74,127,212,.08),0 30px 80px rgba(0,0,0,.8),inset 0 1px 0 rgba(255,255,255,.06);backdrop-filter:blur(20px);}
-    .player-card::before{content:'';display:block;height:3px;background:linear-gradient(90deg,transparent,var(--blue),#4a7fd4,var(--blue),transparent);border-radius:3px 3px 0 0;margin:-36px -36px 32px;}
-    .header{display:flex;align-items:center;gap:16px;margin-bottom:24px;}
-    .logo-wrap{width:72px;height:72px;border-radius:12px;overflow:hidden;flex-shrink:0;border:2px solid rgba(74,127,212,.5);box-shadow:0 4px 16px rgba(0,0,0,.5);background:#fff;display:flex;align-items:center;justify-content:center;padding:3px;}
-    .logo-wrap img{width:100%;height:100%;object-fit:cover;object-position:center;}
-    .church-name{font-family:'Cinzel',serif;font-size:13px;font-weight:700;color:#ffffff;letter-spacing:1.5px;text-transform:uppercase;line-height:1.3;}
-    .church-sub{font-size:10px;color:var(--text2);letter-spacing:2px;text-transform:uppercase;margin-top:3px;}
-    .live-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;margin-bottom:20px;transition:all .3s;}
-    .live-badge.live{background:rgba(74,127,212,.12);border:1px solid rgba(74,127,212,.4);color:#a0c8ff;}
-    .live-badge.offline{background:rgba(224,80,112,.12);border:1px solid rgba(224,80,112,.35);color:#e05070;}
-    .live-badge.connecting{background:rgba(74,127,212,.06);border:1px solid rgba(74,127,212,.2);color:rgba(160,200,255,.5);}
-    .live-dot{width:6px;height:6px;border-radius:50%;background:currentColor;animation:liveBlink 1.2s infinite;}
-    @keyframes liveBlink{0%,100%{opacity:1;}50%{opacity:.2;}}
-    .now-playing-label{font-size:9px;color:var(--text2);letter-spacing:3px;text-transform:uppercase;margin-bottom:8px;}
-    .track-title{font-family:'Cinzel',serif;font-size:20px;font-weight:700;color:#ffffff;line-height:1.2;margin-bottom:5px;transition:all .3s;}
-    .track-artist{font-size:13px;color:#a0c8ff;font-weight:300;letter-spacing:.5px;margin-bottom:24px;transition:all .3s;}
-    .visualizer{display:flex;align-items:flex-end;gap:3px;height:28px;margin-bottom:24px;}
-    .vis-bar{flex:1;border-radius:2px 2px 0 0;min-height:3px;animation:visAnim .7s ease-in-out infinite;background:linear-gradient(to top,var(--blue),#4a7fd4,#a0c8ff);}
-    .vis-bar:nth-child(odd){animation-delay:0s;}.vis-bar:nth-child(even){animation-delay:.15s;}.vis-bar:nth-child(3n){animation-delay:.3s;}.vis-bar:nth-child(4n){animation-delay:.1s;}.vis-bar:nth-child(5n){animation-delay:.25s;}
-    @keyframes visAnim{0%,100%{height:3px;}50%{height:24px;}}
-    .visualizer.paused .vis-bar{animation-play-state:paused;height:3px;opacity:.3;}
-    .controls{display:flex;align-items:center;justify-content:center;gap:20px;margin-bottom:24px;}
-    .play-btn{width:68px;height:68px;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:24px;background:linear-gradient(135deg,var(--blue),#2a55c0,#4a7fd4);color:#ffffff;box-shadow:0 0 28px rgba(74,127,212,.4),0 4px 12px rgba(0,0,0,.5);transition:all .2s;position:relative;}
-    .play-btn::after{content:'';position:absolute;inset:-3px;border-radius:50%;border:1px solid rgba(74,127,212,.4);}
-    .play-btn:hover{transform:scale(1.07);box-shadow:0 0 40px rgba(74,127,212,.6);}
-    .play-btn:active{transform:scale(.95);}
-    .vol-group{flex:1;display:flex;align-items:center;gap:8px;}
-    .vol-icon{font-size:13px;color:var(--text2);}
-    input[type="range"].vol{flex:1;-webkit-appearance:none;height:3px;background:rgba(74,127,212,.2);border-radius:3px;outline:none;cursor:pointer;}
-    input[type="range"].vol::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:#4a7fd4;cursor:pointer;}
-    .divider{height:1px;background:linear-gradient(90deg,transparent,rgba(74,127,212,.25),transparent);margin:20px 0;}
-    .meta-row{display:flex;justify-content:space-between;margin-bottom:20px;}
+
+    /* Pulse rings (behind card) */
+    .rings-container{position:fixed;top:48%;left:50%;transform:translate(-50%,-50%);z-index:1;pointer-events:none;}
+    .ring{position:absolute;border-radius:50%;border:1px solid rgba(212,168,67,0.06);top:50%;left:50%;transform:translate(-50%,-50%);animation:ringExpand 5s ease-in-out infinite;}
+    @keyframes ringExpand{0%,100%{opacity:0.4;transform:translate(-50%,-50%) scale(1);}50%{opacity:0.8;transform:translate(-50%,-50%) scale(1.03);}}
+    .ring.r1{width:420px;height:420px;animation-delay:0s;}
+    .ring.r2{width:600px;height:600px;animation-delay:1s;}
+    .ring.r3{width:800px;height:800px;animation-delay:2s;}
+    .ring.r4{width:1020px;height:1020px;animation-delay:3s;}
+    .rings-container.playing .ring{animation-duration:2.5s;border-color:rgba(212,168,67,0.12);}
+    .rings-container.live-mode .ring{border-color:rgba(224,80,112,0.15);animation-duration:2s;}
+
+    /* ── PAGE LAYOUT ── */
+    .page{
+      position:relative;z-index:10;
+      height:100vh;display:flex;flex-direction:column;
+      align-items:center;justify-content:center;
+      padding:16px 16px env(safe-area-inset-bottom) 16px;
+      padding-top:calc(16px + env(safe-area-inset-top));
+      overflow-y:auto;
+    }
+
+    /* ── PLAYER CARD ── */
+    .player-card{
+      width:100%;max-width:500px;
+      background:linear-gradient(160deg,rgba(21,15,24,0.97) 0%,rgba(10,8,12,0.99) 100%);
+      border:1px solid rgba(212,168,67,0.22);
+      border-radius:24px;
+      padding:0;
+      box-shadow:
+        0 0 0 1px rgba(212,168,67,0.06),
+        0 40px 100px rgba(0,0,0,0.9),
+        inset 0 1px 0 rgba(255,255,255,0.05);
+      backdrop-filter:blur(24px);
+      overflow:hidden;
+    }
+
+    /* Gold top bar */
+    .card-topbar{
+      height:4px;
+      background:linear-gradient(90deg,transparent,var(--gold3),var(--gold),var(--gold2),var(--gold),var(--gold3),transparent);
+      animation:barShimmer 3s linear infinite;
+      background-size:200% 100%;
+    }
+    @keyframes barShimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+    .card-topbar.live-bar{background:linear-gradient(90deg,transparent,#8b1a35,var(--live),var(--live2),var(--live),#8b1a35,transparent);}
+
+    .card-body{padding:32px 32px 24px;}
+
+    /* ── HEADER ── */
+    .header{display:flex;align-items:center;gap:16px;margin-bottom:20px;}
+    .logo-wrap{
+      position:relative;width:80px;height:80px;border-radius:16px;overflow:hidden;flex-shrink:0;
+      border:2px solid rgba(212,168,67,0.4);
+      box-shadow:0 4px 24px rgba(0,0,0,0.6),0 0 32px rgba(212,168,67,0.1);
+      background:#fff;padding:4px;
+    }
+    .logo-wrap img{width:100%;height:100%;object-fit:cover;border-radius:12px;}
+    .logo-pulse{
+      position:absolute;inset:-4px;border-radius:20px;
+      border:2px solid rgba(212,168,67,0.3);
+      animation:logoPulse 2.5s ease-in-out infinite;
+      pointer-events:none;opacity:0;
+    }
+    @keyframes logoPulse{0%,100%{opacity:0;transform:scale(1);}50%{opacity:1;transform:scale(1.04);}}
+    .logo-wrap.playing .logo-pulse{opacity:1;}
+    .header-text{}
+    .church-name{font-family:'Cinzel',serif;font-size:14px;font-weight:700;color:#fff;letter-spacing:1.5px;line-height:1.3;}
+    .church-sub{font-size:10px;color:var(--text2);letter-spacing:2.5px;text-transform:uppercase;margin-top:4px;}
+
+    /* ── LIVE / STATUS BADGE ── */
+    .badge-row{display:flex;align-items:center;gap:10px;margin-bottom:18px;}
+    .status-badge{
+      display:inline-flex;align-items:center;gap:7px;
+      padding:5px 14px;border-radius:20px;
+      font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;
+      font-family:'Space Mono',monospace;
+      transition:all .3s;
+    }
+    .status-badge.live{background:rgba(212,168,67,0.12);border:1px solid rgba(212,168,67,0.4);color:var(--gold2);}
+    .status-badge.offline{background:rgba(224,80,112,0.10);border:1px solid rgba(224,80,112,0.3);color:#e05070;}
+    .status-badge.connecting{background:rgba(212,168,67,0.06);border:1px solid rgba(212,168,67,0.15);color:rgba(240,200,90,0.5);}
+    .status-badge.live-on-air{background:rgba(224,80,112,0.18);border:1px solid rgba(224,80,112,0.55);color:#ff6b8a;box-shadow:0 0 16px rgba(224,80,112,0.2);}
+    .badge-dot{width:7px;height:7px;border-radius:50%;background:currentColor;animation:blink 1.2s infinite;}
+    @keyframes blink{0%,100%{opacity:1;}50%{opacity:.15;}}
+    .listener-pill{font-size:10px;color:var(--text3);letter-spacing:1px;display:flex;align-items:center;gap:5px;}
+    .listener-pill span{font-weight:700;color:var(--text2);}
+
+    /* ── NOW PLAYING ── */
+    .now-label{font-size:9px;color:var(--text3);letter-spacing:3px;text-transform:uppercase;margin-bottom:10px;font-family:'Space Mono',monospace;}
+    .track-title{
+      font-family:'Cinzel',serif;font-size:22px;font-weight:700;color:#fff;
+      line-height:1.25;margin-bottom:6px;
+      transition:all .4s;
+    }
+    .track-artist{font-size:13px;color:var(--gold);font-weight:300;letter-spacing:.8px;margin-bottom:22px;transition:all .4s;}
+
+    /* ── REAL AUDIO VISUALIZER ── */
+    .visualizer-wrap{position:relative;margin-bottom:22px;}
+    #vis-canvas{
+      width:100%;height:52px;border-radius:8px;
+      background:rgba(212,168,67,0.03);
+      display:block;
+    }
+    .vis-idle{
+      display:flex;align-items:flex-end;gap:3px;height:52px;
+      padding:8px 0;justify-content:center;
+    }
+    .vis-idle .bar{
+      width:4px;background:rgba(212,168,67,0.18);border-radius:2px 2px 0 0;
+      animation:idleBar .9s ease-in-out infinite;
+    }
+    @keyframes idleBar{0%,100%{height:4px;}50%{height:18px;}}
+
+    /* ── CONTROLS ── */
+    .controls{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:22px;}
+    .vol-group{flex:1;display:flex;align-items:center;gap:8px;min-width:0;}
+    .vol-icon{font-size:14px;color:var(--text3);flex-shrink:0;}
+    input[type=range].vol{
+      flex:1;-webkit-appearance:none;height:3px;
+      background:rgba(212,168,67,0.2);border-radius:3px;outline:none;cursor:pointer;
+    }
+    input[type=range].vol::-webkit-slider-thumb{
+      -webkit-appearance:none;width:14px;height:14px;border-radius:50%;
+      background:var(--gold);cursor:pointer;box-shadow:0 0 6px rgba(212,168,67,0.5);
+    }
+    .play-btn{
+      width:72px;height:72px;border-radius:50%;border:none;cursor:pointer;
+      display:flex;align-items:center;justify-content:center;font-size:26px;
+      background:linear-gradient(135deg,var(--gold3),var(--gold),var(--gold2));
+      color:#1a0f00;font-weight:700;
+      box-shadow:0 0 36px rgba(212,168,67,0.35),0 6px 18px rgba(0,0,0,0.6);
+      transition:all .2s;position:relative;flex-shrink:0;
+    }
+    .play-btn::after{content:'';position:absolute;inset:-4px;border-radius:50%;border:1px solid rgba(212,168,67,0.35);}
+    .play-btn:hover{transform:scale(1.08);box-shadow:0 0 52px rgba(212,168,67,0.5);}
+    .play-btn:active{transform:scale(.94);}
+    .play-btn.live-btn{background:linear-gradient(135deg,#8b1a35,var(--live),var(--live2));color:#fff;box-shadow:0 0 36px rgba(224,80,112,0.35);}
+    .action-group{flex:1;display:flex;justify-content:flex-end;align-items:center;gap:8px;}
+    .icon-btn{
+      width:34px;height:34px;border-radius:50%;border:1px solid rgba(212,168,67,0.2);
+      background:rgba(212,168,67,0.04);color:var(--text2);cursor:pointer;
+      font-size:14px;display:flex;align-items:center;justify-content:center;
+      transition:all .2s;
+    }
+    .icon-btn:hover{background:rgba(212,168,67,0.12);border-color:rgba(212,168,67,0.4);color:#fff;}
+
+    /* ── DIVIDER ── */
+    .divider{height:1px;background:linear-gradient(90deg,transparent,rgba(212,168,67,0.15),transparent);margin:0 0 18px;}
+
+    /* ── META ROW ── */
+    .meta-row{display:flex;justify-content:space-around;margin-bottom:18px;}
     .meta-item{text-align:center;}
-    .meta-label{font-size:8px;letter-spacing:2px;text-transform:uppercase;color:var(--text2);margin-bottom:3px;}
-    .meta-value{font-size:14px;font-weight:700;font-family:'Cinzel',serif;color:#a0c8ff;}
-    .church-info{text-align:center;padding-top:16px;}
-    .info-tagline{font-size:12px;color:var(--text2);line-height:1.6;font-style:italic;margin-bottom:14px;}
-    .info-links{display:flex;justify-content:center;gap:12px;flex-wrap:wrap;}
-    .info-link{font-size:11px;color:rgba(160,200,255,.7);text-decoration:none;letter-spacing:.5px;transition:color .2s;padding:4px 0;border-bottom:1px solid rgba(74,127,212,.2);}
-    .info-link:hover{color:#ffffff;border-bottom-color:#4a7fd4;}
-    .install-banner{display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:linear-gradient(135deg,rgba(9,13,28,.98),rgba(14,20,40,.98));border:1px solid rgba(74,127,212,.4);border-radius:14px;padding:14px 18px;width:calc(100% - 40px);max-width:440px;z-index:100;box-shadow:0 8px 32px rgba(0,0,0,.7);align-items:center;gap:12px;}
+    .meta-label{font-size:8px;letter-spacing:2.5px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;font-family:'Space Mono',monospace;}
+    .meta-value{font-size:14px;font-weight:700;font-family:'Cinzel',serif;color:var(--gold);}
+
+    /* ── CHURCH INFO ── */
+    .church-info{text-align:center;}
+    .tagline{font-size:12px;color:var(--text2);line-height:1.7;font-style:italic;margin-bottom:16px;padding:0 8px;}
+    .links-row{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin-bottom:14px;}
+    .info-link{
+      font-size:11px;color:rgba(212,168,67,0.75);text-decoration:none;
+      letter-spacing:.5px;padding:5px 10px;
+      border:1px solid rgba(212,168,67,0.15);border-radius:6px;
+      transition:all .2s;
+    }
+    .info-link:hover{color:#fff;border-color:rgba(212,168,67,0.5);background:rgba(212,168,67,0.06);}
+
+    /* ── TUNE-IN STRIP ── */
+    .tune-strip{
+      margin-top:4px;padding-top:12px;
+      border-top:1px solid rgba(212,168,67,0.1);
+      display:flex;justify-content:center;gap:8px;flex-wrap:wrap;
+    }
+    .tune-link{
+      font-size:10px;color:rgba(212,168,67,0.5);text-decoration:none;
+      letter-spacing:.5px;transition:color .2s;padding:2px 6px;
+    }
+    .tune-link:hover{color:var(--gold);}
+
+    /* ── INSTALL BANNER ── */
+    .install-banner{
+      display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+      background:linear-gradient(135deg,rgba(21,15,24,0.98),rgba(14,10,18,0.98));
+      border:1px solid rgba(212,168,67,0.35);border-radius:18px;
+      padding:14px 18px;width:calc(100% - 32px);max-width:460px;
+      z-index:100;box-shadow:0 8px 40px rgba(0,0,0,0.8);
+      align-items:center;gap:12px;
+    }
     .install-banner.show{display:flex;}
-    .install-banner img{width:40px;height:40px;border-radius:8px;border:1px solid rgba(74,127,212,.4);background:#fff;padding:2px;}
+    .install-banner img{width:42px;height:42px;border-radius:10px;border:1px solid rgba(212,168,67,0.4);background:#fff;padding:3px;flex-shrink:0;}
     .install-text{flex:1;}
-    .install-title{font-family:'Cinzel',serif;font-size:12px;color:#ffffff;font-weight:700;margin-bottom:2px;}
+    .install-title{font-family:'Cinzel',serif;font-size:13px;color:#fff;font-weight:700;margin-bottom:2px;}
     .install-sub{font-size:10px;color:var(--text2);}
-    .install-btn{padding:8px 16px;background:linear-gradient(135deg,var(--blue),#2a55c0);color:#ffffff;border:none;border-radius:8px;font-weight:700;font-size:12px;cursor:pointer;white-space:nowrap;font-family:'Lato',sans-serif;}
-    .install-dismiss{background:none;border:none;color:var(--text2);cursor:pointer;font-size:18px;padding:0 4px;line-height:1;}
-    .footer{margin-top:20px;text-align:center;font-size:10px;color:rgba(184,200,232,.3);letter-spacing:1px;}
-    .footer a{color:rgba(74,127,212,.4);text-decoration:none;}
-    .fade-in{animation:fadeIn .5s ease;}
-    @keyframes fadeIn{from{opacity:0;transform:translateY(-6px);}to{opacity:1;transform:none;}}
-    @media(max-height:700px){.player-card{padding:24px 28px 20px;}.rings,.rays{display:none;}}
-    @media(max-width:500px){.player-card{padding:28px 22px 22px;border-radius:16px;}.church-name{font-size:11px;}.track-title{font-size:17px;}}
+    .install-btn{
+      padding:9px 18px;
+      background:linear-gradient(135deg,var(--gold3),var(--gold));
+      color:#1a0f00;border:none;border-radius:10px;font-weight:700;font-size:12px;
+      cursor:pointer;white-space:nowrap;font-family:'Lato',sans-serif;
+    }
+    .install-dismiss{background:none;border:none;color:var(--text3);cursor:pointer;font-size:20px;padding:0 4px;line-height:1;}
+
+    /* ── FOOTER ── */
+    .footer{margin-top:14px;text-align:center;font-size:10px;color:rgba(212,168,67,0.2);letter-spacing:1px;}
+    .footer a{color:rgba(212,168,67,0.25);text-decoration:none;}
+    .footer a:hover{color:rgba(212,168,67,0.6);}
+
+    /* ── ANIMATIONS ── */
+    .fade-in{animation:fadeIn .4s ease;}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(-8px);}to{opacity:1;transform:none;}}
+
+    /* ── RESPONSIVE ── */
+    @media(max-height:680px){
+      .card-body{padding:22px 24px 18px;}
+      .logo-wrap{width:64px;height:64px;}
+      .track-title{font-size:18px;}
+      .rings-container,.rays,.particles{display:none;}
+    }
+    @media(max-width:480px){
+      .card-body{padding:24px 20px 20px;}
+      .player-card{border-radius:20px;}
+      .track-title{font-size:18px;}
+      .church-name{font-size:12px;}
+      .play-btn{width:64px;height:64px;font-size:22px;}
+    }
   </style>
 </head>
 <body>
-<div class="bg"></div>
-<div class="rays"><div class="ray"></div><div class="ray"></div><div class="ray"></div><div class="ray"></div><div class="ray"></div></div>
-<div class="rings" id="rings"><div class="ring"></div><div class="ring"></div><div class="ring"></div><div class="ring"></div></div>
+
+<!-- Background layers -->
+<div class="bg-glow"></div>
+
+<div class="particles" id="particles"></div>
+
+<div class="rays" id="rays">
+  <div class="ray" style="left:15%;height:90%;transform:rotate(-20deg);animation-delay:0s;"></div>
+  <div class="ray" style="left:28%;height:80%;transform:rotate(-10deg);animation-delay:1.2s;"></div>
+  <div class="ray" style="left:42%;height:95%;transform:rotate(-3deg);animation-delay:.4s;"></div>
+  <div class="ray" style="left:50%;height:100%;transform:rotate(0deg);animation-delay:2s;"></div>
+  <div class="ray" style="left:58%;height:95%;transform:rotate(3deg);animation-delay:.8s;"></div>
+  <div class="ray" style="left:72%;height:80%;transform:rotate(10deg);animation-delay:1.6s;"></div>
+  <div class="ray" style="left:85%;height:90%;transform:rotate(20deg);animation-delay:.2s;"></div>
+</div>
+
+<div class="rings-container" id="rings">
+  <div class="ring r1"></div>
+  <div class="ring r2"></div>
+  <div class="ring r3"></div>
+  <div class="ring r4"></div>
+</div>
 
 <div class="page">
-  <div class="player-card">
-    <div class="header">
-      <div class="logo-wrap"><img src="/logo.png" alt="LETW Logo"></div>
-      <div class="header-text">
-        <div class="church-name">Light Encounter<br>Tabernacle Worldwide</div>
-        <div class="church-sub">Online Radio</div>
-      </div>
-    </div>
-    <div class="live-badge offline" id="live-badge"><div class="live-dot"></div><span id="badge-text">OFFLINE</span></div>
-    <div class="now-playing-label">Now Broadcasting</div>
-    <div class="track-title" id="track-title">Connecting to broadcast...</div>
-    <div class="track-artist" id="track-artist">Light Encounter Tabernacle Worldwide</div>
-    <div class="visualizer paused" id="visualizer">
-      <div class="vis-bar"></div><div class="vis-bar"></div><div class="vis-bar"></div>
-      <div class="vis-bar"></div><div class="vis-bar"></div><div class="vis-bar"></div>
-      <div class="vis-bar"></div><div class="vis-bar"></div><div class="vis-bar"></div>
-      <div class="vis-bar"></div><div class="vis-bar"></div><div class="vis-bar"></div>
-    </div>
-    <div class="controls">
-      <div class="vol-group">
-        <span class="vol-icon">🔈</span>
-        <input type="range" class="vol" id="volume" min="0" max="1" step="0.01" value="0.85">
-      </div>
-      <button class="play-btn" id="play-btn" onclick="togglePlay()">▶</button>
-      <div style="flex:1;display:flex;justify-content:flex-end;">
-        <span id="listener-count" style="font-size:11px;color:var(--text2);">👤 0</span>
-      </div>
-    </div>
-    <div class="divider"></div>
-    <div class="meta-row">
-      <div class="meta-item"><div class="meta-label">Listeners</div><div class="meta-value" id="meta-listeners">0</div></div>
-      <div class="meta-item"><div class="meta-label">Bitrate</div><div class="meta-value" id="meta-bitrate">128k</div></div>
-      <div class="meta-item"><div class="meta-label">Format</div><div class="meta-value">MP3</div></div>
-      <div class="meta-item"><div class="meta-label">Signal</div><div class="meta-value" id="meta-signal">—</div></div>
-    </div>
-    <div class="church-info">
-      <div class="info-tagline">"A bible believing church where the word of God is<br>taught with simplicity and clarity."</div>
-      <div class="info-links">
-        <a class="info-link" href="https://letw.org" target="_blank">🌐 letw.org</a>
-        <a class="info-link" href="https://letw.org/sermons" target="_blank">🎙 Sermons</a>
-        <a class="info-link" href="https://letw.org/events" target="_blank">📅 Events</a>
-        <a class="info-link" href="https://letw.org/giving" target="_blank">🙏 Give</a>
-        <a class="info-link" href="https://letw.org/join" target="_blank">✉ Join Us</a>
-      </div>
-      <div style="margin-top:16px;padding-top:14px;border-top:1px solid rgba(74,127,212,.15);">
-        <div style="font-size:9px;letter-spacing:2px;text-transform:uppercase;color:rgba(184,200,232,.4);margin-bottom:10px;">Listen on other devices</div>
-        <div style="display:flex;justify-content:center;gap:10px;flex-wrap:wrap;">
-          <a class="info-link" href="/tune-in" style="font-size:11px;color:rgba(160,200,255,.8);">📡 All Ways to Listen</a>
-          <a class="info-link" href="/stream.pls" download style="font-size:11px;color:rgba(160,200,255,.6);">⬇ VLC / .PLS</a>
-          <a class="info-link" href="/stream.m3u" download style="font-size:11px;color:rgba(160,200,255,.6);">⬇ .M3U</a>
+  <div class="player-card" id="player-card">
+    <div class="card-topbar" id="card-topbar"></div>
+    <div class="card-body">
+
+      <!-- HEADER -->
+      <div class="header">
+        <div class="logo-wrap" id="logo-wrap">
+          <img src="/logo.png" alt="LETW Logo">
+          <div class="logo-pulse"></div>
+        </div>
+        <div class="header-text">
+          <div class="church-name">Light Encounter<br>Tabernacle Worldwide</div>
+          <div class="church-sub">Online Radio</div>
         </div>
       </div>
-    </div>
-  </div>
-  <div class="footer">© 2026 Light Encounter Tabernacle Worldwide · <a href="https://letw.org" target="_blank">letw.org</a></div>
+
+      <!-- STATUS BADGE + LISTENER COUNT -->
+      <div class="badge-row">
+        <div class="status-badge offline" id="status-badge">
+          <div class="badge-dot"></div>
+          <span id="badge-text">OFFLINE</span>
+        </div>
+        <div class="listener-pill">
+          👥 <span id="listener-count">0</span> listening
+        </div>
+      </div>
+
+      <!-- NOW PLAYING -->
+      <div class="now-label">Now Broadcasting</div>
+      <div class="track-title fade-in" id="track-title">Tap ▶ to listen live</div>
+      <div class="track-artist" id="track-artist">Light Encounter Tabernacle Worldwide</div>
+
+      <!-- VISUALIZER -->
+      <div class="visualizer-wrap">
+        <canvas id="vis-canvas"></canvas>
+        <div class="vis-idle" id="vis-idle" style="display:none;">
+          <div class="bar" style="animation-delay:.0s;"></div>
+          <div class="bar" style="animation-delay:.1s;"></div>
+          <div class="bar" style="animation-delay:.2s;"></div>
+          <div class="bar" style="animation-delay:.05s;"></div>
+          <div class="bar" style="animation-delay:.15s;"></div>
+          <div class="bar" style="animation-delay:.25s;"></div>
+          <div class="bar" style="animation-delay:.08s;"></div>
+          <div class="bar" style="animation-delay:.18s;"></div>
+          <div class="bar" style="animation-delay:.28s;"></div>
+        </div>
+      </div>
+
+      <!-- CONTROLS -->
+      <div class="controls">
+        <div class="vol-group">
+          <span class="vol-icon" id="vol-icon">🔉</span>
+          <input type="range" class="vol" id="volume" min="0" max="1" step="0.01" value="0.85">
+        </div>
+
+        <button class="play-btn" id="play-btn" onclick="togglePlay()">▶</button>
+
+        <div class="action-group">
+          <button class="icon-btn" id="share-btn" title="Share" onclick="shareStation()">📤</button>
+          <button class="icon-btn" title="All ways to listen" onclick="location.href='/tune-in'">📡</button>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- META ROW -->
+      <div class="meta-row">
+        <div class="meta-item">
+          <div class="meta-label">Listeners</div>
+          <div class="meta-value" id="meta-listeners">0</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Bitrate</div>
+          <div class="meta-value" id="meta-bitrate">128k</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Format</div>
+          <div class="meta-value" id="meta-format">MP3</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Signal</div>
+          <div class="meta-value" id="meta-signal">—</div>
+        </div>
+      </div>
+
+      <!-- CHURCH INFO -->
+      <div class="church-info">
+        <div class="tagline">"A bible believing church where the word of God is<br>taught with simplicity and clarity."</div>
+        <div class="links-row">
+          <a class="info-link" href="https://letw.org" target="_blank">🌐 letw.org</a>
+          <a class="info-link" href="https://letw.org/sermons" target="_blank">🎙 Sermons</a>
+          <a class="info-link" href="https://letw.org/events" target="_blank">📅 Events</a>
+          <a class="info-link" href="https://letw.org/giving" target="_blank">🙏 Give</a>
+        </div>
+        <div class="tune-strip">
+          <span style="font-size:9px;letter-spacing:2px;text-transform:uppercase;color:rgba(212,168,67,0.25);">Also listen via</span>
+          <a class="tune-link" href="/tune-in">📡 All Devices</a>
+          <a class="tune-link" href="/stream.pls" download>⬇ VLC/PLS</a>
+          <a class="tune-link" href="/stream.m3u" download>⬇ M3U</a>
+        </div>
+      </div>
+
+    </div><!-- /card-body -->
+  </div><!-- /player-card -->
+
+  <div class="footer">© 2026 Light Encounter Tabernacle Worldwide &nbsp;·&nbsp; <a href="https://letw.org" target="_blank">letw.org</a></div>
 </div>
 
 <!-- PWA INSTALL BANNER -->
@@ -203,249 +433,372 @@
 <audio id="audio" preload="none" x-webkit-airplay="allow"></audio>
 
 <script>
-  // ===== SERVICE WORKER =====
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(err => console.warn('SW failed:', err));
-  }
+// ── SERVICE WORKER ──────────────────────────────────────────────────────────
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
 
-  // ===== PWA INSTALL PROMPT =====
-  let deferredPrompt = null;
-  window.addEventListener('beforeinstallprompt', e => {
-    e.preventDefault();
-    deferredPrompt = e;
-    if (!localStorage.getItem('install-dismissed')) {
-      setTimeout(() => document.getElementById('install-banner').classList.add('show'), 3000);
+// ── PWA INSTALL ─────────────────────────────────────────────────────────────
+let deferredPrompt = null;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault(); deferredPrompt = e;
+  if (!localStorage.getItem('install-dismissed'))
+    setTimeout(() => document.getElementById('install-banner').classList.add('show'), 3500);
+});
+document.getElementById('install-btn').addEventListener('click', async () => {
+  if (!deferredPrompt) return;
+  deferredPrompt.prompt(); await deferredPrompt.userChoice;
+  deferredPrompt = null; dismissInstall();
+});
+function dismissInstall() {
+  document.getElementById('install-banner').classList.remove('show');
+  localStorage.setItem('install-dismissed','1');
+}
+window.addEventListener('appinstalled', dismissInstall);
+
+// ── PARTICLES ───────────────────────────────────────────────────────────────
+(function spawnParticles() {
+  const container = document.getElementById('particles');
+  const count = 18;
+  for (let i = 0; i < count; i++) {
+    const p = document.createElement('div');
+    p.className = 'p';
+    const size = Math.random() * 4 + 1;
+    const x    = Math.random() * 100;
+    const dur  = Math.random() * 20 + 12;
+    const del  = Math.random() * 15;
+    const alpha = Math.random() * 0.25 + 0.04;
+    const gold = Math.random() > 0.5;
+    p.style.cssText = `
+      width:${size}px;height:${size}px;left:${x}%;bottom:-10px;
+      background:${gold ? `rgba(212,168,67,${alpha})` : `rgba(255,255,255,${alpha * 0.4})`};
+      box-shadow:0 0 ${size * 2}px ${gold ? 'rgba(212,168,67,0.3)' : 'rgba(255,255,255,0.1)'};
+      animation-duration:${dur}s;animation-delay:${del}s;
+    `;
+    container.appendChild(p);
+  }
+})();
+
+// ── MEDIA SESSION (lock-screen controls) ────────────────────────────────────
+function updateMediaSession(title, artist) {
+  if (!('mediaSession' in navigator)) return;
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: title || 'LETW Radio', artist: artist || 'Light Encounter Tabernacle Worldwide',
+    album: 'Live Broadcast',
+    artwork: [{ src:'/logo.png', sizes:'512x512', type:'image/png' }]
+  });
+  navigator.mediaSession.setActionHandler('play',  () => startAudio());
+  navigator.mediaSession.setActionHandler('pause', () => stopAudio());
+  navigator.mediaSession.setActionHandler('stop',  () => stopAudio());
+  navigator.mediaSession.setActionHandler('nexttrack',     null);
+  navigator.mediaSession.setActionHandler('previoustrack', null);
+}
+
+// ── WAKE LOCK ────────────────────────────────────────────────────────────────
+let wakeLock = null;
+async function requestWakeLock() {
+  try { if ('wakeLock' in navigator) { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => { if (isPlaying) requestWakeLock(); }); } } catch(e) {}
+}
+async function releaseWakeLock() {
+  if (wakeLock) { try { await wakeLock.release(); } catch(e){} wakeLock = null; }
+}
+
+// ── WEB AUDIO VISUALIZER ────────────────────────────────────────────────────
+let audioCtx   = null;
+let analyser   = null;
+let sourceNode = null;
+let visRAF     = null;
+const canvas   = document.getElementById('vis-canvas');
+const ctx2d    = canvas.getContext('2d');
+
+function setupVisualizer(audioEl) {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (sourceNode) { try { sourceNode.disconnect(); } catch(e) {} }
+    sourceNode = audioCtx.createMediaElementSource(audioEl);
+    analyser   = audioCtx.createAnalyser();
+    analyser.fftSize = 128;
+    analyser.smoothingTimeConstant = 0.8;
+    sourceNode.connect(analyser);
+    analyser.connect(audioCtx.destination);
+  } catch(e) {}
+}
+
+function drawVisualizer() {
+  visRAF = requestAnimationFrame(drawVisualizer);
+  if (!analyser) return;
+  const W = canvas.offsetWidth;
+  const H = canvas.offsetHeight;
+  if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
+
+  const bufLen = analyser.frequencyBinCount;
+  const data   = new Uint8Array(bufLen);
+  analyser.getByteFrequencyData(data);
+
+  ctx2d.clearRect(0, 0, W, H);
+
+  const barCount = 48;
+  const gap      = 3;
+  const barW     = (W - gap * (barCount - 1)) / barCount;
+  const step     = Math.floor(bufLen / barCount);
+  const isLiveModeNow = document.getElementById('status-badge').classList.contains('live-on-air');
+
+  for (let i = 0; i < barCount; i++) {
+    const val  = data[i * step] / 255;
+    const barH = Math.max(3, val * H * 0.92);
+    const x    = i * (barW + gap);
+    const y    = H - barH;
+
+    // Gradient per bar
+    const grad = ctx2d.createLinearGradient(0, H, 0, y);
+    if (isLiveModeNow) {
+      grad.addColorStop(0, 'rgba(224,80,112,0.9)');
+      grad.addColorStop(0.5,'rgba(255,107,138,0.7)');
+      grad.addColorStop(1, 'rgba(255,150,170,0.3)');
+    } else {
+      grad.addColorStop(0, 'rgba(212,168,67,0.9)');
+      grad.addColorStop(0.5,'rgba(240,200,90,0.7)');
+      grad.addColorStop(1, 'rgba(255,230,120,0.3)');
     }
-  });
-  document.getElementById('install-btn').addEventListener('click', async () => {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    await deferredPrompt.userChoice;
-    deferredPrompt = null;
-    dismissInstall();
-  });
-  function dismissInstall() {
-    document.getElementById('install-banner').classList.remove('show');
-    localStorage.setItem('install-dismissed', '1');
+    ctx2d.fillStyle = grad;
+    const radius = Math.min(barW / 2, 3);
+    ctx2d.beginPath();
+    ctx2d.roundRect(x, y, barW, barH, [radius, radius, 0, 0]);
+    ctx2d.fill();
   }
-  window.addEventListener('appinstalled', dismissInstall);
+}
 
-  // ===== MEDIA SESSION API (lock screen controls) =====
-  function updateMediaSession(title, artist) {
-    if (!('mediaSession' in navigator)) return;
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: title || 'LETW Radio',
-      artist: artist || 'Light Encounter Tabernacle Worldwide',
-      album: 'Live Broadcast',
-      artwork: [
-        { src: '/logo.png', sizes: '192x192', type: 'image/png' },
-        { src: '/logo.png', sizes: '512x512', type: 'image/png' }
-      ]
-    });
-    navigator.mediaSession.setActionHandler('play',  () => startAudio());
-    navigator.mediaSession.setActionHandler('pause', () => stopAudio());
-    navigator.mediaSession.setActionHandler('stop',  () => stopAudio());
-    navigator.mediaSession.setActionHandler('nexttrack', null);
-    navigator.mediaSession.setActionHandler('previoustrack', null);
-  }
+function stopVisualizer() {
+  if (visRAF) { cancelAnimationFrame(visRAF); visRAF = null; }
+  if (ctx2d) { ctx2d.clearRect(0, 0, canvas.width, canvas.height); }
+}
 
-  // ===== WAKE LOCK — prevents screen/tab from sleeping and killing audio =====
-  let wakeLock = null;
-  async function requestWakeLock() {
-    try {
-      if ('wakeLock' in navigator) {
-        wakeLock = await navigator.wakeLock.request('screen');
-        wakeLock.addEventListener('release', () => { if (isPlaying) requestWakeLock(); });
-      }
-    } catch (e) { /* wakeLock not supported — audio still works */ }
-  }
-  async function releaseWakeLock() {
-    if (wakeLock) { try { await wakeLock.release(); } catch(e){} wakeLock = null; }
-  }
+function startVisualizer() {
+  if (!visRAF) drawVisualizer();
+}
 
-  // ===== SOCKET & AUDIO =====
-  const socket = io();
-  const audio  = document.getElementById('audio');
-  const volInput = document.getElementById('volume');
-  let isPlaying  = false;
-  let retryTimer = null;
-  let stallTimer = null;
-  let lastAudioTime = 0;
+// ── VOLUME ICON ──────────────────────────────────────────────────────────────
+const volInput = document.getElementById('volume');
+const savedVol = parseFloat(localStorage.getItem('letw_vol') || '0.85');
+document.getElementById('audio').volume = savedVol;
+volInput.value = savedVol;
+volInput.addEventListener('input', e => {
+  const v = parseFloat(e.target.value);
+  document.getElementById('audio').volume = v;
+  localStorage.setItem('letw_vol', e.target.value);
+  const icon = document.getElementById('vol-icon');
+  icon.textContent = v === 0 ? '🔇' : v < 0.5 ? '🔈' : '🔉';
+});
 
-  // Restore saved volume
-  const savedVol = parseFloat(localStorage.getItem('letw_vol') || '0.85');
-  audio.volume   = savedVol;
-  volInput.value = savedVol;
-  volInput.addEventListener('input', e => {
-    audio.volume = parseFloat(e.target.value);
-    localStorage.setItem('letw_vol', e.target.value);
-  });
+// ── SHARE ────────────────────────────────────────────────────────────────────
+function shareStation() {
+  const data = { title:'LETW Radio — Live', text:'Listen live to Light Encounter Tabernacle Worldwide Radio', url: window.location.href };
+  if (navigator.share) { navigator.share(data).catch(()=>{}); }
+  else { navigator.clipboard.writeText(window.location.href).then(()=>{ const btn=document.getElementById('share-btn'); btn.textContent='✓'; setTimeout(()=>btn.textContent='📤',2000); }).catch(()=>{}); }
+}
 
-  // ===== INITIAL STATUS =====
-  fetch('/api/status').then(r => r.json()).then(s => {
+// ── SOCKET & STATE ────────────────────────────────────────────────────────────
+const socket    = io();
+const audioEl   = document.getElementById('audio');
+let isPlaying   = false;
+let isLiveMode  = false;
+let retryTimer  = null;
+let stallTimer  = null;
+let lastAudioT  = 0;
+
+// ── INITIAL STATUS ────────────────────────────────────────────────────────────
+fetch('/api/status').then(r => r.json()).then(s => {
+  if (s.isLive) {
+    setLiveMode(true, s.liveTitle, s.liveArtist);
+  } else {
     setLive(s.isPlaying);
     if (s.currentTrack) updateTrack(s.currentTrack);
-    setMeta(s.listeners || 0);
-  }).catch(() => {});
-
-  // ===== SOCKET EVENTS =====
-  socket.on('trackStart', t => {
-    setLive(true);
-    updateTrack(t);
-    if (isPlaying) reconnect(); // new track started — reconnect to get fresh stream
-  });
-  socket.on('status', s => { setLive(s.isPlaying); setMeta(s.listeners || 0); });
-  socket.on('listenerChange', c => setMeta(c));
-
-  // ===== VISIBILITY CHANGE — resume audio when tab comes back into focus =====
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      fetch('/api/status').then(r => r.json()).then(s => {
-        setLive(s.isPlaying);
-        setMeta(s.listeners || 0);
-        if (s.currentTrack) updateTrack(s.currentTrack);
-      }).catch(() => {});
-      // If audio should be playing but stopped due to backgrounding, restart it
-      if (isPlaying && audio.paused) {
-        reconnect();
-      }
-    }
-  });
-
-  // ===== NETWORK STATUS =====
-  window.addEventListener('online', () => {
-    if (isPlaying) reconnect();
-  });
-
-  // ===== UI HELPERS =====
-  function setLive(live) {
-    const b = document.getElementById('live-badge');
-    b.className = 'live-badge ' + (live ? 'live' : 'offline');
-    document.getElementById('badge-text').textContent = live ? 'LIVE ON AIR' : 'OFFLINE';
-    document.getElementById('meta-signal').textContent = live ? '●●●●' : '—';
-    document.getElementById('meta-signal').style.color = live ? 'var(--gold)' : 'var(--text2)';
-    if (!live) {
-      document.getElementById('track-title').textContent  = 'No broadcast active';
-      document.getElementById('track-artist').textContent = 'Light Encounter Tabernacle Worldwide';
-    }
   }
+  setMeta(s.listeners || 0);
+}).catch(()=>{});
 
-  function setMeta(c) {
-    document.getElementById('meta-listeners').textContent = c;
-    document.getElementById('listener-count').textContent = '👤 ' + c;
+// ── SOCKET EVENTS ─────────────────────────────────────────────────────────────
+socket.on('trackStart', t => { setLive(true); updateTrack(t); if (isPlaying && !isLiveMode) reconnect(); });
+socket.on('status',     s => {
+  if (s.isLive) { setLiveMode(true, s.liveTitle, s.liveArtist); }
+  else           { setLive(s.isPlaying); }
+  setMeta(s.listeners || 0);
+});
+socket.on('listenerChange', c => setMeta(c));
+
+// Live broadcast events
+socket.on('live:started', info => {
+  setLiveMode(true, info.title, info.artist);
+  // If currently playing file stream, switch to live stream
+  if (isPlaying && !isLiveMode) reconnect();
+});
+socket.on('live:ended', () => {
+  setLiveMode(false);
+  // Reconnect to regular stream
+  if (isPlaying) reconnect();
+});
+
+// ── VISIBILITY / NETWORK ──────────────────────────────────────────────────────
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    fetch('/api/status').then(r=>r.json()).then(s=>{
+      if (s.isLive) setLiveMode(true, s.liveTitle, s.liveArtist);
+      else { setLive(s.isPlaying); if (s.currentTrack) updateTrack(s.currentTrack); }
+      setMeta(s.listeners||0);
+    }).catch(()=>{});
+    if (isPlaying && audioEl.paused) reconnect();
   }
+});
+window.addEventListener('online', () => { if (isPlaying) reconnect(); });
 
-  function updateTrack(t) {
-    const el = document.getElementById('track-title');
-    el.textContent = t.title || 'Worship & Word';
-    document.getElementById('track-artist').textContent = t.artist || 'Light Encounter Tabernacle Worldwide';
-    el.classList.remove('fade-in');
-    void el.offsetWidth;
-    el.classList.add('fade-in');
-    document.getElementById('meta-bitrate').textContent = (t.bitrate || 128) + 'k';
-    document.title = (t.title || 'Live') + ' — LETW Radio';
-    updateMediaSession(t.title, t.artist);
+// ── UI HELPERS ────────────────────────────────────────────────────────────────
+function setLive(live) {
+  if (isLiveMode) return; // live broadcast overrides
+  const badge = document.getElementById('status-badge');
+  badge.className = 'status-badge ' + (live ? 'live' : 'offline');
+  document.getElementById('badge-text').textContent = live ? 'ON AIR' : 'OFFLINE';
+  document.getElementById('meta-signal').textContent = live ? '●●●●' : '—';
+  document.getElementById('meta-signal').style.color = live ? 'var(--gold)' : 'var(--text3)';
+  if (!live) {
+    document.getElementById('track-title').textContent  = 'No broadcast active';
+    document.getElementById('track-artist').textContent = 'Light Encounter Tabernacle Worldwide';
   }
+}
 
-  function setPlayingUI(playing) {
-    document.getElementById('play-btn').textContent = playing ? '⏸' : '▶';
-    document.getElementById('visualizer').classList.toggle('paused', !playing);
-    document.getElementById('rings').classList.toggle('playing', playing);
-    if ('mediaSession' in navigator) {
-      navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
-    }
+function setLiveMode(active, title, artist) {
+  isLiveMode = active;
+  const badge    = document.getElementById('status-badge');
+  const topbar   = document.getElementById('card-topbar');
+  const rings    = document.getElementById('rings');
+  const playBtn  = document.getElementById('play-btn');
+  const metaFmt  = document.getElementById('meta-format');
+
+  if (active) {
+    badge.className = 'status-badge live-on-air';
+    document.getElementById('badge-text').textContent = '🔴 LIVE BROADCAST';
+    document.getElementById('track-title').textContent  = title  || 'Live Broadcast';
+    document.getElementById('track-artist').textContent = artist || 'Light Encounter Tabernacle Worldwide';
+    topbar.classList.add('live-bar');
+    rings.classList.add('live-mode');
+    playBtn.classList.add('live-btn');
+    metaFmt.textContent = 'LIVE';
+    document.getElementById('meta-signal').textContent = '●●●●';
+    document.getElementById('meta-signal').style.color = 'var(--live2)';
+    document.title = '🔴 LIVE — LETW Radio';
+    updateMediaSession(title, artist);
+  } else {
+    badge.className = 'status-badge offline';
+    document.getElementById('badge-text').textContent = 'OFFLINE';
+    topbar.classList.remove('live-bar');
+    rings.classList.remove('live-mode');
+    playBtn.classList.remove('live-btn');
+    metaFmt.textContent = 'MP3';
+    document.title = 'LETW Radio';
   }
+}
 
-  // ===== AUDIO CONTROLS =====
-  function togglePlay() { isPlaying ? stopAudio() : startAudio(); }
+function setMeta(c) {
+  document.getElementById('meta-listeners').textContent = c;
+  document.getElementById('listener-count').textContent = c;
+}
 
-  function startAudio() {
-    clearTimeout(retryTimer);
-    document.getElementById('live-badge').className = 'live-badge connecting';
-    document.getElementById('badge-text').textContent = 'CONNECTING';
-    // Cache-bust forces a fresh stream connection every time
-    audio.src = window.location.origin + '/stream?t=' + Date.now();
-    audio.load();
-    audio.play().then(() => {
-      isPlaying = true;
-      setPlayingUI(true);
-      setLive(true);
-      requestWakeLock();
-      startStallDetection();
-    }).catch(err => {
-      isPlaying = false;
-      setPlayingUI(false);
-      document.getElementById('track-title').textContent = 'Tap ▶ to listen live';
-      if (err.name !== 'AbortError') {
-        // Auto-retry once after 3 seconds on non-user-abort errors
-        retryTimer = setTimeout(startAudio, 3000);
-      }
-    });
+function updateTrack(t) {
+  if (isLiveMode) return;
+  const el = document.getElementById('track-title');
+  el.textContent = t.title || 'Worship & Word';
+  document.getElementById('track-artist').textContent = t.artist || 'Light Encounter Tabernacle Worldwide';
+  el.classList.remove('fade-in'); void el.offsetWidth; el.classList.add('fade-in');
+  document.getElementById('meta-bitrate').textContent = (t.bitrate || 128) + 'k';
+  document.title = (t.title || 'Live') + ' — LETW Radio';
+  updateMediaSession(t.title, t.artist);
+}
+
+function setPlayingUI(playing) {
+  document.getElementById('play-btn').innerHTML = playing ? '⏸' : '▶';
+  document.getElementById('logo-wrap').classList.toggle('playing', playing);
+  document.getElementById('rings').classList.toggle('playing', playing && !isLiveMode);
+  if ('mediaSession' in navigator) navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+  if (playing) {
+    document.getElementById('vis-idle').style.display = 'none';
+    canvas.style.display = 'block';
+    startVisualizer();
+  } else {
+    stopVisualizer();
+    canvas.style.display = 'none';
+    document.getElementById('vis-idle').style.display = 'flex';
   }
+}
 
-  function stopAudio() {
-    clearTimeout(retryTimer);
-    clearTimeout(stallTimer);
-    audio.pause();
-    audio.src = '';
+// ── AUDIO CONTROLS ────────────────────────────────────────────────────────────
+function togglePlay() { isPlaying ? stopAudio() : startAudio(); }
+
+function startAudio() {
+  clearTimeout(retryTimer);
+
+  // Resume AudioContext if suspended (autoplay policy)
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+
+  const badge = document.getElementById('status-badge');
+  badge.className = 'status-badge connecting';
+  document.getElementById('badge-text').textContent = 'CONNECTING…';
+
+  const src = isLiveMode
+    ? window.location.origin + '/live-stream?t=' + Date.now()
+    : window.location.origin + '/stream?t='      + Date.now();
+
+  // Setup Web Audio on first play
+  if (!audioCtx) setupVisualizer(audioEl);
+
+  audioEl.src = src;
+  audioEl.load();
+  audioEl.play().then(() => {
+    isPlaying = true;
+    setPlayingUI(true);
+    if (isLiveMode) setLiveMode(true, document.getElementById('track-title').textContent, document.getElementById('track-artist').textContent);
+    else setLive(true);
+    requestWakeLock();
+    startStallDetection();
+  }).catch(err => {
     isPlaying = false;
     setPlayingUI(false);
-    releaseWakeLock();
-  }
-
-  function reconnect() {
-    clearTimeout(retryTimer);
-    clearTimeout(stallTimer);
-    audio.pause();
-    audio.src = '';
-    retryTimer = setTimeout(startAudio, 1500);
-  }
-
-  // ===== STALL DETECTION — catches frozen streams =====
-  // If audio.currentTime doesn't move for 8 seconds while playing, reconnect
-  function startStallDetection() {
-    clearTimeout(stallTimer);
-    lastAudioTime = audio.currentTime;
-    stallTimer = setTimeout(checkStall, 8000);
-  }
-
-  function checkStall() {
-    if (!isPlaying) return;
-    if (audio.currentTime === lastAudioTime && !audio.paused) {
-      console.warn('[LETW Radio] Stream stalled — reconnecting');
-      reconnect();
-    } else {
-      lastAudioTime = audio.currentTime;
-      stallTimer = setTimeout(checkStall, 8000);
-    }
-  }
-
-  // ===== AUDIO EVENT LISTENERS =====
-  audio.addEventListener('playing', () => {
-    setPlayingUI(true);
-    setLive(true);
-    startStallDetection();
+    document.getElementById('track-title').textContent = 'Tap ▶ to listen live';
+    if (err.name !== 'AbortError') retryTimer = setTimeout(startAudio, 3000);
   });
+}
 
-  audio.addEventListener('waiting', () => {
-    // Stream is buffering — show connecting state but don't stop
-    if (isPlaying) {
-      document.getElementById('live-badge').className = 'live-badge connecting';
-      document.getElementById('badge-text').textContent = 'BUFFERING';
-    }
-  });
+function stopAudio() {
+  clearTimeout(retryTimer); clearTimeout(stallTimer);
+  audioEl.pause(); audioEl.src = '';
+  isPlaying = false;
+  setPlayingUI(false);
+  releaseWakeLock();
+}
 
-  audio.addEventListener('error', () => {
-    if (!isPlaying) return;
-    clearTimeout(retryTimer);
-    retryTimer = setTimeout(startAudio, 3000);
-  });
+function reconnect() {
+  clearTimeout(retryTimer); clearTimeout(stallTimer);
+  audioEl.pause(); audioEl.src = '';
+  retryTimer = setTimeout(startAudio, 1200);
+}
 
-  audio.addEventListener('ended', () => {
-    if (!isPlaying) return;
-    clearTimeout(retryTimer);
-    retryTimer = setTimeout(startAudio, 2000);
-  });
+// ── STALL DETECTION ───────────────────────────────────────────────────────────
+function startStallDetection() {
+  clearTimeout(stallTimer);
+  lastAudioT = audioEl.currentTime;
+  stallTimer = setTimeout(checkStall, 8000);
+}
+function checkStall() {
+  if (!isPlaying) return;
+  if (audioEl.currentTime === lastAudioT && !audioEl.paused) { console.warn('[LETW] Stalled — reconnecting'); reconnect(); }
+  else { lastAudioT = audioEl.currentTime; stallTimer = setTimeout(checkStall, 8000); }
+}
+
+// ── AUDIO ELEMENT EVENTS ──────────────────────────────────────────────────────
+audioEl.addEventListener('playing', () => { setPlayingUI(true); if (!isLiveMode) setLive(true); startStallDetection(); });
+audioEl.addEventListener('waiting', () => {
+  if (isPlaying) { const b=document.getElementById('status-badge'); b.className='status-badge connecting'; document.getElementById('badge-text').textContent='BUFFERING…'; }
+});
+audioEl.addEventListener('error',  () => { if (!isPlaying) return; clearTimeout(retryTimer); retryTimer=setTimeout(startAudio,3000); });
+audioEl.addEventListener('ended',  () => { if (!isPlaying) return; clearTimeout(retryTimer); retryTimer=setTimeout(startAudio,2000); });
 </script>
 </body>
 </html>

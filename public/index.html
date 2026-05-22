@@ -204,6 +204,7 @@
       50% { height: 16px; opacity: 1; }
     }
     .eq-bars.paused .eq-bar { animation-play-state: paused; height: 4px; }
+    @keyframes liveDot { 0%,100%{opacity:1;} 50%{opacity:0;} }
 
     /* MAIN CONTENT */
     .main {
@@ -834,6 +835,12 @@
     <span class="nav-icon">🔄</span><span>Daily Gen.</span>
   </div>
 
+  <div class="nav-section">Broadcast</div>
+  <div class="nav-item" data-page="golive" style="position:relative;">
+    <span class="nav-icon">🎙️</span><span>Go Live</span>
+    <span id="live-nav-dot" style="display:none;position:absolute;right:10px;top:50%;transform:translateY(-50%);width:8px;height:8px;background:#e05070;border-radius:50%;animation:liveDot 1s infinite;"></span>
+  </div>
+
   <div class="nav-section">Other</div>
   <div class="nav-item" data-page="history">
     <span class="nav-icon">📜</span><span>History</span>
@@ -1137,6 +1144,100 @@
         <div id="history-list">
           <div class="empty-state"><div class="empty-icon">📜</div><div class="empty-title">No history yet</div></div>
         </div>
+      </div>
+    </div>
+
+    <!-- ===== GO LIVE ===== -->
+    <div class="page" id="page-golive">
+      <div class="grid-2" style="max-width:900px;">
+
+        <!-- LIVE CONTROL CARD -->
+        <div class="card" style="border-color:rgba(224,80,112,0.3);">
+          <div class="card-header">
+            <div class="card-title">🎙️ Live Broadcast Control</div>
+            <div id="live-status-chip" style="display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:1px;background:rgba(90,90,90,0.15);border:1px solid rgba(90,90,90,0.3);color:#888;">● OFF AIR</div>
+          </div>
+
+          <!-- Broadcast info inputs -->
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Broadcast Title</label>
+              <input class="form-control" id="live-title" placeholder="e.g. Sunday Service" value="Live Service">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Speaker / Artist</label>
+              <input class="form-control" id="live-artist" placeholder="e.g. Pastor Name" value="Light Encounter Tabernacle Worldwide">
+            </div>
+          </div>
+
+          <!-- Mic selector -->
+          <div class="form-group">
+            <label class="form-label">Microphone</label>
+            <select class="form-control" id="live-mic-select">
+              <option value="">— Select microphone —</option>
+            </select>
+          </div>
+
+          <!-- Mic level meter -->
+          <div style="margin-bottom:16px;">
+            <div style="font-size:10px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;">Mic Level</div>
+            <div style="height:12px;background:rgba(255,255,255,0.05);border-radius:6px;overflow:hidden;border:1px solid rgba(255,255,255,0.06);">
+              <div id="mic-level-bar" style="height:100%;width:0%;border-radius:6px;background:linear-gradient(90deg,#4caf82,#d4a843,#e05070);transition:width 0.05s;"></div>
+            </div>
+          </div>
+
+          <!-- Go Live / Stop buttons -->
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button class="btn" id="btn-go-live" onclick="startLiveBroadcast()"
+              style="background:linear-gradient(135deg,#8b1a35,#e05070);color:#fff;border:none;font-weight:700;padding:12px 28px;font-size:14px;letter-spacing:1px;">
+              🔴 GO LIVE
+            </button>
+            <button class="btn btn-secondary" id="btn-stop-live" onclick="stopLiveBroadcast()" disabled style="opacity:0.4;">
+              ⏹ Stop Broadcast
+            </button>
+            <button class="btn btn-secondary" onclick="refreshMics()">🔄 Refresh Mics</button>
+          </div>
+
+          <!-- Live duration counter -->
+          <div id="live-timer-wrap" style="display:none;margin-top:14px;padding:10px 14px;background:rgba(224,80,112,0.08);border:1px solid rgba(224,80,112,0.25);border-radius:8px;">
+            <div style="font-size:10px;color:#e05070;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px;">● BROADCASTING LIVE</div>
+            <div id="live-timer" style="font-family:var(--mono);font-size:22px;color:#ff6b8a;font-weight:700;">00:00:00</div>
+          </div>
+        </div>
+
+        <!-- INFO / INSTRUCTIONS CARD -->
+        <div class="card">
+          <div class="card-header"><div class="card-title">📡 How Live Streaming Works</div></div>
+          <div style="display:flex;flex-direction:column;gap:14px;font-size:13px;color:var(--text2);line-height:1.7;">
+            <div style="display:flex;gap:12px;align-items:flex-start;">
+              <span style="font-size:20px;flex-shrink:0;">1️⃣</span>
+              <div><strong style="color:var(--text);">Select your microphone</strong> from the dropdown. Click "Refresh Mics" if your device isn't listed. Grant browser permission when prompted.</div>
+            </div>
+            <div style="display:flex;gap:12px;align-items:flex-start;">
+              <span style="font-size:20px;flex-shrink:0;">2️⃣</span>
+              <div><strong style="color:var(--text);">Enter a title and speaker name.</strong> These appear on the listener player in real time.</div>
+            </div>
+            <div style="display:flex;gap:12px;align-items:flex-start;">
+              <span style="font-size:20px;flex-shrink:0;">3️⃣</span>
+              <div><strong style="color:var(--text);">Click GO LIVE.</strong> Your microphone audio streams instantly to all listeners at <code style="background:rgba(255,255,255,0.06);padding:2px 6px;border-radius:4px;">/live-stream</code> — no external app needed.</div>
+            </div>
+            <div style="display:flex;gap:12px;align-items:flex-start;">
+              <span style="font-size:20px;flex-shrink:0;">4️⃣</span>
+              <div><strong style="color:var(--text);">Stop to return to scheduled playback.</strong> The listener player switches sources automatically.</div>
+            </div>
+            <div style="padding:12px;background:rgba(212,168,67,0.06);border:1px solid rgba(212,168,67,0.2);border-radius:8px;font-size:12px;">
+              <strong style="color:var(--gold);">💡 Tip:</strong> Use a headset or external microphone for best audio quality. The mic level meter shows you before going live.
+            </div>
+          </div>
+
+          <!-- Current listeners during live -->
+          <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border);">
+            <div style="font-size:10px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;">Live Listeners</div>
+            <div style="font-family:'Cinzel',serif;font-size:28px;color:var(--gold);" id="live-listener-count">0</div>
+            <div style="font-size:11px;color:var(--text3);margin-top:2px;">people tuned in right now</div>
+          </div>
+        </div>
+
       </div>
     </div>
 
@@ -1510,7 +1611,8 @@ function navigate(page) {
   const titles = {
     dashboard: 'Dashboard', library: 'Library', playlists: 'Playlists',
     programs: 'Programs', planning: 'Planning', breaks: 'Breaks',
-    dailygen: 'Daily Generation', history: 'History', settings: 'Settings'
+    dailygen: 'Daily Generation', history: 'History', settings: 'Settings',
+    golive: '🎙️ Go Live — Browser Broadcast'
   };
   document.getElementById('topbar-title').textContent = titles[page] || page;
 
@@ -1523,7 +1625,8 @@ function navigate(page) {
     history: loadHistory,
     settings: loadSettings,
     dashboard: loadDashboardStats,
-    dailygen: () => { document.getElementById('dailygen-date').valueAsDate = new Date(); loadDailyGen(); }
+    dailygen: () => { document.getElementById('dailygen-date').valueAsDate = new Date(); loadDailyGen(); },
+    golive: initGoLivePage
   };
   if (loaders[page]) loaders[page]();
 }
@@ -2365,6 +2468,184 @@ function hexToRgba(hex, alpha) {
   api('GET', '/playlists').then(p => state.playlists = p).catch(() => {});
   api('GET', '/programs').then(p => state.programs = p).catch(() => {});
 })();
+
+// =================== GO LIVE — BROWSER MIC STREAMING ===================
+// Captures microphone audio in the browser, encodes as WebM/Opus via
+// MediaRecorder, and sends chunks to the server via Socket.IO.
+// No external app (Butt, Icecast, etc.) required.
+
+let liveMediaRecorder = null;
+let liveMicStream     = null;
+let liveMicAnalyser   = null;
+let liveMicCtx        = null;
+let liveMicRAF        = null;
+let liveTimerInterval = null;
+let liveStartTime     = null;
+let livePageInited    = false;
+
+// Get admin session token from cookie (needed to auth socket live events)
+function getAdminToken() {
+  const match = document.cookie.match(/admin_token=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : '';
+}
+
+function initGoLivePage() {
+  if (!livePageInited) {
+    refreshMics();
+    livePageInited = true;
+  }
+  // Update listener count display
+  const lc = document.getElementById('listener-count');
+  if (lc) document.getElementById('live-listener-count').textContent = lc.textContent;
+}
+
+async function refreshMics() {
+  try {
+    // Request permission first so deviceId labels are populated
+    const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
+    tmp.getTracks().forEach(t => t.stop());
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const mics = devices.filter(d => d.kind === 'audioinput');
+    const sel = document.getElementById('live-mic-select');
+    sel.innerHTML = mics.map((d, i) =>
+      `<option value="${d.deviceId}">${d.label || ('Microphone ' + (i+1))}</option>`
+    ).join('');
+  } catch (err) {
+    alert('Microphone permission denied or not available.\n\n' + err.message);
+  }
+}
+
+async function startLiveBroadcast() {
+  const title  = document.getElementById('live-title').value.trim()  || 'Live Broadcast';
+  const artist = document.getElementById('live-artist').value.trim() || 'Light Encounter Tabernacle Worldwide';
+  const micId  = document.getElementById('live-mic-select').value;
+
+  if (!micId) { alert('Please select a microphone first.'); return; }
+
+  try {
+    liveMicStream = await navigator.mediaDevices.getUserMedia({
+      audio: { deviceId: micId ? { exact: micId } : undefined, echoCancellation: true, noiseSuppression: true, sampleRate: 44100 }
+    });
+  } catch (err) {
+    alert('Could not access microphone:\n' + err.message);
+    return;
+  }
+
+  // Start mic level meter
+  liveMicCtx     = new (window.AudioContext || window.webkitAudioContext)();
+  const src      = liveMicCtx.createMediaStreamSource(liveMicStream);
+  liveMicAnalyser = liveMicCtx.createAnalyser();
+  liveMicAnalyser.fftSize = 256;
+  src.connect(liveMicAnalyser);
+  animateMicLevel();
+
+  // Choose best supported MIME type
+  const mimeType = ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/ogg']
+    .find(m => MediaRecorder.isTypeSupported(m)) || '';
+
+  liveMediaRecorder = new MediaRecorder(liveMicStream, { mimeType, audioBitsPerSecond: 128000 });
+
+  liveMediaRecorder.addEventListener('dataavailable', e => {
+    if (e.data && e.data.size > 0) {
+      e.data.arrayBuffer().then(buf => {
+        socket.emit('live:chunk', buf);
+      });
+    }
+  });
+
+  // Send the admin token so server accepts live events
+  socket.auth = { token: getAdminToken() };
+  socket.emit('live:start', { title, artist });
+
+  liveMediaRecorder.start(250); // emit chunk every 250ms
+
+  // UI: on-air state
+  setLiveUIState(true);
+  liveStartTime = Date.now();
+  liveTimerInterval = setInterval(updateLiveTimer, 1000);
+}
+
+function stopLiveBroadcast() {
+  if (liveMediaRecorder && liveMediaRecorder.state !== 'inactive') {
+    liveMediaRecorder.stop();
+  }
+  liveMediaRecorder = null;
+
+  if (liveMicStream) {
+    liveMicStream.getTracks().forEach(t => t.stop());
+    liveMicStream = null;
+  }
+
+  if (liveMicCtx) { liveMicCtx.close(); liveMicCtx = null; }
+  if (liveMicRAF) { cancelAnimationFrame(liveMicRAF); liveMicRAF = null; }
+  if (liveTimerInterval) { clearInterval(liveTimerInterval); liveTimerInterval = null; }
+
+  document.getElementById('mic-level-bar').style.width = '0%';
+
+  socket.auth = { token: getAdminToken() };
+  socket.emit('live:stop');
+
+  setLiveUIState(false);
+}
+
+function animateMicLevel() {
+  liveMicRAF = requestAnimationFrame(animateMicLevel);
+  if (!liveMicAnalyser) return;
+  const data = new Uint8Array(liveMicAnalyser.frequencyBinCount);
+  liveMicAnalyser.getByteFrequencyData(data);
+  const avg = data.reduce((s, v) => s + v, 0) / data.length;
+  const pct = Math.min(100, (avg / 128) * 100);
+  document.getElementById('mic-level-bar').style.width = pct + '%';
+}
+
+function updateLiveTimer() {
+  if (!liveStartTime) return;
+  const elapsed = Math.floor((Date.now() - liveStartTime) / 1000);
+  const h = String(Math.floor(elapsed / 3600)).padStart(2,'0');
+  const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2,'0');
+  const s = String(elapsed % 60).padStart(2,'0');
+  document.getElementById('live-timer').textContent = `${h}:${m}:${s}`;
+}
+
+function setLiveUIState(on) {
+  const chip       = document.getElementById('live-status-chip');
+  const btnGo      = document.getElementById('btn-go-live');
+  const btnStop    = document.getElementById('btn-stop-live');
+  const timerWrap  = document.getElementById('live-timer-wrap');
+  const navDot     = document.getElementById('live-nav-dot');
+
+  if (on) {
+    chip.textContent = '● ON AIR';
+    chip.style.background = 'rgba(224,80,112,0.18)';
+    chip.style.borderColor = 'rgba(224,80,112,0.55)';
+    chip.style.color = '#ff6b8a';
+    btnGo.disabled  = true;
+    btnGo.style.opacity = '0.4';
+    btnStop.disabled = false;
+    btnStop.style.opacity = '1';
+    timerWrap.style.display = 'block';
+    navDot.style.display = 'block';
+  } else {
+    chip.textContent = '● OFF AIR';
+    chip.style.background = 'rgba(90,90,90,0.15)';
+    chip.style.borderColor = 'rgba(90,90,90,0.3)';
+    chip.style.color = '#888';
+    btnGo.disabled  = false;
+    btnGo.style.opacity = '1';
+    btnStop.disabled = true;
+    btnStop.style.opacity = '0.4';
+    timerWrap.style.display = 'none';
+    navDot.style.display = 'none';
+    if (document.getElementById('live-timer')) document.getElementById('live-timer').textContent = '00:00:00';
+  }
+}
+
+// Keep live listener count in sync
+socket.on('listenerChange', count => {
+  const el = document.getElementById('live-listener-count');
+  if (el) el.textContent = count;
+});
 </script>
 </body>
 </html>

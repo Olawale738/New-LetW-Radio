@@ -3,12 +3,10 @@ const path = require('path');
 const { EventEmitter } = require('events');
 
 const CHUNK_SIZE = 8192;
-
-// ICY metadata injected every ICY_METAINT bytes (standard: 8192)
 const ICY_METAINT = 8192;
 
 function buildIcyMeta(track) {
-  if (!track) return Buffer.alloc(1); // 0x00 = no metadata
+  if (!track) return Buffer.alloc(1);
   const title = [track.artist, track.title].filter(Boolean).join(' - ');
   const raw = `StreamTitle='${title.replace(/'/g, '')}';`;
   const padded = raw.padEnd(Math.ceil(raw.length / 16) * 16, '\0');
@@ -22,23 +20,29 @@ function buildIcyMeta(track) {
 class AudioEngine extends EventEmitter {
   constructor() {
     super();
-    this.clients = new Map(); // id -> { res, wantsIcy, bytesSinceLastMeta }
-    this.currentTrack = null;
+    this.clients     = new Map(); // id -> { res, wantsIcy, bytesSinceLastMeta }
+    this.liveClients = new Map(); // id -> res  (connected to /live-stream)
+    this.currentTrack     = null;
     this.currentTrackInfo = null;
-    this.queue = [];
-    this.isPlaying = false;
+    this.queue       = [];
+    this.isPlaying   = false;
+    this.isLive      = false;      // true while admin is broadcasting live
+    this.liveTitle   = 'Live Broadcast';
+    this.liveArtist  = 'Light Encounter Tabernacle Worldwide';
     this.playbackTimer = null;
     this.bytesPerSecond = 16384;
-    this.startTime = null;
+    this.startTime   = null;
     this.pauseBuffer = null;
     this._listenerCount = 0;
   }
 
+  // ─── Scheduled-file clients (/stream) ──────────────────────────────────────
+
   addClient(id, res, wantsIcy = false, settings = {}) {
-    const bitrate = settings.stream_bitrate || 128;
-    const name = settings.radio_name || 'LETW Radio';
-    const genre = settings.radio_genre || 'Gospel / Christian';
-    const url = settings.radio_url || 'https://radio.letw.org/listen';
+    const bitrate     = settings.stream_bitrate || 128;
+    const name        = settings.radio_name || 'LETW Radio';
+    const genre       = settings.radio_genre || 'Gospel / Christian';
+    const url         = settings.radio_url   || 'https://radio.letw.org/listen';
     const description = settings.radio_description || 'Light Encounter Tabernacle Worldwide';
 
     const headers = {
@@ -54,35 +58,28 @@ class AudioEngine extends EventEmitter {
       'icy-pub': '1',
       'icy-br': String(bitrate),
     };
-
-    if (wantsIcy) {
-      headers['icy-metaint'] = String(ICY_METAINT);
-    }
+    if (wantsIcy) headers['icy-metaint'] = String(ICY_METAINT);
 
     res.writeHead(200, headers);
-
     this.clients.set(id, { res, wantsIcy, bytesSinceLastMeta: 0 });
-    this._listenerCount = this.clients.size;
-    this.emit('listenerChange', this.clients.size);
+    this._updateListeners();
 
-    // Send current track metadata immediately
     if (wantsIcy && this.currentTrackInfo) {
-      try {
-        res.write(buildIcyMeta(this.currentTrackInfo));
-        this.clients.get(id).bytesSinceLastMeta = 0;
-      } catch (e) {}
+      try { res.write(buildIcyMeta(this.currentTrackInfo)); } catch (e) {}
     }
-
-    // Send current audio fragment so client hears audio immediately
     if (this.pauseBuffer) {
       try { this._writeToClient(id, this.pauseBuffer); } catch (e) {}
     }
 
     res.on('close', () => {
       this.clients.delete(id);
-      this._listenerCount = this.clients.size;
-      this.emit('listenerChange', this.clients.size);
+      this._updateListeners();
     });
+  }
+
+  _updateListeners() {
+    this._listenerCount = this.clients.size + this.liveClients.size;
+    this.emit('listenerChange', this._listenerCount);
   }
 
   _writeToClient(id, audioChunk) {
@@ -93,7 +90,6 @@ class AudioEngine extends EventEmitter {
         client.res.write(audioChunk);
         return true;
       }
-      // Inject ICY metadata at every ICY_METAINT byte boundary
       let pos = 0;
       while (pos < audioChunk.length) {
         const spaceUntilMeta = ICY_METAINT - client.bytesSinceLastMeta;
@@ -118,10 +114,7 @@ class AudioEngine extends EventEmitter {
       if (!this._writeToClient(id, chunk)) dead.push(id);
     }
     dead.forEach(id => this.clients.delete(id));
-    if (dead.length) {
-      this._listenerCount = this.clients.size;
-      this.emit('listenerChange', this.clients.size);
-    }
+    if (dead.length) this._updateListeners();
   }
 
   broadcastMetaUpdate() {
@@ -130,18 +123,69 @@ class AudioEngine extends EventEmitter {
       if (!client.wantsIcy) continue;
       try {
         const padding = ICY_METAINT - client.bytesSinceLastMeta;
-        if (padding > 0 && padding < ICY_METAINT) {
-          client.res.write(Buffer.alloc(padding));
-        }
+        if (padding > 0 && padding < ICY_METAINT) client.res.write(Buffer.alloc(padding));
         client.res.write(meta);
         client.bytesSinceLastMeta = 0;
       } catch (e) {}
     }
   }
 
+  // ─── Live streaming (/live-stream) ─────────────────────────────────────────
+
+  addLiveClient(id, res) {
+    res.writeHead(200, {
+      'Content-Type': 'audio/webm',
+      'Cache-Control': 'no-cache, no-store',
+      'Connection': 'keep-alive',
+      'Transfer-Encoding': 'chunked',
+      'Access-Control-Allow-Origin': '*',
+    });
+    this.liveClients.set(id, res);
+    this._updateListeners();
+
+    res.on('close', () => {
+      this.liveClients.delete(id);
+      this._updateListeners();
+    });
+  }
+
+  broadcastLive(chunk) {
+    const dead = [];
+    for (const [id, res] of this.liveClients) {
+      try { res.write(chunk); } catch (e) { dead.push(id); }
+    }
+    dead.forEach(id => this.liveClients.delete(id));
+    if (dead.length) this._updateListeners();
+  }
+
+  startLive(title, artist) {
+    this.isLive     = true;
+    this.liveTitle  = title  || 'Live Broadcast';
+    this.liveArtist = artist || 'Light Encounter Tabernacle Worldwide';
+    // Pause file playback so the scheduled stream goes silent
+    if (this.playbackTimer) { clearTimeout(this.playbackTimer); this.playbackTimer = null; }
+    this.emit('liveStart', { title: this.liveTitle, artist: this.liveArtist });
+  }
+
+  stopLive() {
+    this.isLive = false;
+    // Drain all connected live-stream HTTP clients gracefully
+    for (const [, res] of this.liveClients) {
+      try { res.end(); } catch (e) {}
+    }
+    this.liveClients.clear();
+    this._updateListeners();
+    this.emit('liveStop');
+    // Resume scheduled playback if queue has items
+    if (this.queue.length > 0) this.playNext();
+  }
+
+  // ─── File queue / playback ──────────────────────────────────────────────────
+
   setQueue(tracks) { this.queue = [...tracks]; }
 
   async playNext() {
+    if (this.isLive) return; // don't start file playback during live mode
     if (this.queue.length === 0) {
       this.isPlaying = false;
       this.currentTrack = null;
@@ -153,6 +197,7 @@ class AudioEngine extends EventEmitter {
   }
 
   async playTrack(track) {
+    if (this.isLive) return;
     if (!fs.existsSync(track.file_path)) {
       console.warn(`[AudioEngine] File not found: ${track.file_path}`);
       this.playNext();
@@ -169,7 +214,7 @@ class AudioEngine extends EventEmitter {
     const chunkInterval = Math.floor((CHUNK_SIZE / this.bytesPerSecond) * 1000);
 
     this.emit('trackStart', track);
-    this.broadcastMetaUpdate(); // Push metadata to all ICY clients immediately
+    this.broadcastMetaUpdate();
 
     const stat = fs.statSync(track.file_path);
     const totalBytes = stat.size;
@@ -177,7 +222,7 @@ class AudioEngine extends EventEmitter {
     const fd = fs.openSync(track.file_path, 'r');
 
     const readAndBroadcast = () => {
-      if (!this.isPlaying) {
+      if (!this.isPlaying || this.isLive) {
         try { fs.closeSync(fd); } catch (e) {}
         return;
       }
@@ -229,11 +274,14 @@ class AudioEngine extends EventEmitter {
 
   getStatus() {
     return {
-      isPlaying: this.isPlaying,
+      isPlaying:    this.isPlaying,
+      isLive:       this.isLive,
+      liveTitle:    this.liveTitle,
+      liveArtist:   this.liveArtist,
       currentTrack: this.currentTrackInfo,
-      queueLength: this.queue.length,
-      listeners: this.clients.size,
-      startTime: this.startTime,
+      queueLength:  this.queue.length,
+      listeners:    this._listenerCount,
+      startTime:    this.startTime,
     };
   }
 }

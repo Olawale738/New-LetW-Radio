@@ -155,16 +155,30 @@ app.get('/listen', (req, res) => {
 app.use('/api', apiRoutes);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 📻  LIVE AUDIO STREAM
+// 📻  SCHEDULED AUDIO STREAM  /stream
 // Supports plain browsers AND ICY-aware clients (VLC, Winamp, RadioApp etc.)
-// ICY clients send header: Icy-MetaData: 1
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/stream', (req, res) => {
   const wantsIcy = req.headers['icy-metadata'] === '1';
   const clientId = `${Date.now()}-${Math.random()}`;
   const settings = getSettings();
-  console.log(`[Stream] Client connected: ${clientId} | ICY: ${wantsIcy} | Total: ${audioEngine.clients.size + 1}`);
+  console.log(`[Stream] Client connected: ${clientId} | ICY: ${wantsIcy}`);
   audioEngine.addClient(clientId, res, wantsIcy, settings);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 🎙️  LIVE BROADCAST STREAM  /live-stream
+// Admin streams mic audio → server → all connected listeners in real time
+// Content-Type: audio/webm (browser MediaRecorder output, supported natively)
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/live-stream', (req, res) => {
+  if (!audioEngine.isLive) {
+    res.status(503).json({ error: 'No live broadcast active' });
+    return;
+  }
+  const clientId = `live-${Date.now()}-${Math.random()}`;
+  console.log(`[Live] Listener connected: ${clientId}`);
+  audioEngine.addLiveClient(clientId, res);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -201,6 +215,19 @@ app.get('/stream.m3u', (req, res) => {
   ].join('\r\n');
   res.set('Content-Type', 'audio/x-mpegurl');
   res.set('Content-Disposition', 'attachment; filename="letw-radio.m3u"');
+  res.send(m3u);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 📋  LIVE STREAM M3U — for players that support WebM/Opus
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/live.m3u', (req, res) => {
+  const settings = getSettings();
+  const name = (settings.radio_name || 'LETW Radio') + ' — LIVE';
+  const base = `${req.protocol}://${req.get('host')}`;
+  const m3u = ['#EXTM3U', `#EXTINF:-1,${name}`, `${base}/live-stream`].join('\r\n');
+  res.set('Content-Type', 'audio/x-mpegurl');
+  res.set('Content-Disposition', 'attachment; filename="letw-radio-live.m3u"');
   res.send(m3u);
 });
 
@@ -389,10 +416,47 @@ app.get('/tune-in', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SOCKET.IO — real-time track and listener updates
+// SOCKET.IO — real-time track, listener, and live-broadcast events
 // ─────────────────────────────────────────────────────────────────────────────
 io.on('connection', (socket) => {
   socket.emit('status', audioEngine.getStatus());
+
+  // ── Admin live-broadcast events ──────────────────────────────────────────
+  // Admin must authenticate by sending their token in socket.auth or as a
+  // first message.  We check on each sensitive event rather than on connect
+  // so unauthenticated sockets can still receive status updates.
+  function isAdminSocket() {
+    const token = socket.handshake.auth?.token || socket.handshake.headers['x-admin-token'];
+    return token === SESSION_TOKEN;
+  }
+
+  // Admin signals "going live"
+  socket.on('live:start', (data) => {
+    if (!isAdminSocket()) return;
+    const { title, artist } = data || {};
+    console.log(`[Live] Admin started live broadcast: "${title}"`);
+    audioEngine.startLive(title, artist);
+    io.emit('live:started', { title: audioEngine.liveTitle, artist: audioEngine.liveArtist });
+    io.emit('status', audioEngine.getStatus());
+  });
+
+  // Admin streams an audio chunk (ArrayBuffer sent as binary)
+  socket.on('live:chunk', (chunk) => {
+    if (!isAdminSocket()) return;
+    if (!audioEngine.isLive) return;
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    audioEngine.broadcastLive(buf);
+  });
+
+  // Admin ends the live broadcast
+  socket.on('live:stop', () => {
+    if (!isAdminSocket()) return;
+    console.log('[Live] Admin stopped live broadcast');
+    audioEngine.stopLive();
+    io.emit('live:ended');
+    io.emit('status', audioEngine.getStatus());
+  });
+
   socket.on('disconnect', () => {});
 });
 
@@ -402,6 +466,8 @@ audioEngine.on('trackStart', (track) => {
 });
 audioEngine.on('trackEnd',       (track) => { io.emit('trackEnd', track); });
 audioEngine.on('listenerChange', (count) => { io.emit('listenerChange', count); });
+audioEngine.on('liveStart',      (info)  => { io.emit('live:started', info); io.emit('status', audioEngine.getStatus()); });
+audioEngine.on('liveStop',       ()      => { io.emit('live:ended');          io.emit('status', audioEngine.getStatus()); });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // START SERVER
