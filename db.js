@@ -31,6 +31,7 @@ function initSchema(sqlDb) {
       file_size INTEGER DEFAULT 0, bitrate INTEGER DEFAULT 128,
       tray TEXT DEFAULT 'music', tags TEXT DEFAULT '[]',
       bpm INTEGER DEFAULT 0, year INTEGER DEFAULT 0,
+      play_count INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS playlists (
@@ -105,6 +106,9 @@ function initSchema(sqlDb) {
     );
   `);
 
+  // Migrations for existing databases
+  try { sqlDb.run(`ALTER TABLE tracks ADD COLUMN play_count INTEGER DEFAULT 0`); } catch {}
+
   const defaults = {
     radio_name: 'LETW Radio',
     radio_description: 'A bible believing church where the word of God is taught with simplicity and clarity.',
@@ -119,6 +123,8 @@ function initSchema(sqlDb) {
     ticker_enabled: '0',
     vapid_public: '',
     vapid_private: '',
+    crossfade_time: '3',
+    auto_dj: '0',
   };
   for (const [k, v] of Object.entries(defaults)) {
     sqlDb.run(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`, [k, v]);

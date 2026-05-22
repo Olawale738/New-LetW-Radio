@@ -1034,6 +1034,15 @@
           </div>
         </div>
       </div>
+      <div class="card" style="margin-top:20px;">
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;">
+          <div class="card-title">🏆 Top Played Tracks</div>
+          <button class="btn btn-secondary" style="padding:3px 10px;font-size:11px;" onclick="loadTopPlayed()">Refresh</button>
+        </div>
+        <div id="top-played-list" style="padding:0;">
+          <div style="padding:20px;text-align:center;font-size:13px;color:var(--text3);">Loading...</div>
+        </div>
+      </div>
     </div>
 
     <!-- ===== LIBRARY ===== -->
@@ -1051,16 +1060,33 @@
         <button class="btn btn-primary" onclick="openUploadModal()">⬆ Upload Files</button>
       </div>
 
+      <div id="bulk-bar" style="display:none;align-items:center;gap:10px;padding:10px 14px;background:rgba(212,168,67,0.07);border:1px solid rgba(212,168,67,0.2);border-radius:10px;margin-bottom:12px;flex-wrap:wrap;">
+        <span id="bulk-count" style="font-size:12px;color:var(--gold);font-weight:700;">0 selected</span>
+        <div style="flex:1;"></div>
+        <select id="bulk-tray-select" class="form-control" style="width:130px;padding:5px 10px;">
+          <option value="">Move to tray…</option>
+          <option value="music">Music</option>
+          <option value="jingles">Jingles</option>
+          <option value="ads">Ads</option>
+          <option value="recordings">Recordings</option>
+        </select>
+        <button class="btn btn-secondary" style="padding:5px 12px;font-size:12px;" onclick="bulkMoveTray()">Move</button>
+        <button class="btn btn-secondary" style="padding:5px 12px;font-size:12px;color:#e05070;border-color:rgba(224,80,112,0.4);" onclick="bulkDelete()">🗑 Delete Selected</button>
+        <button class="btn btn-secondary" style="padding:5px 12px;font-size:12px;" onclick="clearBulkSelection()">✕ Clear</button>
+      </div>
+
       <div class="card">
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
+                <th style="width:36px;"><input type="checkbox" id="select-all-tracks" onchange="toggleSelectAll(this.checked)" style="accent-color:var(--gold);"></th>
                 <th style="width:40px;">#</th>
                 <th>Title</th>
                 <th>Artist</th>
                 <th>Album</th>
                 <th>Duration</th>
+                <th>Plays</th>
                 <th>Tray</th>
                 <th style="width:120px;">Actions</th>
               </tr>
@@ -1446,6 +1472,28 @@
             </label>
           </div>
         </div>
+      </div>
+      <div class="card" style="margin-top:16px;">
+        <div class="card-header"><div class="card-title">🎚 Playback Settings</div></div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label class="form-label">Crossfade Duration</label>
+            <div style="display:flex;align-items:center;gap:12px;">
+              <input type="range" id="set-crossfade" min="0" max="10" step="1" value="0" style="flex:1;accent-color:var(--gold);" oninput="document.getElementById('crossfade-val').textContent=this.value+'s'">
+              <span id="crossfade-val" style="font-size:13px;color:var(--gold);font-family:var(--mono);min-width:28px;">0s</span>
+            </div>
+            <div style="font-size:11px;color:var(--text3);margin-top:4px;">Seconds of overlap between tracks (0 = no crossfade)</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Auto-DJ Mode</label>
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+              <input type="checkbox" id="set-autodj" style="accent-color:var(--gold);width:18px;height:18px;">
+              <span style="font-size:13px;color:var(--text2);">Auto-fill queue with random tracks when empty</span>
+            </label>
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="savePlaybackSettings()" style="margin-top:8px;">Save Playback Settings</button>
+        <span id="playback-settings-saved" style="font-size:12px;color:#4caf82;margin-left:12px;display:none;">Saved!</span>
       </div>
     </div>
 
@@ -1903,6 +1951,7 @@ async function loadDashboardStats() {
     updateStatusUI(status);
     loadHistoryMini();
     loadListenersChart();
+    loadTopPlayed();
 
     // Set stream/player URLs
     const base = window.location.origin;
@@ -1949,16 +1998,18 @@ async function loadTracks() {
 function renderTracks(tracks) {
   const tbody = document.getElementById('tracks-tbody');
   if (!tracks.length) {
-    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:40px;"><div class="empty-state"><div class="empty-icon">🎵</div><div class="empty-title">No tracks found</div><div class="empty-sub">Upload your first audio file</div></div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;"><div class="empty-state"><div class="empty-icon">🎵</div><div class="empty-title">No tracks found</div><div class="empty-sub">Upload your first audio file</div></div></td></tr>`;
     return;
   }
   tbody.innerHTML = tracks.map((t, i) => `
     <tr>
+      <td><input type="checkbox" class="track-checkbox" data-id="${t.id}" style="accent-color:var(--gold);" onchange="toggleTrackSelect('${t.id}', this.checked)"></td>
       <td style="color:var(--text3);font-family:var(--mono);">${i+1}</td>
       <td class="track-title-cell">${esc(t.title)}</td>
       <td class="track-artist-cell">${esc(t.artist)}</td>
       <td style="color:var(--text3);">${esc(t.album || '—')}</td>
       <td class="duration-cell">${formatDuration(t.duration)}</td>
+      <td style="font-family:var(--mono);color:var(--gold);text-align:center;">${t.play_count || 0}</td>
       <td><span class="badge badge-cyan">${t.tray}</span></td>
       <td>
         <div style="display:flex;gap:4px;">
@@ -2468,7 +2519,7 @@ async function loadDailyGen() {
     tbody.innerHTML = rows.map((r, i) => {
       totalDuration += r.duration || 0;
       return `
-        <tr style="${r.played ? 'opacity:0.5;' : ''}">
+        <tr draggable="true" data-queue-id="${r.id}" style="${r.played ? 'opacity:0.5;' : ''}cursor:grab;">
           <td style="color:var(--text3);font-family:var(--mono);">${i+1}</td>
           <td style="font-weight:500;">${esc(r.title)}</td>
           <td style="color:var(--text3);">${esc(r.artist)}</td>
@@ -2479,6 +2530,7 @@ async function loadDailyGen() {
     }).join('');
 
     stats.textContent = `${rows.length} tracks · ${formatDuration(totalDuration)} total`;
+    initQueueDragDrop(tbody);
   } catch (e) { toast('Failed to load queue', 'error'); }
 }
 
@@ -2531,6 +2583,11 @@ async function loadSettings() {
   document.getElementById('set-lang').value = s.radio_language || '';
   document.getElementById('set-bitrate').value = s.stream_bitrate || '128';
   document.getElementById('set-filler').checked = s.filler_enabled === '1';
+
+  const xfEl = document.getElementById('set-crossfade');
+  const djEl  = document.getElementById('set-autodj');
+  if (xfEl) { xfEl.value = s.crossfade_time || '0'; document.getElementById('crossfade-val').textContent = (s.crossfade_time||'0') + 's'; }
+  if (djEl)  djEl.checked = s.auto_dj === '1';
 
   const base = window.location.origin;
   document.getElementById('stream-url').value = `${base}/stream`;
@@ -3050,7 +3107,7 @@ async function loadRequestsAdmin() {
           '<option value="played"'    + (req.status==='played'    ? ' selected' : '') + ' style="background:#0e0a0f;color:#d4a843;">Played</option>' +
           '<option value="rejected"'  + (req.status==='rejected'  ? ' selected' : '') + ' style="background:#0e0a0f;color:#e05070;">Rejected</option>' +
         '</select></td>' +
-        '<td style="padding:10px 14px;"><button onclick="deleteRequest(' + req.id + ')" style="background:rgba(224,48,96,0.1);border:1px solid rgba(224,48,96,0.3);color:#e03060;border-radius:6px;padding:4px 10px;font-size:10px;cursor:pointer;font-family:inherit;" onmouseenter="this.style.background=\'rgba(224,48,96,0.2)\'" onmouseleave="this.style.background=\'rgba(224,48,96,0.1)\'">Delete</button></td>';
+        '<td style="padding:10px 14px;white-space:nowrap;"><button onclick="quickApprove(' + req.id + ')" style="background:rgba(76,175,130,0.12);border:1px solid rgba(76,175,130,0.3);color:#4caf82;border-radius:6px;padding:4px 10px;font-size:10px;cursor:pointer;font-family:inherit;margin-right:4px;">✓ Approve</button><button onclick="deleteRequest(' + req.id + ')" style="background:rgba(224,48,96,0.1);border:1px solid rgba(224,48,96,0.3);color:#e03060;border-radius:6px;padding:4px 10px;font-size:10px;cursor:pointer;font-family:inherit;" onmouseenter="this.style.background=\'rgba(224,48,96,0.2)\'" onmouseleave="this.style.background=\'rgba(224,48,96,0.1)\'">Delete</button></td>';
       tbody.appendChild(tr);
     });
   } catch(e) {
@@ -3134,6 +3191,120 @@ async function loadListenersChart() {
       },
     });
   } catch(e) {}
+}
+
+// =================== TOP PLAYED TRACKS ===================
+async function loadTopPlayed() {
+  const el = document.getElementById('top-played-list');
+  if (!el) return;
+  try {
+    const rows = await api('GET', '/tracks/top-played');
+    if (!rows.length) { el.innerHTML = '<div style="padding:20px;text-align:center;font-size:13px;color:var(--text3);">No play history yet.</div>'; return; }
+    el.innerHTML = rows.slice(0,10).map((t, i) =>
+      `<div style="display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid rgba(212,168,67,0.07);">
+        <div style="font-family:var(--mono);font-size:11px;color:rgba(212,168,67,0.4);width:20px;text-align:right;">${i+1}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(t.title)}</div>
+          <div style="font-size:11px;color:var(--gold);">${esc(t.artist)}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <div style="font-size:16px;font-weight:700;color:var(--gold);font-family:var(--mono);">${t.play_count}</div>
+          <div style="font-size:9px;color:var(--text3);letter-spacing:1px;">PLAYS</div>
+        </div>
+      </div>`
+    ).join('');
+  } catch(e) { el.innerHTML = '<div style="padding:20px;text-align:center;font-size:13px;color:var(--text3);">Failed to load.</div>'; }
+}
+
+// =================== BULK TRACK OPERATIONS ===================
+let selectedTrackIds = new Set();
+
+function toggleTrackSelect(id, checked) {
+  if (checked) selectedTrackIds.add(id); else selectedTrackIds.delete(id);
+  updateBulkBar();
+}
+
+function toggleSelectAll(checked) {
+  document.querySelectorAll('.track-checkbox').forEach(cb => {
+    cb.checked = checked;
+    toggleTrackSelect(cb.dataset.id, checked);
+  });
+}
+
+function updateBulkBar() {
+  const bar = document.getElementById('bulk-bar');
+  const cnt = document.getElementById('bulk-count');
+  if (!bar) return;
+  bar.style.display = selectedTrackIds.size > 0 ? 'flex' : 'none';
+  if (cnt) cnt.textContent = selectedTrackIds.size + ' selected';
+}
+
+function clearBulkSelection() {
+  selectedTrackIds.clear();
+  document.querySelectorAll('.track-checkbox').forEach(cb => cb.checked = false);
+  const sa = document.getElementById('select-all-tracks');
+  if (sa) sa.checked = false;
+  updateBulkBar();
+}
+
+async function bulkDelete() {
+  if (!selectedTrackIds.size) return;
+  if (!confirm(`Delete ${selectedTrackIds.size} track(s)? This cannot be undone.`)) return;
+  const ids = [...selectedTrackIds];
+  await Promise.all(ids.map(id => api('DELETE', '/tracks/' + id).catch(() => {})));
+  clearBulkSelection();
+  loadTracks();
+}
+
+async function bulkMoveTray() {
+  const tray = document.getElementById('bulk-tray-select').value;
+  if (!tray || !selectedTrackIds.size) return;
+  const ids = [...selectedTrackIds];
+  await Promise.all(ids.map(id => api('PUT', '/tracks/' + id, { tray }).catch(() => {})));
+  clearBulkSelection();
+  loadTracks();
+}
+
+// =================== PLAYBACK SETTINGS ===================
+async function savePlaybackSettings() {
+  const crossfade = document.getElementById('set-crossfade').value;
+  const autodj    = document.getElementById('set-autodj').checked ? '1' : '0';
+  await api('PUT', '/settings', { crossfade_time: crossfade, auto_dj: autodj });
+  const msg = document.getElementById('playback-settings-saved');
+  msg.style.display = 'inline'; setTimeout(() => { msg.style.display = 'none'; }, 2500);
+}
+
+// =================== QUICK APPROVE REQUEST ===================
+async function quickApprove(id) {
+  await updateRequest(id, 'approved');
+  await loadRequestsAdmin();
+}
+
+// =================== QUEUE DRAG-AND-DROP ===================
+function initQueueDragDrop(tbody) {
+  let dragSrc = null;
+  tbody.querySelectorAll('tr[draggable]').forEach(row => {
+    row.addEventListener('dragstart', e => { dragSrc = row; row.style.opacity = '0.4'; e.dataTransfer.effectAllowed = 'move'; });
+    row.addEventListener('dragend',   e => { row.style.opacity = '1'; });
+    row.addEventListener('dragover',  e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; row.style.background = 'rgba(212,168,67,0.06)'; });
+    row.addEventListener('dragleave', e => { row.style.background = ''; });
+    row.addEventListener('drop',      e => {
+      e.stopPropagation(); row.style.background = '';
+      if (dragSrc !== row) {
+        const rows = [...tbody.querySelectorAll('tr')];
+        const fromIdx = rows.indexOf(dragSrc);
+        const toIdx   = rows.indexOf(row);
+        if (fromIdx < toIdx) tbody.insertBefore(dragSrc, row.nextSibling);
+        else tbody.insertBefore(dragSrc, row);
+        saveDailyQueueOrder(tbody);
+      }
+    });
+  });
+}
+
+async function saveDailyQueueOrder(tbody) {
+  const ids = [...tbody.querySelectorAll('tr')].map(r => r.dataset.queueId).filter(Boolean);
+  try { await api('POST', '/daily-queue/reorder', { ids }); } catch(e) {}
 }
 </script>
 </body>

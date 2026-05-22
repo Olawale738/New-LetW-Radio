@@ -125,6 +125,11 @@ router.put('/tracks/:id', (req, res) => {
   res.json({ success: true });
 });
 
+router.get('/tracks/top-played', (req, res) => {
+  const limit = parseInt(req.query.limit, 10) || 10;
+  res.json(db.prepare(`SELECT id, title, artist, play_count FROM tracks ORDER BY play_count DESC LIMIT ?`).all(limit));
+});
+
 router.delete('/tracks/:id', (req, res) => {
   const track = db.prepare(`SELECT * FROM tracks WHERE id = ?`).get(req.params.id);
   if (!track) return res.status(404).json({ error: 'Not found' });
@@ -337,6 +342,18 @@ router.get('/daily-queue', (req, res) => {
   res.json(rows);
 });
 
+router.post('/daily-queue/reorder', (req, res) => {
+  // body: { date, order: [{id, position}] }
+  const { date, order } = req.body;
+  if (!Array.isArray(order)) return res.status(400).json({ error: 'order must be an array' });
+  const update = db.prepare(`UPDATE daily_queue SET position = ? WHERE id = ? AND date = ?`);
+  const doUpdate = db.transaction((rows) => {
+    for (const row of rows) update.run(row.position, row.id, date || getDateString());
+  });
+  doUpdate(order);
+  res.json({ success: true });
+});
+
 router.post('/daily-queue/generate', (req, res) => {
   const { date } = req.body;
   const targetDate = date || getDateString();
@@ -469,6 +486,8 @@ router.put('/requests/:id', (req, res) => {
   const { status } = req.body;
   if (!['pending','approved','played','rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
   db.prepare(`UPDATE requests SET status = ? WHERE id = ?`).run(status, req.params.id);
+  const updated = db.prepare(`SELECT * FROM requests WHERE id = ?`).get(req.params.id);
+  if (_io && updated) _io.emit('request:updated', updated);
   res.json({ success: true });
 });
 

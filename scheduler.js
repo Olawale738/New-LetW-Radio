@@ -155,6 +155,7 @@ function startScheduler(io) {
 
   audioEngine.on('historyAdd', (trackId) => {
     db.prepare(`INSERT INTO history (track_id) VALUES (?)`).run(trackId);
+    db.prepare(`UPDATE tracks SET play_count = play_count + 1 WHERE id = ?`).run(trackId);
   });
 
   audioEngine.on('queueEmpty', () => {

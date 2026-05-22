@@ -963,6 +963,15 @@
     }
     .req-toast.visible { display: block; animation: msg-in 0.3s ease-out; }
 
+    /* ── Sleep Ring ──────────────────────────────────────────── */
+    .sleep-ring-wrap { position: relative; width: 38px; height: 38px; cursor: pointer; }
+    .sleep-ring-wrap svg { position: absolute; inset: 0; transform: rotate(-90deg); pointer-events: none; }
+    .sleep-ring-track { fill: none; stroke: rgba(212,168,67,0.15); stroke-width: 3; }
+    .sleep-ring-fill  { fill: none; stroke: var(--gold); stroke-width: 3; stroke-linecap: round;
+                        stroke-dasharray: 100; stroke-dashoffset: 100; transition: stroke-dashoffset 1s linear; }
+    .sleep-ring-label { position: absolute; inset: 0; display: flex; align-items: center;
+                        justify-content: center; font-size: 14px; }
+
     /* ── Sleep Menu ───────────────────────────────────────────── */
     .sleep-wrap { position: relative; }
     .sleep-menu {
@@ -1063,6 +1072,12 @@
       padding: 4px 8px;
     }
 
+    /* ── Request Status Toast ────────────────────────────────── */
+    #req-status-toast.visible { opacity:1; transform:translateX(-50%) translateY(0); }
+
+    /* ── Favourite Button ────────────────────────────────────── */
+    .fav-btn.active { color: var(--live-red); }
+
     /* ── Responsive ───────────────────────────────────────────── */
     @media (max-width: 768px) {
       #main-row { flex-direction: column; align-items: center; }
@@ -1150,10 +1165,13 @@
             <span id="play-icon">▶</span>
           </button>
 
+          <button class="icon-btn fav-btn" id="fav-btn" onclick="toggleFavourite()" title="Favourite">🤍</button>
+
           <div class="sleep-wrap">
-            <button class="icon-btn" id="sleep-btn" onclick="toggleSleepMenu()" title="Sleep Timer">
-              <span id="sleep-icon">💤</span>
-            </button>
+            <div class="sleep-ring-wrap" id="sleep-btn" onclick="toggleSleepMenu()" title="Sleep Timer">
+              <svg viewBox="0 0 36 36"><circle class="sleep-ring-track" cx="18" cy="18" r="16"/><circle class="sleep-ring-fill" id="sleep-ring" cx="18" cy="18" r="16"/></svg>
+              <span class="sleep-ring-label" id="sleep-icon">💤</span>
+            </div>
             <div class="sleep-menu" id="sleep-menu">
               <button onclick="setSleepTimer(15)">⏱ 15 minutes</button>
               <button onclick="setSleepTimer(30)">⏱ 30 minutes</button>
@@ -1260,6 +1278,12 @@
         <div class="schedule-list" id="schedule-list">
           <div style="font-size:12px;color:var(--text-dim);text-align:center;padding:20px;">Loading schedule...</div>
         </div>
+        <div id="next-program-wrap" style="display:none;margin-top:14px;padding:10px 12px;background:rgba(212,168,67,0.05);border:1px solid rgba(212,168,67,0.12);border-radius:10px;">
+          <div style="font-size:9px;letter-spacing:2px;color:var(--text-dim);text-transform:uppercase;margin-bottom:4px;">Next Program</div>
+          <div id="next-program-name" style="font-size:12px;color:var(--text);margin-bottom:2px;"></div>
+          <div id="next-program-countdown" style="font-size:18px;font-family:'Cinzel',serif;color:var(--gold);font-weight:700;"></div>
+        </div>
+
         <div class="onair-section-title" style="margin-top:14px;">Recently Played</div>
         <div id="recently-played-list">
           <div style="font-size:11px;color:var(--text-dim);text-align:center;padding:12px;">Loading...</div>
@@ -1301,6 +1325,16 @@
   <div class="install-text"><strong>Install LETW Radio</strong> — Listen offline, get live notifications</div>
   <button class="install-btn" onclick="installPWA()">Install App</button>
   <button class="install-dismiss" onclick="dismissInstall()">✕</button>
+</div>
+
+<!-- Request Status Toast -->
+<div id="req-status-toast" style="
+  position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(20px);
+  z-index:300;background:rgba(14,10,16,0.97);border:1px solid rgba(212,168,67,0.4);
+  border-radius:14px;padding:14px 20px;min-width:260px;max-width:340px;
+  box-shadow:0 12px 40px rgba(0,0,0,0.8);opacity:0;transition:opacity 0.3s,transform 0.3s;pointer-events:none;">
+  <div class="rst-status" style="font-size:13px;font-weight:700;color:var(--gold);margin-bottom:4px;"></div>
+  <div class="rst-text" style="font-size:12px;color:var(--text-muted);"></div>
 </div>
 
 <!-- Hidden audio element -->
@@ -1410,6 +1444,12 @@ socket.on('chat:reaction', ({ emoji }) => spawnFloatingEmoji(emoji));
 
 socket.on('ticker:update', ({ text, enabled }) => setTicker(text, enabled));
 
+socket.on('request:updated', ({ id, status, request_text }) => {
+  if (status === 'approved' || status === 'played') {
+    showRequestToast(status, request_text);
+  }
+});
+
 // ── Status helpers ────────────────────────────────────────────
 function applyStatus(data) {
   if (!data) return;
@@ -1444,6 +1484,7 @@ function updateTrackInfo(title, artist) {
   document.getElementById('track-artist').textContent = artist;
   document.getElementById('onair-title').textContent  = title;
   document.getElementById('onair-artist').textContent = artist;
+  updateFavBtn(title, artist);
   if ('mediaSession' in navigator) {
     navigator.mediaSession.metadata = new MediaMetadata({
       title, artist, album: 'LETW Radio',
@@ -1666,8 +1707,6 @@ function drawAnalyserBars() {
     analyser.getByteFrequencyData(data);
     ctx2d.clearRect(0, 0, W, H);
 
-    const color    = isLive ? '#e03060' : '#d4a843';
-    const colorDim = isLive ? 'rgba(224,48,96,0.25)' : 'rgba(212,168,67,0.25)';
     const barW = (W / bufLen) * 2.1;
     const gap  = 1.4;
 
@@ -1675,6 +1714,16 @@ function drawAnalyserBars() {
       const barH = (data[i] / 255) * H;
       if (barH < 1) continue;
       const x = i * (barW + gap);
+      let color, colorDim;
+      if (isLive) {
+        color = '#e03060'; colorDim = 'rgba(224,48,96,0.25)';
+      } else if (i < bufLen * 0.2) {
+        color = '#e05070'; colorDim = 'rgba(224,80,112,0.25)';
+      } else if (i < bufLen * 0.65) {
+        color = '#d4a843'; colorDim = 'rgba(212,168,67,0.25)';
+      } else {
+        color = '#c0a8d8'; colorDim = 'rgba(192,168,216,0.25)';
+      }
       ctx2d.shadowColor = color;
       ctx2d.shadowBlur  = 4;
       const g = ctx2d.createLinearGradient(0, H - barH, 0, H);
@@ -1725,6 +1774,15 @@ function setSleepTimer(minutes) {
   cancelSleepTimer();
   document.getElementById('sleep-menu').classList.remove('open');
   sleepEndTime = Date.now() + minutes * 60 * 1000;
+  const totalMs = minutes * 60 * 1000;
+
+  // Initialise ring
+  const ring = document.getElementById('sleep-ring');
+  const circumference = 2 * Math.PI * 16;
+  if (ring) {
+    ring.style.strokeDasharray  = circumference;
+    ring.style.strokeDashoffset = 0;
+  }
 
   sleepTick = setInterval(() => {
     const remaining = sleepEndTime - Date.now();
@@ -1744,6 +1802,12 @@ function setSleepTimer(minutes) {
     const s = Math.floor((remaining % 60000) / 1000);
     document.getElementById('sleep-icon').textContent =
       m + ':' + (s < 10 ? '0' : '') + s;
+    // Update ring progress
+    const ringEl = document.getElementById('sleep-ring');
+    if (ringEl) {
+      const progress = remaining / totalMs;
+      ringEl.style.strokeDashoffset = circumference * (1 - progress);
+    }
   }, 1000);
 
   document.getElementById('sleep-btn').classList.add('active');
@@ -1754,6 +1818,54 @@ function cancelSleepTimer() {
   sleepEndTime = null;
   document.getElementById('sleep-icon').textContent = '💤';
   document.getElementById('sleep-btn').classList.remove('active');
+  const ring = document.getElementById('sleep-ring');
+  if (ring) { ring.style.strokeDashoffset = 2 * Math.PI * 16; }
+}
+
+// ── Favourites ────────────────────────────────────────────────
+function loadFavourites() {
+  try { return JSON.parse(localStorage.getItem('letw_favourites') || '[]'); } catch(e) { return []; }
+}
+
+function saveFavourites(favs) {
+  localStorage.setItem('letw_favourites', JSON.stringify(favs));
+}
+
+function isFavourite(title, artist) {
+  return loadFavourites().some(f => f.title === title && f.artist === artist);
+}
+
+function toggleFavourite() {
+  const title  = document.getElementById('track-title').textContent;
+  const artist = document.getElementById('track-artist').textContent;
+  if (!title || title === 'LETW Radio') return;
+  let favs = loadFavourites();
+  if (isFavourite(title, artist)) {
+    favs = favs.filter(f => !(f.title === title && f.artist === artist));
+  } else {
+    favs.unshift({ title, artist, savedAt: Date.now() });
+    if (favs.length > 50) favs = favs.slice(0, 50);
+  }
+  saveFavourites(favs);
+  updateFavBtn(title, artist);
+}
+
+function updateFavBtn(title, artist) {
+  const btn = document.getElementById('fav-btn');
+  if (!btn) return;
+  const active = isFavourite(title, artist);
+  btn.textContent = active ? '❤️' : '🤍';
+  btn.classList.toggle('active', active);
+}
+
+// ── Request Status Toast ──────────────────────────────────────
+function showRequestToast(status, text) {
+  const wrap = document.getElementById('req-status-toast');
+  if (!wrap) return;
+  wrap.querySelector('.rst-status').textContent = status === 'played' ? '🎵 Now Playing Your Request!' : '✅ Request Approved!';
+  wrap.querySelector('.rst-text').textContent = text || '';
+  wrap.classList.add('visible');
+  setTimeout(() => wrap.classList.remove('visible'), 5000);
 }
 
 // ── Share / Copy Link ─────────────────────────────────────────
@@ -1768,14 +1880,15 @@ function copyListenLink() {
 }
 
 function shareStation() {
-  const url = window.location.origin + '/listen';
+  const url   = window.location.origin + '/listen';
+  const track = document.getElementById('track-title').textContent;
+  const text  = `🎙 Listening to LETW Radio${track && track !== 'LETW Radio' ? ' — ' + track : ''}\nTune in live at ${url}`;
   if (navigator.share) {
-    navigator.share({ title: 'LETW Radio — Listen Live', text: 'Tune in to LETW Online Radio', url }).catch(() => {});
+    navigator.share({ title: 'LETW Radio — Listen Live', text, url }).catch(() => {});
   } else {
-    navigator.clipboard.writeText(url).then(() => {
+    navigator.clipboard.writeText(text).then(() => {
       const b = document.getElementById('share-btn');
-      b.textContent = '✓';
-      setTimeout(() => { b.textContent = '🔗'; }, 2000);
+      b.textContent = '✓'; setTimeout(() => { b.textContent = '🔗'; }, 2000);
     });
   }
 }
@@ -1983,10 +2096,33 @@ async function loadSchedule() {
         '<div class="schedule-name">' + esc(row.content_name) + '</div>';
       list.appendChild(div);
     });
+    startNextProgramCountdown(today);
   } catch(e) {
     document.getElementById('schedule-list').innerHTML =
       '<div style="font-size:12px;color:var(--text-dim);text-align:center;padding:20px;">Could not load schedule.</div>';
   }
+}
+
+function startNextProgramCountdown(rows) {
+  if (window._countdownInterval) clearInterval(window._countdownInterval);
+  const now    = new Date();
+  const nowStr = now.toTimeString().slice(0, 5);
+  const next   = rows.find(r => r.start_time > nowStr);
+  if (!next) { document.getElementById('next-program-wrap').style.display = 'none'; return; }
+  document.getElementById('next-program-wrap').style.display = 'block';
+  document.getElementById('next-program-name').textContent = next.content_name || next.start_time;
+  function tick() {
+    const n = new Date();
+    const [h, m] = next.start_time.split(':').map(Number);
+    const target = new Date(n); target.setHours(h, m, 0, 0);
+    if (target <= n) { clearInterval(window._countdownInterval); return; }
+    const diff = target - n;
+    const hh = Math.floor(diff / 3600000), mm = Math.floor((diff % 3600000) / 60000), ss = Math.floor((diff % 60000) / 1000);
+    document.getElementById('next-program-countdown').textContent =
+      (hh ? hh + 'h ' : '') + mm + 'm ' + ss + 's';
+  }
+  tick();
+  window._countdownInterval = setInterval(tick, 1000);
 }
 
 async function loadRecentlyPlayed() {
