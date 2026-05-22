@@ -34,6 +34,8 @@ class AudioEngine extends EventEmitter {
     this.startTime   = null;
     this.pauseBuffer = null;
     this._listenerCount = 0;
+    this._watchdogTimer = null;
+    this._lastChunkTime = 0;
   }
 
   // ─── Scheduled-file clients (/stream) ──────────────────────────────────────
@@ -85,6 +87,8 @@ class AudioEngine extends EventEmitter {
   _writeToClient(id, audioChunk) {
     const client = this.clients.get(id);
     if (!client) return false;
+    // Backpressure protection: drop chunk if client socket has a large write backlog
+    if (client.res.writableLength > 512 * 1024) return false;
     try {
       if (!client.wantsIcy) {
         client.res.write(audioChunk);
@@ -109,6 +113,7 @@ class AudioEngine extends EventEmitter {
   }
 
   broadcast(chunk) {
+    this._lastChunkTime = Date.now();
     const dead = [];
     for (const [id] of this.clients) {
       if (!this._writeToClient(id, chunk)) dead.push(id);
@@ -169,6 +174,7 @@ class AudioEngine extends EventEmitter {
 
   stopLive() {
     this.isLive = false;
+    if (this._watchdogTimer) { clearInterval(this._watchdogTimer); this._watchdogTimer = null; }
     // Drain all connected live-stream HTTP clients gracefully
     for (const [, res] of this.liveClients) {
       try { res.end(); } catch (e) {}
@@ -252,11 +258,23 @@ class AudioEngine extends EventEmitter {
     };
 
     readAndBroadcast();
+
+    // Watchdog: detect stalled playback and restart
+    if (this._watchdogTimer) clearInterval(this._watchdogTimer);
+    this._watchdogTimer = setInterval(() => {
+      if (this.isPlaying && !this.isLive && Date.now() - this._lastChunkTime > 25000) {
+        console.log('[AudioEngine] Watchdog: stall detected, restarting track');
+        clearInterval(this._watchdogTimer);
+        this._watchdogTimer = null;
+        this.playNext();
+      }
+    }, 30000);
   }
 
   stop() {
     this.isPlaying = false;
     if (this.playbackTimer) { clearTimeout(this.playbackTimer); this.playbackTimer = null; }
+    if (this._watchdogTimer) { clearInterval(this._watchdogTimer); this._watchdogTimer = null; }
     this.queue = [];
     this.currentTrack = null;
     this.currentTrackInfo = null;
@@ -264,12 +282,11 @@ class AudioEngine extends EventEmitter {
   }
 
   skip() {
+    if (!this.isPlaying) return; // guard: avoid double-advance
     if (this.playbackTimer) clearTimeout(this.playbackTimer);
-    if (this.isPlaying) {
-      this.isPlaying = false;
-      this.emit('trackEnd', this.currentTrack);
-      this.playNext();
-    }
+    this.isPlaying = false;
+    this.emit('trackEnd', this.currentTrack);
+    this.playNext();
   }
 
   getStatus() {

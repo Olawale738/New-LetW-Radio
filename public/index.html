@@ -989,6 +989,36 @@
         </div>
       </div>
 
+      <!-- STATION CONTROLS + ANNOUNCEMENT ROW -->
+      <div class="grid-2" style="margin-top:20px;">
+
+        <!-- BROADCAST ANNOUNCEMENT -->
+        <div class="card">
+          <div class="card-header"><div class="card-title">📢 Broadcast Announcement</div></div>
+          <div style="padding:4px 0;">
+            <div style="font-size:11px;color:var(--text3);margin-bottom:10px;">Push a scrolling message to all listeners in real time.</div>
+            <input type="text" class="form-control" id="announce-text" placeholder="Type your announcement..." style="margin-bottom:8px;">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button class="btn btn-primary" style="flex:1;" onclick="broadcastAnnounce(true)">📡 Enable &amp; Broadcast</button>
+              <button class="btn btn-secondary" onclick="broadcastAnnounce(false)">✕ Clear</button>
+            </div>
+            <div id="announce-status" style="font-size:11px;color:#4caf82;margin-top:8px;display:none;">Sent to all listeners!</div>
+          </div>
+        </div>
+
+        <!-- ACTIVITY LOG -->
+        <div class="card">
+          <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;">
+            <div class="card-title">📋 Activity Log</div>
+            <button class="btn btn-secondary" style="padding:3px 10px;font-size:11px;" onclick="clearActivityLog()">Clear</button>
+          </div>
+          <div id="activity-log" style="max-height:180px;overflow-y:auto;font-size:11px;font-family:var(--mono);display:flex;flex-direction:column;gap:4px;">
+            <div style="color:var(--text3);font-style:italic;">Waiting for events...</div>
+          </div>
+        </div>
+
+      </div>
+
       <!-- LISTENERS CHART -->
       <div class="card" style="margin-top:20px;" id="listeners-chart-card">
         <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
@@ -1697,6 +1727,8 @@ socket.on('trackEnd', () => {});
 socket.on('listenerChange', (count) => {
   document.getElementById('listener-count').textContent = count;
   document.getElementById('stat-listeners').textContent = count;
+  const live = document.getElementById('live-listener-count');
+  if (live) live.textContent = count;
 });
 
 // =================== NAVIGATION ===================
@@ -2746,16 +2778,57 @@ function setLiveUIState(on) {
   }
 }
 
-// Keep live listener count in sync
-socket.on('listenerChange', count => {
-  const el = document.getElementById('live-listener-count');
-  if (el) el.textContent = count;
-});
-
 socket.on('request:new', () => {
   const badge = document.getElementById('community-badge');
   if (badge && state.currentPage !== 'community') badge.style.display = 'inline';
 });
+
+socket.on('live:ended', () => {
+  logActivity('⏹ Live broadcast ended');
+});
+
+// ── Activity Log ──────────────────────────────────────────────────────────────
+function logActivity(msg) {
+  const log = document.getElementById('activity-log');
+  if (!log) return;
+  const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const row = document.createElement('div');
+  row.style.cssText = 'color:var(--text2);padding:3px 0;border-bottom:1px solid rgba(212,168,67,0.06);animation:fadeIn 0.3s ease-out;';
+  row.innerHTML = `<span style="color:rgba(212,168,67,0.4);margin-right:8px;">${now}</span>${esc(msg)}`;
+  // Remove placeholder
+  const placeholder = log.querySelector('div[style*="italic"]');
+  if (placeholder) placeholder.remove();
+  log.insertBefore(row, log.firstChild);
+  // Keep max 40 entries
+  while (log.children.length > 40) log.removeChild(log.lastChild);
+}
+
+function clearActivityLog() {
+  const log = document.getElementById('activity-log');
+  if (log) log.innerHTML = '<div style="color:var(--text3);font-style:italic;">Cleared.</div>';
+}
+
+// ── Broadcast Announcement ────────────────────────────────────────────────────
+async function broadcastAnnounce(enable) {
+  const text = (document.getElementById('announce-text') || {}).value || '';
+  try {
+    await apiFetch('/api/ticker', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: enable ? text : '', enabled: enable }),
+    });
+    const status = document.getElementById('announce-status');
+    if (status) {
+      status.textContent = enable ? 'Sent to all listeners!' : 'Ticker cleared.';
+      status.style.display = 'block';
+      setTimeout(() => { status.style.display = 'none'; }, 3000);
+    }
+    if (enable) logActivity(`📢 Announcement sent: "${text}"`);
+    else logActivity('📢 Ticker cleared');
+  } catch(e) {
+    alert('Failed: ' + e.message);
+  }
+}
 
 // ── apiFetch helper (wraps native fetch for community functions) ──────────────
 const apiFetch = (path, opts = {}) => fetch(path, opts);

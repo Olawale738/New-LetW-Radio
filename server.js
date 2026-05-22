@@ -6,14 +6,16 @@ const cors = require('cors');
 
 const db = require('./db');
 const audioEngine = require('./audioEngine');
-const { startScheduler } = require('./scheduler');
+const { startScheduler, getDateString } = require('./scheduler');
 const apiRoutes = require('./routes/api');
 const webpush = require('web-push');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: '*', methods: ['GET', 'POST'] }
+  cors: { origin: '*', methods: ['GET', 'POST'] },
+  pingTimeout: 20000,
+  pingInterval: 10000,
 });
 
 const PORT = process.env.PORT || 3000;
@@ -255,6 +257,20 @@ app.use('/api', apiRoutes);
 const { setIo } = require('./routes/api');
 setIo(io);
 
+// Auto-fill with random tracks when queue runs dry
+audioEngine.on('queueEmpty', () => {
+  try {
+    const fillerTracks = db.prepare(`SELECT * FROM tracks ORDER BY RANDOM() LIMIT 30`).all();
+    if (fillerTracks.length > 0) {
+      console.log(`[AutoFiller] Queue empty — loading ${fillerTracks.length} random tracks`);
+      audioEngine.setQueue(fillerTracks);
+      audioEngine.playNext();
+    }
+  } catch(e) {
+    console.error('[AutoFiller] Error:', e.message);
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 📻  SCHEDULED AUDIO STREAM  /stream
 // Supports plain browsers AND ICY-aware clients (VLC, Winamp, RadioApp etc.)
@@ -265,6 +281,12 @@ app.get('/stream', (req, res) => {
   const settings = getSettings();
   console.log(`[Stream] Client connected: ${clientId} | ICY: ${wantsIcy}`);
   audioEngine.addClient(clientId, res, wantsIcy, settings);
+
+  // Send keep-alive comment every 15s to prevent proxy/CDN timeouts
+  const kaTimer = setInterval(() => {
+    try { res.write(Buffer.alloc(0)); } catch(e) { clearInterval(kaTimer); }
+  }, 15000);
+  res.on('close', () => clearInterval(kaTimer));
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -809,6 +831,14 @@ audioEngine.on('liveStop',       ()      => { io.emit('live:ended');          io
 // ─────────────────────────────────────────────────────────────────────────────
 // START SERVER
 // ─────────────────────────────────────────────────────────────────────────────
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught exception:', err.message, err.stack);
+  // Do NOT exit — keep the server running
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] Unhandled rejection:', reason);
+});
+
 db.init().then(() => {
   server.listen(PORT, () => {
     console.log(`\n🎙️  LETW Radio is running!\n`);
@@ -841,6 +871,28 @@ db.init().then(() => {
     const count = audioEngine._listenerCount || 0;
     db.prepare('INSERT INTO listener_stats (count) VALUES (?)').run(count);
     db.prepare('DELETE FROM listener_stats WHERE recorded_at < datetime("now", "-2 days")').run();
+  }, 60000);
+
+  // Health check: auto-restart playback if radio has stopped unexpectedly
+  setInterval(() => {
+    if (!audioEngine.isLive && !audioEngine.isPlaying) {
+      try {
+        const date = getDateString();
+        const tracks = db.prepare(`SELECT dq.*, t.title, t.artist, t.file_path, t.duration, t.bitrate FROM daily_queue dq JOIN tracks t ON t.id = dq.track_id WHERE dq.date = ? AND dq.played = 0 ORDER BY dq.position`).all(date);
+        if (tracks.length > 0) {
+          console.log('[HealthCheck] Radio was stopped — restarting from daily queue');
+          audioEngine.setQueue(tracks);
+          audioEngine.playNext();
+        } else {
+          const fillers = db.prepare(`SELECT * FROM tracks ORDER BY RANDOM() LIMIT 20`).all();
+          if (fillers.length > 0) {
+            console.log('[HealthCheck] Radio was stopped — loading filler tracks');
+            audioEngine.setQueue(fillers);
+            audioEngine.playNext();
+          }
+        }
+      } catch(e) {}
+    }
   }, 60000);
 }).catch(err => {
   console.error('Failed to initialize database:', err);
