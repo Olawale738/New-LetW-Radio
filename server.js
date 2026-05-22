@@ -779,8 +779,7 @@ io.on('connection', (socket) => {
     const { title, artist } = data || {};
     console.log(`[Live] Admin started live broadcast: "${title}"`);
     audioEngine.startLive(title, artist);
-    io.emit('live:started', { title: audioEngine.liveTitle, artist: audioEngine.liveArtist });
-    io.emit('status', audioEngine.getStatus());
+    // live:started is broadcast by audioEngine.on('liveStart') below — no double emit
   });
 
   // Admin streams an audio chunk (ArrayBuffer sent as binary)

@@ -145,6 +145,10 @@ class AudioEngine extends EventEmitter {
       'Transfer-Encoding': 'chunked',
       'Access-Control-Allow-Origin': '*',
     });
+    // Send the stored WebM init segment so late-joining listeners can decode
+    if (this.liveInitChunk) {
+      try { res.write(this.liveInitChunk); } catch (e) {}
+    }
     this.liveClients.set(id, res);
     this._updateListeners();
 
@@ -155,6 +159,14 @@ class AudioEngine extends EventEmitter {
   }
 
   broadcastLive(chunk) {
+    // Accumulate first 3 chunks as the WebM init segment for late joiners
+    this._liveChunkCount = (this._liveChunkCount || 0) + 1;
+    if (this._liveChunkCount <= 3) {
+      this.liveInitChunk = this.liveInitChunk
+        ? Buffer.concat([this.liveInitChunk, chunk])
+        : Buffer.from(chunk);
+    }
+
     const dead = [];
     for (const [id, res] of this.liveClients) {
       try { res.write(chunk); } catch (e) { dead.push(id); }
@@ -164,9 +176,11 @@ class AudioEngine extends EventEmitter {
   }
 
   startLive(title, artist) {
-    this.isLive     = true;
-    this.liveTitle  = title  || 'Live Broadcast';
-    this.liveArtist = artist || 'Light Encounter Tabernacle Worldwide';
+    this.isLive          = true;
+    this.liveTitle       = title  || 'Live Broadcast';
+    this.liveArtist      = artist || 'Light Encounter Tabernacle Worldwide';
+    this.liveInitChunk   = null;   // reset init segment for new session
+    this._liveChunkCount = 0;
     // Pause file playback so the scheduled stream goes silent
     if (this.playbackTimer) { clearTimeout(this.playbackTimer); this.playbackTimer = null; }
     this.emit('liveStart', { title: this.liveTitle, artist: this.liveArtist });

@@ -1475,7 +1475,21 @@ function switchToLiveMode(info) {
   if (info && (info.title || info.artist)) {
     updateTrackInfo(info.title || 'Live Broadcast', info.artist || 'LETW Radio');
   }
-  if (isPlaying) reconnectAudio(LIVE_URL);
+  // Give server 600ms to accept the first chunks before listeners connect
+  setTimeout(() => {
+    if (isPlaying) {
+      reconnectAudio(LIVE_URL);
+    } else {
+      // Auto-start the live stream for listeners who weren't playing
+      audio.src = LIVE_URL;
+      audio.load();
+      audio.play().catch(() => {
+        // Autoplay blocked by browser policy — update button so user can tap once
+        document.getElementById('play-icon').textContent = '▶';
+        document.getElementById('play-btn').classList.remove('playing');
+      });
+    }
+  }, 600);
 }
 
 function exitLiveMode() {
