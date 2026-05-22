@@ -1238,6 +1238,26 @@
             </div>
           </div>
 
+          <!-- Monitor (hear yourself) -->
+          <div style="margin-bottom:16px;padding:12px 14px;background:rgba(212,168,67,0.04);border:1px solid rgba(212,168,67,0.15);border-radius:10px;">
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+              <button id="btn-monitor" onclick="toggleMonitor()"
+                style="background:rgba(255,255,255,0.05);border:1px solid rgba(212,168,67,0.3);color:var(--text2);border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;letter-spacing:0.5px;cursor:pointer;font-family:inherit;transition:all 0.2s;white-space:nowrap;">
+                🎧 Monitor: OFF
+              </button>
+              <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:120px;">
+                <span style="font-size:11px;color:var(--text3);white-space:nowrap;">Vol</span>
+                <input type="range" id="monitor-vol" min="0" max="100" value="80"
+                  oninput="setMonitorVolume(this.value)"
+                  style="flex:1;accent-color:var(--gold);cursor:pointer;">
+                <span id="monitor-vol-display" style="font-size:11px;color:var(--text3);width:30px;">80%</span>
+              </div>
+            </div>
+            <div style="font-size:10px;color:rgba(212,168,67,0.45);margin-top:8px;letter-spacing:0.3px;">
+              ⚠ Use headphones when monitoring — speakers will cause feedback echo.
+            </div>
+          </div>
+
           <!-- Go Live / Stop buttons -->
           <div style="display:flex;gap:10px;flex-wrap:wrap;">
             <button class="btn" id="btn-go-live" onclick="startLiveBroadcast()"
@@ -2617,6 +2637,10 @@ let liveMicAnalyser   = null;
 let liveMicCtx        = null;
 let liveMicRAF        = null;
 let liveTimerInterval = null;
+let monitorGainNode   = null;
+let monitorSourceNode = null;
+let monitorActive     = false;
+let monitorCtx        = null;
 let liveStartTime     = null;
 let livePageInited    = false;
 
@@ -2724,6 +2748,74 @@ function stopLiveBroadcast() {
   socket.emit('live:stop');
 
   setLiveUIState(false);
+  // Stop monitor when broadcast stops
+  if (monitorActive) stopMonitor();
+}
+
+// ── Monitor (hear yourself while live) ───────────────────────────────────────
+async function toggleMonitor() {
+  if (monitorActive) {
+    stopMonitor();
+  } else {
+    await startMonitor();
+  }
+}
+
+async function startMonitor() {
+  try {
+    // Use the existing mic stream if already live; otherwise open a fresh one
+    let stream = liveMicStream;
+    if (!stream) {
+      const micId = document.getElementById('live-mic-select').value;
+      if (!micId) { alert('Select a microphone first.'); return; }
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { deviceId: { exact: micId }, echoCancellation: false, noiseSuppression: false }
+      });
+      // Store so we can stop these tracks when monitor is turned off
+      monitorCtx = stream;
+    }
+
+    const ctx  = liveMicCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (!liveMicCtx) liveMicCtx = ctx;
+    if (ctx.state === 'suspended') await ctx.resume();
+
+    monitorSourceNode = ctx.createMediaStreamSource(stream);
+    monitorGainNode   = ctx.createGain();
+    const vol = parseInt(document.getElementById('monitor-vol').value, 10) / 100;
+    monitorGainNode.gain.value = vol;
+    monitorSourceNode.connect(monitorGainNode);
+    monitorGainNode.connect(ctx.destination);
+
+    monitorActive = true;
+    const btn = document.getElementById('btn-monitor');
+    btn.textContent = '🎧 Monitor: ON';
+    btn.style.background    = 'rgba(212,168,67,0.15)';
+    btn.style.borderColor   = 'rgba(212,168,67,0.6)';
+    btn.style.color         = 'var(--gold)';
+  } catch(e) {
+    alert('Could not start monitor: ' + e.message);
+  }
+}
+
+function stopMonitor() {
+  if (monitorSourceNode) { try { monitorSourceNode.disconnect(); } catch(e) {} monitorSourceNode = null; }
+  if (monitorGainNode)   { try { monitorGainNode.disconnect(); }   catch(e) {} monitorGainNode = null; }
+  // If we opened a dedicated monitor stream (not the live stream), close it
+  if (monitorCtx && monitorCtx !== liveMicStream) {
+    monitorCtx.getTracks && monitorCtx.getTracks().forEach(t => t.stop());
+  }
+  monitorCtx    = null;
+  monitorActive = false;
+  const btn = document.getElementById('btn-monitor');
+  btn.textContent = '🎧 Monitor: OFF';
+  btn.style.background  = 'rgba(255,255,255,0.05)';
+  btn.style.borderColor = 'rgba(212,168,67,0.3)';
+  btn.style.color       = 'var(--text2)';
+}
+
+function setMonitorVolume(val) {
+  document.getElementById('monitor-vol-display').textContent = val + '%';
+  if (monitorGainNode) monitorGainNode.gain.value = parseInt(val, 10) / 100;
 }
 
 function animateMicLevel() {
