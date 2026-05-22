@@ -8,6 +8,7 @@ const db = require('./db');
 const audioEngine = require('./audioEngine');
 const { startScheduler } = require('./scheduler');
 const apiRoutes = require('./routes/api');
+const webpush = require('web-push');
 
 const app = express();
 const server = http.createServer(app);
@@ -249,6 +250,10 @@ app.get('/listen', (req, res) => {
 
 // API routes
 app.use('/api', apiRoutes);
+
+// Wire socket.io into the API router so routes can emit events
+const { setIo } = require('./routes/api');
+setIo(io);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 📻  SCHEDULED AUDIO STREAM  /stream
@@ -774,6 +779,10 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {});
+
+  socket.on('chat:reaction', (emoji) => {
+    io.emit('chat:reaction', { emoji, ts: Date.now() });
+  });
 });
 
 audioEngine.on('trackStart', (track) => {
@@ -782,7 +791,19 @@ audioEngine.on('trackStart', (track) => {
 });
 audioEngine.on('trackEnd',       (track) => { io.emit('trackEnd', track); });
 audioEngine.on('listenerChange', (count) => { io.emit('listenerChange', count); });
-audioEngine.on('liveStart',      (info)  => { io.emit('live:started', info); io.emit('status', audioEngine.getStatus()); });
+audioEngine.on('liveStart', async (info) => {
+  io.emit('live:started', info);
+  io.emit('status', audioEngine.getStatus());
+  const subs = db.prepare('SELECT * FROM push_subscriptions').all();
+  const payload = JSON.stringify({ title: 'LETW Radio — LIVE', body: info.title || 'Live broadcast started', icon: '/logo.png', url: '/listen' });
+  for (const sub of subs) {
+    try {
+      await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, payload);
+    } catch (e) {
+      if (e.statusCode === 410) db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(sub.endpoint);
+    }
+  }
+});
 audioEngine.on('liveStop',       ()      => { io.emit('live:ended');          io.emit('status', audioEngine.getStatus()); });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -799,6 +820,28 @@ db.init().then(() => {
     console.log(`📊  Admin panel : http://localhost:${PORT}\n`);
   });
   startScheduler(io);
+
+  // Generate VAPID keys once on first run
+  (async function setupVapid() {
+    const pub = db.prepare('SELECT value FROM settings WHERE key = ?').get('vapid_public');
+    if (!pub || !pub.value) {
+      const keys = webpush.generateVAPIDKeys();
+      db.prepare('INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)').run('vapid_public', keys.publicKey);
+      db.prepare('INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)').run('vapid_private', keys.privateKey);
+      webpush.setVapidDetails('mailto:radio@letw.org', keys.publicKey, keys.privateKey);
+      console.log('[Push] VAPID keys generated');
+    } else {
+      const priv = db.prepare('SELECT value FROM settings WHERE key = ?').get('vapid_private');
+      if (priv && priv.value) webpush.setVapidDetails('mailto:radio@letw.org', pub.value, priv.value);
+    }
+  })();
+
+  // Record listener count every 60 seconds for analytics
+  setInterval(() => {
+    const count = audioEngine._listenerCount || 0;
+    db.prepare('INSERT INTO listener_stats (count) VALUES (?)').run(count);
+    db.prepare('DELETE FROM listener_stats WHERE recorded_at < datetime("now", "-2 days")').run();
+  }, 60000);
 }).catch(err => {
   console.error('Failed to initialize database:', err);
   process.exit(1);

@@ -8,6 +8,13 @@ const db = require('../db');
 const audioEngine = require('../audioEngine');
 const { buildDailyQueue, scheduleBreaks, getDateString } = require('../scheduler');
 
+// ── io reference (set by server.js after socket server is ready) ─────────────
+let _io = null;
+function setIo(ioInstance) { _io = ioInstance; }
+
+// ── Chat rate-limit: IP -> last message timestamp ────────────────────────────
+const chatRateMap = new Map();
+
 // --- MULTER SETUP ---
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -411,4 +418,110 @@ router.post('/player/skip', (req, res) => {
   res.json({ success: true });
 });
 
+// ==================== CHAT ====================
+router.get('/chat', (req, res) => {
+  res.json(db.prepare(`SELECT * FROM chat_messages ORDER BY id ASC LIMIT 80`).all());
+});
+
+router.post('/chat', (req, res) => {
+  const ip = req.ip || req.connection.remoteAddress || 'unknown';
+  const now = Date.now();
+  if (now - (chatRateMap.get(ip) || 0) < 2000) return res.status(429).json({ error: 'Rate limit: 1 message per 2 seconds' });
+  chatRateMap.set(ip, now);
+  const { username, message, type, color } = req.body;
+  if (!username || !message) return res.status(400).json({ error: 'username and message are required' });
+  db.prepare(`INSERT INTO chat_messages (username, message, type, color) VALUES (?, ?, ?, ?)`)
+    .run(username.slice(0,50), message.slice(0,500), type || 'message', color || '#d4a843');
+  const inserted = db.prepare(`SELECT * FROM chat_messages ORDER BY id DESC LIMIT 1`).get();
+  if (_io) _io.emit('chat:message', inserted);
+  res.json(inserted);
+});
+
+router.delete('/chat/all', (req, res) => {
+  db.prepare(`DELETE FROM chat_messages`).run();
+  if (_io) _io.emit('chat:cleared');
+  res.json({ success: true });
+});
+
+router.delete('/chat/:id', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  db.prepare(`DELETE FROM chat_messages WHERE id = ?`).run(id);
+  if (_io) _io.emit('chat:deleted', { id });
+  res.json({ success: true });
+});
+
+// ==================== REQUESTS ====================
+router.get('/requests', (req, res) => {
+  res.json(db.prepare(`SELECT * FROM requests ORDER BY created_at DESC`).all());
+});
+
+router.post('/requests', (req, res) => {
+  const { username, request_type, request_text, dedicated_to } = req.body;
+  if (!username || !request_text) return res.status(400).json({ error: 'username and request_text are required' });
+  db.prepare(`INSERT INTO requests (username, request_type, request_text, dedicated_to) VALUES (?, ?, ?, ?)`)
+    .run(username.slice(0,50), (request_type||'song').slice(0,20), request_text.slice(0,1000), (dedicated_to||'').slice(0,100));
+  const inserted = db.prepare(`SELECT * FROM requests ORDER BY id DESC LIMIT 1`).get();
+  if (_io) _io.emit('request:new', inserted);
+  res.json(inserted);
+});
+
+router.put('/requests/:id', (req, res) => {
+  const { status } = req.body;
+  if (!['pending','approved','played','rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+  db.prepare(`UPDATE requests SET status = ? WHERE id = ?`).run(status, req.params.id);
+  res.json({ success: true });
+});
+
+router.delete('/requests/:id', (req, res) => {
+  db.prepare(`DELETE FROM requests WHERE id = ?`).run(req.params.id);
+  res.json({ success: true });
+});
+
+// ==================== TICKER ====================
+router.get('/ticker', (req, res) => {
+  const t = db.prepare(`SELECT value FROM settings WHERE key = 'ticker_text'`).get();
+  const e = db.prepare(`SELECT value FROM settings WHERE key = 'ticker_enabled'`).get();
+  res.json({ text: t ? t.value : '', enabled: e ? e.value === '1' : false });
+});
+
+router.put('/ticker', (req, res) => {
+  const { text, enabled } = req.body;
+  db.prepare(`INSERT OR REPLACE INTO settings (key,value) VALUES ('ticker_text',?)`).run(String(text||''));
+  db.prepare(`INSERT OR REPLACE INTO settings (key,value) VALUES ('ticker_enabled',?)`).run(enabled ? '1' : '0');
+  const payload = { text: String(text||''), enabled: !!enabled };
+  if (_io) _io.emit('ticker:update', payload);
+  res.json(payload);
+});
+
+// ==================== ANALYTICS ====================
+router.get('/analytics/listeners', (req, res) => {
+  res.json(db.prepare(`SELECT * FROM listener_stats ORDER BY recorded_at ASC LIMIT 1440`).all());
+});
+
+// ==================== PUSH ====================
+router.post('/push/subscribe', (req, res) => {
+  const { endpoint, p256dh, auth } = req.body;
+  if (!endpoint || !p256dh || !auth) return res.status(400).json({ error: 'endpoint, p256dh and auth are required' });
+  db.prepare(`INSERT OR REPLACE INTO push_subscriptions (endpoint, p256dh, auth) VALUES (?,?,?)`).run(endpoint, p256dh, auth);
+  res.json({ success: true });
+});
+
+router.delete('/push/subscribe', (req, res) => {
+  const { endpoint } = req.body;
+  if (!endpoint) return res.status(400).json({ error: 'endpoint is required' });
+  db.prepare(`DELETE FROM push_subscriptions WHERE endpoint = ?`).run(endpoint);
+  res.json({ success: true });
+});
+
+router.get('/push/vapid-public', (req, res) => {
+  const row = db.prepare(`SELECT value FROM settings WHERE key = 'vapid_public'`).get();
+  res.json({ publicKey: row ? row.value : '' });
+});
+
+router.get('/push/subscribers/count', (req, res) => {
+  const row = db.prepare(`SELECT COUNT(*) as count FROM push_subscriptions`).get();
+  res.json({ count: row ? row.count : 0 });
+});
+
 module.exports = router;
+module.exports.setIo = setIo;

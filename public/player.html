@@ -3,802 +3,2027 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>LETW Radio — Light Encounter Tabernacle Worldwide</title>
-  <meta name="description" content="Listen live to Light Encounter Tabernacle Worldwide Radio — worship, sermons and messages.">
-
-  <!-- PWA -->
-  <meta name="application-name" content="LETW Radio">
+  <meta name="theme-color" content="#070508">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="LETW Radio">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="theme-color" content="#d4a843">
-
-  <!-- Open Graph -->
-  <meta property="og:title" content="LETW Radio — Live Broadcast">
-  <meta property="og:description" content="Live worship, sermons and messages from Light Encounter Tabernacle Worldwide">
-  <meta property="og:image" content="/logo.png">
-  <meta property="og:url" content="https://radio.letw.org/listen">
-  <meta property="og:type" content="website">
-
+  <meta name="description" content="Light Encounter Tabernacle Worldwide — Listen Live to Gospel Radio">
+  <title>LETW Radio — Listen Live</title>
+  <link rel="manifest" href="/manifest.json">
   <link rel="icon" href="/logo.png" type="image/png">
   <link rel="apple-touch-icon" href="/logo.png">
-  <link rel="manifest" href="/manifest.json">
-
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Lato:wght@300;400;700&family=Space+Mono&display=swap" rel="stylesheet">
-  <script src="/socket.io/socket.io.js"></script>
-
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Lato:wght@300;400;700;900&display=swap" rel="stylesheet">
   <style>
+    /* ── Reset & Base ─────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
     :root {
-      --gold:#d4a843; --gold2:#f0c85a; --gold3:#8b6914;
-      --dark:#070508; --dark2:#0e0a0f; --dark3:#150f18;
-      --text:#f5f0ff; --text2:#c0a8d8; --text3:#7a5a9a;
-      --live:#e05070; --live2:#ff6b8a;
-      --radius:16px;
+      --bg-deep:    #070508;
+      --bg-mid:     #0e0a0f;
+      --bg-card:    rgba(16, 10, 18, 0.97);
+      --bg-panel:   rgba(12, 8, 14, 0.98);
+      --gold:       #d4a843;
+      --gold-light: #f0c85a;
+      --gold-dark:  #8b6914;
+      --gold-dim:   rgba(212,168,67,0.15);
+      --text:       #f5f0ff;
+      --text-muted: #c0a8d8;
+      --text-dim:   rgba(192,168,216,0.45);
+      --live-red:   #e03060;
+      --border:     rgba(212,168,67,0.18);
+      --border-mid: rgba(212,168,67,0.35);
+      --radius:     16px;
+      --radius-sm:  10px;
     }
-    *{box-sizing:border-box;margin:0;padding:0;}
-    html,body{height:100%;font-family:'Lato',sans-serif;background:var(--dark);color:var(--text);overflow:hidden;}
 
-    /* ── CINEMATIC BACKGROUND ── */
-    .bg-canvas{position:fixed;inset:0;z-index:0;pointer-events:none;}
-    .bg-glow{
-      position:fixed;inset:0;z-index:0;pointer-events:none;
+    html, body {
+      height: 100%;
+      background: var(--bg-deep);
+      color: var(--text);
+      font-family: 'Lato', sans-serif;
+      overflow-x: hidden;
+    }
+
+    body {
+      min-height: 100vh;
       background:
-        radial-gradient(ellipse 70% 50% at 50% -5%, rgba(212,168,67,0.12) 0%,transparent 65%),
-        radial-gradient(ellipse 45% 60% at 10% 110%, rgba(139,105,20,0.10) 0%,transparent 55%),
-        radial-gradient(ellipse 45% 60% at 90% 110%, rgba(139,105,20,0.08) 0%,transparent 55%),
-        linear-gradient(180deg,#070508 0%,#0e0a0f 60%,#130d10 100%);
-    }
-    /* Animated floating particles */
-    .particles{position:fixed;inset:0;z-index:1;pointer-events:none;overflow:hidden;}
-    .p{position:absolute;border-radius:50%;animation:floatUp linear infinite;}
-    @keyframes floatUp{0%{transform:translateY(0) scale(1);opacity:0;}15%{opacity:1;}85%{opacity:.4;}100%{transform:translateY(-110vh) scale(.3);opacity:0;}}
-
-    /* Gold rays from bottom */
-    .rays{position:fixed;bottom:-10%;left:50%;transform:translateX(-50%);z-index:1;pointer-events:none;width:900px;height:500px;}
-    .ray{position:absolute;bottom:0;width:1px;background:linear-gradient(to top,transparent,rgba(212,168,67,0.06),rgba(212,168,67,0.02),transparent);transform-origin:bottom center;animation:rayPulse 8s ease-in-out infinite;}
-    @keyframes rayPulse{0%,100%{opacity:0;}50%{opacity:1;}}
-
-    /* Pulse rings (behind card) */
-    .rings-container{position:fixed;top:48%;left:50%;transform:translate(-50%,-50%);z-index:1;pointer-events:none;}
-    .ring{position:absolute;border-radius:50%;border:1px solid rgba(212,168,67,0.06);top:50%;left:50%;transform:translate(-50%,-50%);animation:ringExpand 5s ease-in-out infinite;}
-    @keyframes ringExpand{0%,100%{opacity:0.4;transform:translate(-50%,-50%) scale(1);}50%{opacity:0.8;transform:translate(-50%,-50%) scale(1.03);}}
-    .ring.r1{width:420px;height:420px;animation-delay:0s;}
-    .ring.r2{width:600px;height:600px;animation-delay:1s;}
-    .ring.r3{width:800px;height:800px;animation-delay:2s;}
-    .ring.r4{width:1020px;height:1020px;animation-delay:3s;}
-    .rings-container.playing .ring{animation-duration:2.5s;border-color:rgba(212,168,67,0.12);}
-    .rings-container.live-mode .ring{border-color:rgba(224,80,112,0.15);animation-duration:2s;}
-
-    /* ── PAGE LAYOUT ── */
-    .page{
-      position:relative;z-index:10;
-      height:100vh;display:flex;flex-direction:column;
-      align-items:center;justify-content:center;
-      padding:16px 16px env(safe-area-inset-bottom) 16px;
-      padding-top:calc(16px + env(safe-area-inset-top));
-      overflow-y:auto;
+        radial-gradient(ellipse 60% 40% at 20% 80%, rgba(139,105,20,0.12) 0%, transparent 60%),
+        radial-gradient(ellipse 50% 35% at 80% 20%, rgba(212,168,67,0.08) 0%, transparent 60%),
+        var(--bg-deep);
     }
 
-    /* ── PLAYER CARD ── */
-    .player-card{
-      width:100%;max-width:500px;
-      background:linear-gradient(160deg,rgba(21,15,24,0.97) 0%,rgba(10,8,12,0.99) 100%);
-      border:1px solid rgba(212,168,67,0.22);
-      border-radius:24px;
-      padding:0;
-      box-shadow:
-        0 0 0 1px rgba(212,168,67,0.06),
-        0 40px 100px rgba(0,0,0,0.9),
-        inset 0 1px 0 rgba(255,255,255,0.05);
-      backdrop-filter:blur(24px);
-      overflow:hidden;
+    /* ── Ticker Bar ───────────────────────────────────────────── */
+    #ticker-bar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 200;
+      background: linear-gradient(90deg, #1a0f00, rgba(26,15,0,0.97), #1a0f00);
+      border-bottom: 1px solid var(--gold-dark);
+      padding: 8px 0;
+      overflow: hidden;
+      display: none;
+    }
+    #ticker-bar.visible { display: block; }
+    #ticker-inner {
+      display: inline-block;
+      white-space: nowrap;
+      animation: ticker-scroll 28s linear infinite;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      color: var(--gold-light);
+      padding-left: 100%;
+    }
+    #ticker-inner::before { content: '📢  '; }
+    @keyframes ticker-scroll {
+      0%   { transform: translateX(0); }
+      100% { transform: translateX(-100%); }
     }
 
-    /* Gold top bar */
-    .card-topbar{
-      height:4px;
-      background:linear-gradient(90deg,transparent,var(--gold3),var(--gold),var(--gold2),var(--gold),var(--gold3),transparent);
-      animation:barShimmer 3s linear infinite;
-      background-size:200% 100%;
+    /* ── Floating Reactions Overlay ───────────────────────────── */
+    #reactions-overlay {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 300;
+      overflow: hidden;
     }
-    @keyframes barShimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
-    .card-topbar.live-bar{background:linear-gradient(90deg,transparent,#8b1a35,var(--live),var(--live2),var(--live),#8b1a35,transparent);}
+    .float-emoji {
+      position: absolute;
+      bottom: -60px;
+      font-size: 28px;
+      animation: float-up 3.5s ease-out forwards;
+      pointer-events: none;
+      user-select: none;
+    }
+    @keyframes float-up {
+      0%   { transform: translateY(0) scale(1);       opacity: 1; }
+      60%  { transform: translateY(-45vh) scale(1.2); opacity: 0.9; }
+      100% { transform: translateY(-90vh) scale(0.8); opacity: 0; }
+    }
 
-    .card-body{padding:32px 32px 24px;}
+    /* ── Main Layout ──────────────────────────────────────────── */
+    #app {
+      min-height: 100vh;
+      padding: 20px 16px 40px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transition: padding-top 0.3s;
+    }
+    #app.has-ticker { padding-top: 52px; }
+    #main-row {
+      display: flex;
+      flex-direction: row;
+      gap: 16px;
+      width: 100%;
+      max-width: 1100px;
+      align-items: flex-start;
+    }
 
-    /* ── HEADER ── */
-    .header{display:flex;align-items:center;gap:16px;margin-bottom:20px;}
-    .logo-wrap{
-      position:relative;width:80px;height:80px;border-radius:16px;overflow:hidden;flex-shrink:0;
-      border:2px solid rgba(212,168,67,0.4);
-      box-shadow:0 4px 24px rgba(0,0,0,0.6),0 0 32px rgba(212,168,67,0.1);
-      background:#fff;padding:4px;
+    /* ── Shimmer Bar ──────────────────────────────────────────── */
+    .shimmer-bar {
+      height: 3px;
+      background: linear-gradient(90deg, transparent, var(--gold-dark), var(--gold), var(--gold-light), var(--gold), var(--gold-dark), transparent);
+      background-size: 200% 100%;
+      animation: shimmer 2.5s linear infinite;
+      border-radius: 3px 3px 0 0;
+      flex-shrink: 0;
     }
-    .logo-wrap img{width:100%;height:100%;object-fit:cover;border-radius:12px;}
-    .logo-pulse{
-      position:absolute;inset:-4px;border-radius:20px;
-      border:2px solid rgba(212,168,67,0.3);
-      animation:logoPulse 2.5s ease-in-out infinite;
-      pointer-events:none;opacity:0;
+    @keyframes shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
     }
-    @keyframes logoPulse{0%,100%{opacity:0;transform:scale(1);}50%{opacity:1;transform:scale(1.04);}}
-    .logo-wrap.playing .logo-pulse{opacity:1;}
-    .header-text{}
-    .church-name{font-family:'Cinzel',serif;font-size:14px;font-weight:700;color:#fff;letter-spacing:1.5px;line-height:1.3;}
-    .church-sub{font-size:10px;color:var(--text2);letter-spacing:2.5px;text-transform:uppercase;margin-top:4px;}
+    .shimmer-bar.live {
+      background: linear-gradient(90deg, transparent, #5a1020, var(--live-red), #ff80a0, var(--live-red), #5a1020, transparent);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s linear infinite;
+    }
 
-    /* ── LIVE / STATUS BADGE ── */
-    .badge-row{display:flex;align-items:center;gap:10px;margin-bottom:18px;}
-    .status-badge{
-      display:inline-flex;align-items:center;gap:7px;
-      padding:5px 14px;border-radius:20px;
-      font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;
-      font-family:'Space Mono',monospace;
-      transition:all .3s;
+    /* ── Player Card ──────────────────────────────────────────── */
+    #player-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      max-width: 440px;
+      width: 100%;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.7), 0 0 0 1px rgba(212,168,67,0.05);
+      transition: border-color 0.4s;
     }
-    .status-badge.live{background:rgba(212,168,67,0.12);border:1px solid rgba(212,168,67,0.4);color:var(--gold2);}
-    .status-badge.offline{background:rgba(224,80,112,0.10);border:1px solid rgba(224,80,112,0.3);color:#e05070;}
-    .status-badge.connecting{background:rgba(212,168,67,0.06);border:1px solid rgba(212,168,67,0.15);color:rgba(240,200,90,0.5);}
-    .status-badge.live-on-air{background:rgba(224,80,112,0.18);border:1px solid rgba(224,80,112,0.55);color:#ff6b8a;box-shadow:0 0 16px rgba(224,80,112,0.2);}
-    .badge-dot{width:7px;height:7px;border-radius:50%;background:currentColor;animation:blink 1.2s infinite;}
-    @keyframes blink{0%,100%{opacity:1;}50%{opacity:.15;}}
-    .listener-pill{font-size:10px;color:var(--text3);letter-spacing:1px;display:flex;align-items:center;gap:5px;}
-    .listener-pill span{font-weight:700;color:var(--text2);}
+    #player-card.live-mode { border-color: rgba(224,48,96,0.45); }
 
-    /* ── NOW PLAYING ── */
-    .now-label{font-size:9px;color:var(--text3);letter-spacing:3px;text-transform:uppercase;margin-bottom:10px;font-family:'Space Mono',monospace;}
-    .track-title{
-      font-family:'Cinzel',serif;font-size:22px;font-weight:700;color:#fff;
-      line-height:1.25;margin-bottom:6px;
-      transition:all .4s;
+    .player-body {
+      padding: 28px 28px 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
     }
-    .track-artist{font-size:13px;color:var(--gold);font-weight:300;letter-spacing:.8px;margin-bottom:22px;transition:all .4s;}
 
-    /* ── REAL AUDIO VISUALIZER ── */
-    .visualizer-wrap{position:relative;margin-bottom:22px;}
-    #vis-canvas{
-      width:100%;height:52px;border-radius:8px;
-      background:rgba(212,168,67,0.03);
-      display:block;
+    /* ── Logo & Header ────────────────────────────────────────── */
+    .logo-wrap {
+      position: relative;
+      margin-bottom: 12px;
     }
-    .vis-idle{
-      display:flex;align-items:flex-end;gap:3px;height:52px;
-      padding:8px 0;justify-content:center;
+    .logo-wrap::before {
+      content: '';
+      position: absolute;
+      inset: -6px;
+      border-radius: 22px;
+      background: radial-gradient(circle, rgba(212,168,67,0.15) 0%, transparent 70%);
+      animation: pulse-glow 3s ease-in-out infinite;
     }
-    .vis-idle .bar{
-      width:4px;background:rgba(212,168,67,0.18);border-radius:2px 2px 0 0;
-      animation:idleBar .9s ease-in-out infinite;
+    @keyframes pulse-glow {
+      0%, 100% { opacity: 0.6; transform: scale(1); }
+      50%       { opacity: 1;   transform: scale(1.05); }
     }
-    @keyframes idleBar{0%,100%{height:4px;}50%{height:18px;}}
+    .logo-img {
+      display: block;
+      width: 88px;
+      height: 88px;
+      border-radius: 18px;
+      border: 2px solid rgba(212,168,67,0.4);
+      object-fit: cover;
+      position: relative;
+    }
 
-    /* ── CONTROLS ── */
-    .controls{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:22px;}
-    .vol-group{flex:1;display:flex;align-items:center;gap:8px;min-width:0;}
-    .vol-icon{font-size:14px;color:var(--text3);flex-shrink:0;}
-    input[type=range].vol{
-      flex:1;-webkit-appearance:none;height:3px;
-      background:rgba(212,168,67,0.2);border-radius:3px;outline:none;cursor:pointer;
+    .church-name {
+      font-family: 'Cinzel', serif;
+      font-size: 11px;
+      letter-spacing: 2px;
+      color: var(--gold-light);
+      text-align: center;
+      margin-bottom: 2px;
+      margin-top: 2px;
     }
-    input[type=range].vol::-webkit-slider-thumb{
-      -webkit-appearance:none;width:14px;height:14px;border-radius:50%;
-      background:var(--gold);cursor:pointer;box-shadow:0 0 6px rgba(212,168,67,0.5);
+    .radio-label {
+      font-size: 9px;
+      letter-spacing: 3px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      text-align: center;
+      margin-bottom: 16px;
     }
-    .play-btn{
-      width:72px;height:72px;border-radius:50%;border:none;cursor:pointer;
-      display:flex;align-items:center;justify-content:center;font-size:26px;
-      background:linear-gradient(135deg,var(--gold3),var(--gold),var(--gold2));
-      color:#1a0f00;font-weight:700;
-      box-shadow:0 0 36px rgba(212,168,67,0.35),0 6px 18px rgba(0,0,0,0.6);
-      transition:all .2s;position:relative;flex-shrink:0;
-    }
-    .play-btn::after{content:'';position:absolute;inset:-4px;border-radius:50%;border:1px solid rgba(212,168,67,0.35);}
-    .play-btn:hover{transform:scale(1.08);box-shadow:0 0 52px rgba(212,168,67,0.5);}
-    .play-btn:active{transform:scale(.94);}
-    .play-btn.live-btn{background:linear-gradient(135deg,#8b1a35,var(--live),var(--live2));color:#fff;box-shadow:0 0 36px rgba(224,80,112,0.35);}
-    .action-group{flex:1;display:flex;justify-content:flex-end;align-items:center;gap:8px;}
-    .icon-btn{
-      width:34px;height:34px;border-radius:50%;border:1px solid rgba(212,168,67,0.2);
-      background:rgba(212,168,67,0.04);color:var(--text2);cursor:pointer;
-      font-size:14px;display:flex;align-items:center;justify-content:center;
-      transition:all .2s;
-    }
-    .icon-btn:hover{background:rgba(212,168,67,0.12);border-color:rgba(212,168,67,0.4);color:#fff;}
 
-    /* ── DIVIDER ── */
-    .divider{height:1px;background:linear-gradient(90deg,transparent,rgba(212,168,67,0.15),transparent);margin:0 0 18px;}
-
-    /* ── META ROW ── */
-    .meta-row{display:flex;justify-content:space-around;margin-bottom:18px;}
-    .meta-item{text-align:center;}
-    .meta-label{font-size:8px;letter-spacing:2.5px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;font-family:'Space Mono',monospace;}
-    .meta-value{font-size:14px;font-weight:700;font-family:'Cinzel',serif;color:var(--gold);}
-
-    /* ── CHURCH INFO ── */
-    .church-info{text-align:center;}
-    .tagline{font-size:12px;color:var(--text2);line-height:1.7;font-style:italic;margin-bottom:16px;padding:0 8px;}
-    .links-row{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin-bottom:14px;}
-    .info-link{
-      font-size:11px;color:rgba(212,168,67,0.75);text-decoration:none;
-      letter-spacing:.5px;padding:5px 10px;
-      border:1px solid rgba(212,168,67,0.15);border-radius:6px;
-      transition:all .2s;
+    /* ── Status Badge ─────────────────────────────────────────── */
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+      justify-content: center;
     }
-    .info-link:hover{color:#fff;border-color:rgba(212,168,67,0.5);background:rgba(212,168,67,0.06);}
-
-    /* ── TUNE-IN STRIP ── */
-    .tune-strip{
-      margin-top:4px;padding-top:12px;
-      border-top:1px solid rgba(212,168,67,0.1);
-      display:flex;justify-content:center;gap:8px;flex-wrap:wrap;
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 14px;
+      border-radius: 20px;
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      transition: all 0.3s;
     }
-    .tune-link{
-      font-size:10px;color:rgba(212,168,67,0.5);text-decoration:none;
-      letter-spacing:.5px;transition:color .2s;padding:2px 6px;
+    .status-badge .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
     }
-    .tune-link:hover{color:var(--gold);}
-
-    /* ── INSTALL BANNER ── */
-    .install-banner{
-      display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
-      background:linear-gradient(135deg,rgba(21,15,24,0.98),rgba(14,10,18,0.98));
-      border:1px solid rgba(212,168,67,0.35);border-radius:18px;
-      padding:14px 18px;width:calc(100% - 32px);max-width:460px;
-      z-index:100;box-shadow:0 8px 40px rgba(0,0,0,0.8);
-      align-items:center;gap:12px;
+    .status-badge.on-air {
+      background: rgba(212,168,67,0.12);
+      border: 1px solid rgba(212,168,67,0.4);
+      color: var(--gold-light);
     }
-    .install-banner.show{display:flex;}
-    .install-banner img{width:42px;height:42px;border-radius:10px;border:1px solid rgba(212,168,67,0.4);background:#fff;padding:3px;flex-shrink:0;}
-    .install-text{flex:1;}
-    .install-title{font-family:'Cinzel',serif;font-size:13px;color:#fff;font-weight:700;margin-bottom:2px;}
-    .install-sub{font-size:10px;color:var(--text2);}
-    .install-btn{
-      padding:9px 18px;
-      background:linear-gradient(135deg,var(--gold3),var(--gold));
-      color:#1a0f00;border:none;border-radius:10px;font-weight:700;font-size:12px;
-      cursor:pointer;white-space:nowrap;font-family:'Lato',sans-serif;
+    .status-badge.on-air .dot {
+      background: var(--gold);
+      box-shadow: 0 0 6px var(--gold);
+      animation: blink 1.4s ease-in-out infinite;
     }
-    .install-dismiss{background:none;border:none;color:var(--text3);cursor:pointer;font-size:20px;padding:0 4px;line-height:1;}
-
-    /* ── FOOTER ── */
-    .footer{margin-top:14px;text-align:center;font-size:10px;color:rgba(212,168,67,0.2);letter-spacing:1px;}
-    .footer a{color:rgba(212,168,67,0.25);text-decoration:none;}
-    .footer a:hover{color:rgba(212,168,67,0.6);}
-
-    /* ── ANIMATIONS ── */
-    .fade-in{animation:fadeIn .4s ease;}
-    @keyframes fadeIn{from{opacity:0;transform:translateY(-8px);}to{opacity:1;transform:none;}}
-
-    /* ── RESPONSIVE ── */
-    @media(max-height:680px){
-      .card-body{padding:22px 24px 18px;}
-      .logo-wrap{width:64px;height:64px;}
-      .track-title{font-size:18px;}
-      .rings-container,.rays,.particles{display:none;}
+    .status-badge.live {
+      background: rgba(224,48,96,0.12);
+      border: 1px solid rgba(224,48,96,0.5);
+      color: #ff80a0;
     }
-    @media(max-width:480px){
-      .card-body{padding:24px 20px 20px;}
-      .player-card{border-radius:20px;}
-      .track-title{font-size:18px;}
-      .church-name{font-size:12px;}
-      .play-btn{width:64px;height:64px;font-size:22px;}
+    .status-badge.live .dot {
+      background: var(--live-red);
+      box-shadow: 0 0 8px var(--live-red);
+      animation: blink 0.8s ease-in-out infinite;
+    }
+    .status-badge.offline {
+      background: rgba(100,80,80,0.12);
+      border: 1px solid rgba(100,80,80,0.3);
+      color: rgba(192,168,216,0.4);
+    }
+    .status-badge.offline .dot { background: #555; }
+    .status-badge.buffering {
+      background: rgba(80,120,200,0.1);
+      border: 1px solid rgba(80,120,200,0.3);
+      color: #80a0e0;
+    }
+    .status-badge.buffering .dot {
+      background: #80a0e0;
+      animation: blink 0.4s ease-in-out infinite;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.2; }
+    }
+
+    .listener-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      border-radius: 12px;
+      background: rgba(212,168,67,0.07);
+      border: 1px solid var(--border);
+      font-size: 10px;
+      color: var(--text-muted);
+      letter-spacing: 0.5px;
+    }
+    .listener-pill .lnum { color: var(--gold); font-weight: 700; }
+
+    /* ── Track Info ───────────────────────────────────────────── */
+    .now-broadcasting-label {
+      font-size: 9px;
+      letter-spacing: 2.5px;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 6px;
+      margin-top: 4px;
+    }
+    .track-title {
+      font-family: 'Cinzel', serif;
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text);
+      text-align: center;
+      line-height: 1.35;
+      margin-bottom: 4px;
+      max-width: 100%;
+      word-break: break-word;
+      transition: all 0.4s;
+    }
+    .track-artist {
+      font-size: 13px;
+      color: var(--gold);
+      text-align: center;
+      margin-bottom: 14px;
+      transition: all 0.4s;
+    }
+
+    /* ── Visualizer ───────────────────────────────────────────── */
+    #visualizer {
+      width: 100%;
+      height: 48px;
+      margin-bottom: 16px;
+      border-radius: 8px;
+      background: rgba(0,0,0,0.3);
+      display: block;
+    }
+
+    /* ── Controls ─────────────────────────────────────────────── */
+    .controls-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      margin-bottom: 14px;
+      justify-content: center;
+    }
+    .vol-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 1;
+      min-width: 0;
+    }
+    .vol-icon {
+      font-size: 16px;
+      cursor: pointer;
+      color: var(--text-muted);
+      flex-shrink: 0;
+      transition: color 0.2s;
+    }
+    .vol-icon:hover { color: var(--gold); }
+
+    input[type=range].vol-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(212,168,67,0.2);
+      outline: none;
+      cursor: pointer;
+    }
+    input[type=range].vol-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: var(--gold);
+      cursor: pointer;
+      box-shadow: 0 0 6px rgba(212,168,67,0.5);
+    }
+    input[type=range].vol-slider::-moz-range-thumb {
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: var(--gold);
+      cursor: pointer;
+      border: none;
+    }
+
+    #play-btn {
+      width: 72px; height: 72px;
+      border-radius: 50%;
+      border: none;
+      background: linear-gradient(135deg, var(--gold-dark), var(--gold), var(--gold-light), var(--gold));
+      color: #1a0f00;
+      font-size: 26px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      box-shadow: 0 8px 24px rgba(212,168,67,0.35), 0 0 0 0 rgba(212,168,67,0.4);
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    #play-btn:hover {
+      transform: scale(1.06);
+      box-shadow: 0 12px 32px rgba(212,168,67,0.5), 0 0 0 8px rgba(212,168,67,0.08);
+    }
+    #play-btn:active { transform: scale(0.96); }
+    #play-btn.playing { animation: play-pulse 2s ease-in-out infinite; }
+    @keyframes play-pulse {
+      0%, 100% { box-shadow: 0 8px 24px rgba(212,168,67,0.35), 0 0 0 0 rgba(212,168,67,0.3); }
+      50%       { box-shadow: 0 8px 24px rgba(212,168,67,0.5), 0 0 0 14px rgba(212,168,67,0); }
+    }
+    #play-btn.live-mode {
+      background: linear-gradient(135deg, #5a1020, var(--live-red), #ff80a0, var(--live-red));
+      box-shadow: 0 8px 24px rgba(224,48,96,0.4);
+    }
+
+    .icon-btn {
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      border: 1px solid var(--border);
+      background: rgba(212,168,67,0.05);
+      color: var(--text-muted);
+      font-size: 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s, color 0.2s, border-color 0.2s;
+      flex-shrink: 0;
+    }
+    .icon-btn:hover {
+      background: var(--gold-dim);
+      color: var(--gold);
+      border-color: var(--border-mid);
+    }
+    .icon-btn.active {
+      background: rgba(212,168,67,0.15);
+      color: var(--gold);
+      border-color: rgba(212,168,67,0.5);
+    }
+
+    /* ── Meta Row ─────────────────────────────────────────────── */
+    .meta-row {
+      display: flex;
+      gap: 0;
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+    .meta-item {
+      flex: 1;
+      padding: 8px 4px;
+      text-align: center;
+      border-right: 1px solid var(--border);
+    }
+    .meta-item:last-child { border-right: none; }
+    .meta-label {
+      font-size: 8px;
+      letter-spacing: 1.5px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      margin-bottom: 2px;
+    }
+    .meta-value {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+    }
+
+    /* ── Church Info ──────────────────────────────────────────── */
+    .church-info {
+      width: 100%;
+      text-align: center;
+      margin-bottom: 16px;
+    }
+    .church-tagline {
+      font-size: 11px;
+      color: var(--text-dim);
+      line-height: 1.6;
+      margin-bottom: 10px;
+    }
+    .link-btns {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .link-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-decoration: none;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      background: rgba(212,168,67,0.04);
+      transition: all 0.2s;
+    }
+    .link-btn:hover {
+      border-color: var(--border-mid);
+      color: var(--gold);
+      background: var(--gold-dim);
+    }
+
+    /* ── Tune Strip ───────────────────────────────────────────── */
+    .tune-strip {
+      width: 100%;
+      background: rgba(0,0,0,0.3);
+      border-top: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .tune-label {
+      font-size: 9px;
+      letter-spacing: 2px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+    }
+    .tune-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      border-radius: 14px;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-decoration: none;
+      background: rgba(212,168,67,0.07);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      transition: all 0.2s;
+    }
+    .tune-link:hover {
+      background: var(--gold-dim);
+      color: var(--gold);
+      border-color: var(--border-mid);
+    }
+
+    /* ── Community Panel ──────────────────────────────────────── */
+    #community-panel {
+      flex: 1;
+      min-width: 300px;
+      max-width: 400px;
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+      height: 680px;
+      max-height: 90vh;
+    }
+
+    .panel-header { flex-shrink: 0; }
+
+    /* ── Tabs ─────────────────────────────────────────────────── */
+    .tabs-row {
+      display: flex;
+      background: rgba(0,0,0,0.25);
+      border-bottom: 1px solid var(--border);
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 12px 4px;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      color: var(--text-dim);
+      transition: color 0.2s;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      font-family: 'Lato', sans-serif;
+    }
+    .tab-btn::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 50%; right: 50%;
+      height: 2px;
+      background: var(--gold);
+      transition: left 0.25s, right 0.25s;
+      border-radius: 2px 2px 0 0;
+    }
+    .tab-btn.active { color: var(--gold-light); }
+    .tab-btn.active::after { left: 8%; right: 8%; }
+    .tab-btn:hover { color: var(--text-muted); }
+
+    /* ── Tab Panels ───────────────────────────────────────────── */
+    .tab-panel {
+      display: none;
+      flex-direction: column;
+      flex: 1;
+      overflow: hidden;
+    }
+    .tab-panel.active { display: flex; }
+
+    /* ── Chat Tab ─────────────────────────────────────────────── */
+    #chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(212,168,67,0.2) transparent;
+    }
+    #chat-messages::-webkit-scrollbar { width: 4px; }
+    #chat-messages::-webkit-scrollbar-thumb { background: rgba(212,168,67,0.2); border-radius: 2px; }
+
+    .chat-msg {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      animation: msg-in 0.3s ease-out;
+    }
+    @keyframes msg-in {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .chat-msg-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .chat-user-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .chat-username {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
+    .chat-time {
+      font-size: 9px;
+      color: var(--text-dim);
+      margin-left: auto;
+    }
+    .chat-text {
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.55;
+      padding-left: 14px;
+      word-break: break-word;
+    }
+    .chat-msg.system .chat-text {
+      font-style: italic;
+      color: var(--text-muted);
+      font-size: 11px;
+      padding-left: 0;
+      text-align: center;
+    }
+
+    .reactions-bar {
+      display: flex;
+      gap: 4px;
+      padding: 8px 14px;
+      border-top: 1px solid var(--border);
+      background: rgba(0,0,0,0.2);
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
+    .react-btn {
+      background: rgba(212,168,67,0.06);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 4px 10px;
+      font-size: 15px;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+      line-height: 1;
+    }
+    .react-btn:hover { background: rgba(212,168,67,0.15); transform: scale(1.2); }
+    .react-btn:active { transform: scale(0.9); }
+
+    .chat-input-area {
+      padding: 10px 14px 14px;
+      border-top: 1px solid var(--border);
+      background: rgba(0,0,0,0.15);
+      flex-shrink: 0;
+    }
+    .chat-as-label {
+      font-size: 9px;
+      color: var(--text-dim);
+      letter-spacing: 1px;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      text-transform: uppercase;
+    }
+    .chat-as-name {
+      color: var(--gold);
+      font-weight: 700;
+      cursor: pointer;
+      border-bottom: 1px dashed rgba(212,168,67,0.3);
+      text-transform: none;
+    }
+    .chat-as-name:hover { color: var(--gold-light); }
+    .chat-send-row {
+      display: flex;
+      gap: 6px;
+    }
+    .chat-input {
+      flex: 1;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 8px 14px;
+      color: var(--text);
+      font-size: 13px;
+      font-family: 'Lato', sans-serif;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .chat-input:focus { border-color: var(--border-mid); }
+    .chat-input::placeholder { color: var(--text-dim); }
+
+    .send-btn {
+      width: 38px; height: 38px;
+      border-radius: 50%;
+      border: none;
+      background: linear-gradient(135deg, var(--gold-dark), var(--gold));
+      color: #1a0f00;
+      font-size: 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: transform 0.15s, opacity 0.15s;
+    }
+    .send-btn:hover { transform: scale(1.08); }
+    .send-btn:active { transform: scale(0.94); }
+
+    /* ── On Air Tab ───────────────────────────────────────────── */
+    #tab-onair {
+      padding: 16px;
+      overflow-y: auto;
+      gap: 14px;
+    }
+    .onair-section-title {
+      font-size: 9px;
+      letter-spacing: 2px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .onair-now {
+      background: rgba(212,168,67,0.06);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    .onair-title {
+      font-family: 'Cinzel', serif;
+      font-size: 15px;
+      color: var(--text);
+      margin-bottom: 4px;
+    }
+    .onair-artist { font-size: 12px; color: var(--gold); }
+
+    .schedule-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .schedule-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      background: rgba(255,255,255,0.02);
+      border: 1px solid transparent;
+    }
+    .schedule-item.current {
+      background: rgba(212,168,67,0.07);
+      border-color: var(--border);
+    }
+    .schedule-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--border-mid);
+      flex-shrink: 0;
+    }
+    .schedule-item.current .schedule-dot {
+      background: var(--gold);
+      box-shadow: 0 0 6px var(--gold);
+      animation: blink 1.4s infinite;
+    }
+    .schedule-time { font-size: 10px; color: var(--text-muted); flex-shrink: 0; min-width: 86px; }
+    .schedule-name { font-size: 12px; color: var(--text); }
+
+    /* ── Request Tab ──────────────────────────────────────────── */
+    #tab-request {
+      padding: 16px;
+      overflow-y: auto;
+      gap: 0;
+    }
+    .req-type-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .req-type-btn {
+      flex: 1;
+      padding: 8px 4px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+      color: var(--text-muted);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.2s;
+      font-family: 'Lato', sans-serif;
+    }
+    .req-type-btn.active {
+      background: rgba(212,168,67,0.12);
+      border-color: var(--border-mid);
+      color: var(--gold-light);
+    }
+    .field-label {
+      font-size: 9px;
+      letter-spacing: 1.5px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      margin-bottom: 5px;
+      margin-top: 10px;
+    }
+    .req-input,
+    .req-textarea {
+      width: 100%;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 9px 12px;
+      color: var(--text);
+      font-size: 13px;
+      font-family: 'Lato', sans-serif;
+      outline: none;
+      transition: border-color 0.2s;
+      resize: none;
+    }
+    .req-input:focus,
+    .req-textarea:focus { border-color: var(--border-mid); }
+    .req-input::placeholder,
+    .req-textarea::placeholder { color: var(--text-dim); }
+
+    .req-submit-btn {
+      width: 100%;
+      margin-top: 14px;
+      padding: 11px;
+      border: none;
+      border-radius: var(--radius-sm);
+      background: linear-gradient(135deg, var(--gold-dark), var(--gold), var(--gold-light), var(--gold));
+      color: #1a0f00;
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.15s;
+      font-family: 'Lato', sans-serif;
+    }
+    .req-submit-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+    .req-submit-btn:active { transform: scale(0.98); }
+
+    .req-toast {
+      text-align: center;
+      padding: 10px;
+      border-radius: var(--radius-sm);
+      background: rgba(76,175,130,0.12);
+      border: 1px solid rgba(76,175,130,0.3);
+      color: #4caf82;
+      font-size: 12px;
+      font-weight: 700;
+      display: none;
+      margin-top: 10px;
+    }
+    .req-toast.visible { display: block; animation: msg-in 0.3s ease-out; }
+
+    /* ── Sleep Menu ───────────────────────────────────────────── */
+    .sleep-wrap { position: relative; }
+    .sleep-menu {
+      position: absolute;
+      bottom: calc(100% + 10px);
+      right: 0;
+      background: rgba(14,10,16,0.98);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      min-width: 150px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.7);
+      display: none;
+      z-index: 100;
+    }
+    .sleep-menu.open { display: block; animation: msg-in 0.2s ease-out; }
+    .sleep-menu button {
+      display: block;
+      width: 100%;
+      padding: 9px 14px;
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid rgba(212,168,67,0.08);
+      color: var(--text-muted);
+      font-size: 12px;
+      font-family: 'Lato', sans-serif;
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .sleep-menu button:last-child { border-bottom: none; }
+    .sleep-menu button:hover { background: var(--gold-dim); color: var(--gold); }
+
+    /* ── Mobile Toggle ────────────────────────────────────────── */
+    #mobile-chat-toggle {
+      display: none;
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      z-index: 150;
+      width: 52px; height: 52px;
+      border-radius: 50%;
+      border: none;
+      background: linear-gradient(135deg, var(--gold-dark), var(--gold));
+      color: #1a0f00;
+      font-size: 22px;
+      cursor: pointer;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* ── PWA Install Banner ────────────────────────────────────── */
+    #install-banner {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      z-index: 250;
+      background: rgba(14,10,16,0.97);
+      border-top: 1px solid var(--border);
+      padding: 14px 20px;
+      display: none;
+      align-items: center;
+      gap: 12px;
+      box-shadow: 0 -8px 32px rgba(0,0,0,0.5);
+    }
+    #install-banner.visible { display: flex; }
+    .install-text { flex: 1; font-size: 12px; color: var(--text-muted); }
+    .install-text strong { color: var(--gold); }
+    .install-btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 20px;
+      background: linear-gradient(135deg, var(--gold-dark), var(--gold));
+      color: #1a0f00;
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 1px;
+      cursor: pointer;
+      font-family: 'Lato', sans-serif;
+    }
+    .install-dismiss {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 18px;
+      cursor: pointer;
+      padding: 4px 8px;
+    }
+
+    /* ── Responsive ───────────────────────────────────────────── */
+    @media (max-width: 768px) {
+      #main-row { flex-direction: column; align-items: center; }
+      #player-card { max-width: 100%; }
+      #community-panel {
+        position: fixed;
+        bottom: 0; left: 0; right: 0;
+        z-index: 140;
+        border-radius: 20px 20px 0 0;
+        max-height: 75vh;
+        height: 75vh;
+        max-width: 100%;
+        transform: translateY(100%);
+        transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+      }
+      #community-panel.open { transform: translateY(0); }
+      #mobile-chat-toggle { display: flex; }
+    }
+    @media (min-width: 769px) {
+      #mobile-chat-toggle { display: none; }
     }
   </style>
 </head>
 <body>
 
-<!-- Background layers -->
-<div class="bg-glow"></div>
+<!-- Ticker Bar -->
+<div id="ticker-bar"><span id="ticker-inner"></span></div>
 
-<div class="particles" id="particles"></div>
+<!-- Floating Reactions Overlay -->
+<div id="reactions-overlay"></div>
 
-<div class="rays" id="rays">
-  <div class="ray" style="left:15%;height:90%;transform:rotate(-20deg);animation-delay:0s;"></div>
-  <div class="ray" style="left:28%;height:80%;transform:rotate(-10deg);animation-delay:1.2s;"></div>
-  <div class="ray" style="left:42%;height:95%;transform:rotate(-3deg);animation-delay:.4s;"></div>
-  <div class="ray" style="left:50%;height:100%;transform:rotate(0deg);animation-delay:2s;"></div>
-  <div class="ray" style="left:58%;height:95%;transform:rotate(3deg);animation-delay:.8s;"></div>
-  <div class="ray" style="left:72%;height:80%;transform:rotate(10deg);animation-delay:1.6s;"></div>
-  <div class="ray" style="left:85%;height:90%;transform:rotate(20deg);animation-delay:.2s;"></div>
-</div>
+<!-- Main App -->
+<div id="app">
+  <div id="main-row">
 
-<div class="rings-container" id="rings">
-  <div class="ring r1"></div>
-  <div class="ring r2"></div>
-  <div class="ring r3"></div>
-  <div class="ring r4"></div>
-</div>
+    <!-- PLAYER CARD -->
+    <div id="player-card">
+      <div class="shimmer-bar" id="player-shimmer"></div>
+      <div class="player-body">
 
-<div class="page">
-  <div class="player-card" id="player-card">
-    <div class="card-topbar" id="card-topbar"></div>
-    <div class="card-body">
-
-      <!-- HEADER -->
-      <div class="header">
-        <div class="logo-wrap" id="logo-wrap">
-          <img src="/logo.png" alt="LETW Logo">
-          <div class="logo-pulse"></div>
-        </div>
-        <div class="header-text">
-          <div class="church-name">Light Encounter<br>Tabernacle Worldwide</div>
-          <div class="church-sub">Online Radio</div>
-        </div>
-      </div>
-
-      <!-- STATUS BADGE + LISTENER COUNT -->
-      <div class="badge-row">
-        <div class="status-badge offline" id="status-badge">
-          <div class="badge-dot"></div>
-          <span id="badge-text">OFFLINE</span>
-        </div>
-        <div class="listener-pill">
-          👥 <span id="listener-count">0</span> listening
-        </div>
-      </div>
-
-      <!-- NOW PLAYING -->
-      <div class="now-label">Now Broadcasting</div>
-      <div class="track-title fade-in" id="track-title">Tap ▶ to listen live</div>
-      <div class="track-artist" id="track-artist">Light Encounter Tabernacle Worldwide</div>
-
-      <!-- VISUALIZER -->
-      <div class="visualizer-wrap">
-        <canvas id="vis-canvas"></canvas>
-        <div class="vis-idle" id="vis-idle" style="display:none;">
-          <div class="bar" style="animation-delay:.0s;"></div>
-          <div class="bar" style="animation-delay:.1s;"></div>
-          <div class="bar" style="animation-delay:.2s;"></div>
-          <div class="bar" style="animation-delay:.05s;"></div>
-          <div class="bar" style="animation-delay:.15s;"></div>
-          <div class="bar" style="animation-delay:.25s;"></div>
-          <div class="bar" style="animation-delay:.08s;"></div>
-          <div class="bar" style="animation-delay:.18s;"></div>
-          <div class="bar" style="animation-delay:.28s;"></div>
-        </div>
-      </div>
-
-      <!-- CONTROLS -->
-      <div class="controls">
-        <div class="vol-group">
-          <span class="vol-icon" id="vol-icon">🔉</span>
-          <input type="range" class="vol" id="volume" min="0" max="1" step="0.01" value="0.85">
+        <div class="logo-wrap">
+          <img class="logo-img" src="/logo.png" alt="LETW Radio"
+            onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2288%22 height=%2288%22%3E%3Crect width=%2288%22 height=%2288%22 rx=%2218%22 fill=%22%231a0f00%22/%3E%3Ctext x=%2244%22 y=%2258%22 font-size=%2236%22 text-anchor=%22middle%22 fill=%22%23d4a843%22%3E%F0%9F%93%BB%3C/text%3E%3C/svg%3E'">
         </div>
 
-        <button class="play-btn" id="play-btn" onclick="togglePlay()">▶</button>
+        <div class="church-name">LIGHT ENCOUNTER TABERNACLE WORLDWIDE</div>
+        <div class="radio-label">Online Radio</div>
 
-        <div class="action-group">
-          <button class="icon-btn" id="share-btn" title="Share" onclick="shareStation()">📤</button>
-          <button class="icon-btn" title="All ways to listen" onclick="location.href='/tune-in'">📡</button>
+        <div class="status-row">
+          <div class="status-badge offline" id="status-badge">
+            <span class="dot"></span>
+            <span id="status-text">OFFLINE</span>
+          </div>
+          <div class="listener-pill">
+            <span>👥</span>
+            <span class="lnum" id="listener-count">0</span>
+            <span>listening</span>
+          </div>
         </div>
-      </div>
 
-      <div class="divider"></div>
+        <div class="now-broadcasting-label">Now Broadcasting</div>
+        <div class="track-title" id="track-title">LETW Radio</div>
+        <div class="track-artist" id="track-artist">Light Encounter Tabernacle Worldwide</div>
 
-      <!-- META ROW -->
-      <div class="meta-row">
-        <div class="meta-item">
-          <div class="meta-label">Listeners</div>
-          <div class="meta-value" id="meta-listeners">0</div>
+        <canvas id="visualizer" height="48"></canvas>
+
+        <div class="controls-row">
+          <div class="vol-group">
+            <span class="vol-icon" id="vol-icon" onclick="toggleMute()">🔊</span>
+            <input type="range" class="vol-slider" id="vol-slider" min="0" max="1" step="0.02" value="0.85">
+          </div>
+
+          <button id="play-btn" onclick="togglePlay()" title="Play / Pause (Space)">
+            <span id="play-icon">▶</span>
+          </button>
+
+          <div class="sleep-wrap">
+            <button class="icon-btn" id="sleep-btn" onclick="toggleSleepMenu()" title="Sleep Timer">
+              <span id="sleep-icon">💤</span>
+            </button>
+            <div class="sleep-menu" id="sleep-menu">
+              <button onclick="setSleepTimer(15)">⏱ 15 minutes</button>
+              <button onclick="setSleepTimer(30)">⏱ 30 minutes</button>
+              <button onclick="setSleepTimer(60)">⏱ 1 hour</button>
+              <button onclick="setSleepTimer(90)">⏱ 90 minutes</button>
+              <button onclick="cancelSleepTimer()">✖ Cancel timer</button>
+            </div>
+          </div>
+
+          <button class="icon-btn" id="share-btn" onclick="shareStation()" title="Share">🔗</button>
+          <button class="icon-btn" id="push-btn" onclick="togglePush()" title="Notifications">🔔</button>
         </div>
-        <div class="meta-item">
-          <div class="meta-label">Bitrate</div>
-          <div class="meta-value" id="meta-bitrate">128k</div>
+
+        <div class="meta-row">
+          <div class="meta-item">
+            <div class="meta-label">Listeners</div>
+            <div class="meta-value" id="meta-listeners">–</div>
+          </div>
+          <div class="meta-item">
+            <div class="meta-label">Bitrate</div>
+            <div class="meta-value" id="meta-bitrate">128 kbps</div>
+          </div>
+          <div class="meta-item">
+            <div class="meta-label">Format</div>
+            <div class="meta-value">MP3</div>
+          </div>
+          <div class="meta-item">
+            <div class="meta-label">Signal</div>
+            <div class="meta-value" id="meta-signal">–</div>
+          </div>
         </div>
-        <div class="meta-item">
-          <div class="meta-label">Format</div>
-          <div class="meta-value" id="meta-format">MP3</div>
-        </div>
-        <div class="meta-item">
-          <div class="meta-label">Signal</div>
-          <div class="meta-value" id="meta-signal">—</div>
+
+        <div class="church-info">
+          <div class="church-tagline">A bible believing church where the word of God is taught with simplicity and clarity.</div>
+          <div class="link-btns">
+            <a class="link-btn" href="https://letw.org" target="_blank" rel="noopener">🌐 letw.org</a>
+            <a class="link-btn" href="/tune-in">📻 Tune In Guide</a>
+            <a class="link-btn" href="/stream.m3u" download>⬇ .M3U</a>
+          </div>
         </div>
       </div>
 
-      <!-- CHURCH INFO -->
-      <div class="church-info">
-        <div class="tagline">"A bible believing church where the word of God is<br>taught with simplicity and clarity."</div>
-        <div class="links-row">
-          <a class="info-link" href="https://letw.org" target="_blank">🌐 letw.org</a>
-          <a class="info-link" href="https://letw.org/sermons" target="_blank">🎙 Sermons</a>
-          <a class="info-link" href="https://letw.org/events" target="_blank">📅 Events</a>
-          <a class="info-link" href="https://letw.org/giving" target="_blank">🙏 Give</a>
-        </div>
-        <div class="tune-strip">
-          <span style="font-size:9px;letter-spacing:2px;text-transform:uppercase;color:rgba(212,168,67,0.25);">Also listen via</span>
-          <a class="tune-link" href="/tune-in">📡 All Devices</a>
-          <a class="tune-link" href="/stream.pls" download>⬇ VLC/PLS</a>
-          <a class="tune-link" href="/stream.m3u" download>⬇ M3U</a>
+      <div class="tune-strip">
+        <span class="tune-label">Also tune in via</span>
+        <a class="tune-link" href="/stream" target="_blank">🔗 Stream</a>
+        <a class="tune-link" href="/stream.pls" download>⬇ VLC</a>
+        <a class="tune-link" href="/stream.m3u" download>⬇ M3U</a>
+      </div>
+    </div>
+
+    <!-- COMMUNITY PANEL -->
+    <div id="community-panel">
+      <div class="panel-header">
+        <div class="shimmer-bar" id="panel-shimmer"></div>
+        <div class="tabs-row">
+          <button class="tab-btn active" data-tab="chat" onclick="switchTab('chat')">💬 Live Chat</button>
+          <button class="tab-btn" data-tab="onair" onclick="switchTab('onair')">📋 On Air</button>
+          <button class="tab-btn" data-tab="request" onclick="switchTab('request')">🙏 Request</button>
         </div>
       </div>
 
-    </div><!-- /card-body -->
-  </div><!-- /player-card -->
+      <!-- Chat Panel -->
+      <div class="tab-panel active" id="tab-chat">
+        <div id="chat-messages">
+          <div class="chat-msg system">
+            <div class="chat-text">Welcome to LETW Radio! Connect with believers around the world. 🙏</div>
+          </div>
+        </div>
+        <div class="reactions-bar">
+          <button class="react-btn" onclick="sendReaction('🙏')">🙏</button>
+          <button class="react-btn" onclick="sendReaction('❤️')">❤️</button>
+          <button class="react-btn" onclick="sendReaction('🎵')">🎵</button>
+          <button class="react-btn" onclick="sendReaction('✨')">✨</button>
+          <button class="react-btn" onclick="sendReaction('🔥')">🔥</button>
+          <button class="react-btn" onclick="sendReaction('🎉')">🎉</button>
+        </div>
+        <div class="chat-input-area">
+          <div class="chat-as-label">
+            Chat as: <span class="chat-as-name" id="chat-username-display" onclick="changeUsername()">–</span>
+          </div>
+          <div class="chat-send-row">
+            <input type="text" class="chat-input" id="chat-input"
+              placeholder="Say something..." maxlength="500"
+              onkeydown="if(event.key==='Enter')sendChat()">
+            <button class="send-btn" onclick="sendChat()">➤</button>
+          </div>
+        </div>
+      </div>
 
-  <div class="footer">© 2026 Light Encounter Tabernacle Worldwide &nbsp;·&nbsp; <a href="https://letw.org" target="_blank">letw.org</a></div>
-</div>
+      <!-- On Air Panel -->
+      <div class="tab-panel" id="tab-onair">
+        <div class="onair-section-title">Now Playing</div>
+        <div class="onair-now">
+          <div class="onair-title" id="onair-title">LETW Radio</div>
+          <div class="onair-artist" id="onair-artist">Light Encounter Tabernacle Worldwide</div>
+        </div>
+        <div class="onair-section-title">Today's Program Schedule</div>
+        <div class="schedule-list" id="schedule-list">
+          <div style="font-size:12px;color:var(--text-dim);text-align:center;padding:20px;">Loading schedule...</div>
+        </div>
+      </div>
 
-<!-- PWA INSTALL BANNER -->
-<div class="install-banner" id="install-banner">
-  <img src="/logo.png" alt="LETW">
-  <div class="install-text">
-    <div class="install-title">Install LETW Radio</div>
-    <div class="install-sub">Add to home screen for instant access</div>
+      <!-- Request Panel -->
+      <div class="tab-panel" id="tab-request">
+        <div class="req-type-row">
+          <button class="req-type-btn active" data-type="song" onclick="setReqType('song')">🎵 Song</button>
+          <button class="req-type-btn" data-type="prayer" onclick="setReqType('prayer')">🙏 Prayer</button>
+          <button class="req-type-btn" data-type="dedication" onclick="setReqType('dedication')">💌 Dedication</button>
+        </div>
+
+        <div class="field-label">Your Name</div>
+        <input type="text" class="req-input" id="req-name" placeholder="Enter your name" maxlength="50">
+
+        <div class="field-label" id="req-text-label">Song / Artist Name</div>
+        <textarea class="req-textarea" id="req-text" rows="3" placeholder="What song would you like to hear?"></textarea>
+
+        <div id="req-dedication-group" style="display:none;">
+          <div class="field-label">Dedicated To</div>
+          <input type="text" class="req-input" id="req-dedicated" placeholder="Who is this dedicated to?" maxlength="100">
+        </div>
+
+        <button class="req-submit-btn" onclick="submitRequest()">Send Request</button>
+        <div class="req-toast" id="req-toast">Request submitted! God bless you. 🙏</div>
+      </div>
+    </div>
+
   </div>
-  <button class="install-btn" id="install-btn">Install</button>
+</div>
+
+<!-- Mobile chat toggle -->
+<button id="mobile-chat-toggle" onclick="toggleMobilePanel()">💬</button>
+
+<!-- PWA install banner -->
+<div id="install-banner">
+  <div class="install-text"><strong>Install LETW Radio</strong> — Listen offline, get live notifications</div>
+  <button class="install-btn" onclick="installPWA()">Install App</button>
   <button class="install-dismiss" onclick="dismissInstall()">✕</button>
 </div>
 
-<audio id="audio" preload="none" x-webkit-airplay="allow"></audio>
+<!-- Hidden audio element -->
+<audio id="audio-element" preload="none"></audio>
 
+<script src="/socket.io/socket.io.js"></script>
 <script>
-// ── SERVICE WORKER ──────────────────────────────────────────────────────────
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(() => {});
-}
+// ══════════════════════════════════════════════════════════════
+// LETW Radio Player — Full-featured listener app
+// ══════════════════════════════════════════════════════════════
 
-// ── PWA INSTALL ─────────────────────────────────────────────────────────────
-let deferredPrompt = null;
-window.addEventListener('beforeinstallprompt', e => {
-  e.preventDefault(); deferredPrompt = e;
-  if (!localStorage.getItem('install-dismissed'))
-    setTimeout(() => document.getElementById('install-banner').classList.add('show'), 3500);
-});
-document.getElementById('install-btn').addEventListener('click', async () => {
-  if (!deferredPrompt) return;
-  deferredPrompt.prompt(); await deferredPrompt.userChoice;
-  deferredPrompt = null; dismissInstall();
-});
-function dismissInstall() {
-  document.getElementById('install-banner').classList.remove('show');
-  localStorage.setItem('install-dismissed','1');
-}
-window.addEventListener('appinstalled', dismissInstall);
+// ── Constants ─────────────────────────────────────────────────
+const CHAT_COLORS = ['#d4a843','#4a9fd4','#4caf82','#e05070','#9b6fd4','#d46a4a'];
+const STREAM_URL  = '/stream';
+const LIVE_URL    = '/live-stream';
 
-// ── PARTICLES ───────────────────────────────────────────────────────────────
-(function spawnParticles() {
-  const container = document.getElementById('particles');
-  const count = 18;
-  for (let i = 0; i < count; i++) {
-    const p = document.createElement('div');
-    p.className = 'p';
-    const size = Math.random() * 4 + 1;
-    const x    = Math.random() * 100;
-    const dur  = Math.random() * 20 + 12;
-    const del  = Math.random() * 15;
-    const alpha = Math.random() * 0.25 + 0.04;
-    const gold = Math.random() > 0.5;
-    p.style.cssText = `
-      width:${size}px;height:${size}px;left:${x}%;bottom:-10px;
-      background:${gold ? `rgba(212,168,67,${alpha})` : `rgba(255,255,255,${alpha * 0.4})`};
-      box-shadow:0 0 ${size * 2}px ${gold ? 'rgba(212,168,67,0.3)' : 'rgba(255,255,255,0.1)'};
-      animation-duration:${dur}s;animation-delay:${del}s;
-    `;
-    container.appendChild(p);
+// ── State ─────────────────────────────────────────────────────
+let isPlaying     = false;
+let isLive        = false;
+let currentVolume = parseFloat(localStorage.getItem('letw_volume') || '0.85');
+let isMuted       = false;
+let sleepTick     = null;
+let sleepEndTime  = null;
+let audioCtx      = null;
+let analyser      = null;
+let sourceNode    = null;
+let vizRaf        = null;
+let wakeLock      = null;
+let pushEnabled   = false;
+let pushSub       = null;
+let vapidPublicKey = '';
+let stallTimer    = null;
+let reconnectTO   = null;
+let currentReqType = 'song';
+let mobilePanelOpen = false;
+let deferredInstall = null;
+
+// ── Username ──────────────────────────────────────────────────
+function getUsername() {
+  let u = localStorage.getItem('letw_username');
+  if (!u) {
+    u = 'BlessedListener' + (100 + Math.floor(Math.random() * 900));
+    localStorage.setItem('letw_username', u);
   }
-})();
-
-// ── MEDIA SESSION (lock-screen controls) ────────────────────────────────────
-function updateMediaSession(title, artist) {
-  if (!('mediaSession' in navigator)) return;
-  navigator.mediaSession.metadata = new MediaMetadata({
-    title: title || 'LETW Radio', artist: artist || 'Light Encounter Tabernacle Worldwide',
-    album: 'Live Broadcast',
-    artwork: [{ src:'/logo.png', sizes:'512x512', type:'image/png' }]
-  });
-  navigator.mediaSession.setActionHandler('play',  () => startAudio());
-  navigator.mediaSession.setActionHandler('pause', () => stopAudio());
-  navigator.mediaSession.setActionHandler('stop',  () => stopAudio());
-  navigator.mediaSession.setActionHandler('nexttrack',     null);
-  navigator.mediaSession.setActionHandler('previoustrack', null);
+  return u;
 }
 
-// ── WAKE LOCK ────────────────────────────────────────────────────────────────
-let wakeLock = null;
-async function requestWakeLock() {
-  try { if ('wakeLock' in navigator) { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => { if (isPlaying) requestWakeLock(); }); } } catch(e) {}
-}
-async function releaseWakeLock() {
-  if (wakeLock) { try { await wakeLock.release(); } catch(e){} wakeLock = null; }
+function changeUsername() {
+  const n = prompt('Enter your display name:', getUsername());
+  if (n && n.trim()) {
+    localStorage.setItem('letw_username', n.trim().slice(0, 50));
+    document.getElementById('chat-username-display').textContent = getUsername();
+  }
 }
 
-// ── WEB AUDIO VISUALIZER ────────────────────────────────────────────────────
-let audioCtx   = null;
-let analyser   = null;
-let sourceNode = null;
-let visRAF     = null;
-const canvas   = document.getElementById('vis-canvas');
-const ctx2d    = canvas.getContext('2d');
+function userColor(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return CHAT_COLORS[h % CHAT_COLORS.length];
+}
 
-function setupVisualizer(audioEl) {
+// ── Socket.IO ─────────────────────────────────────────────────
+const socket = io({ transports: ['websocket', 'polling'] });
+
+socket.on('connect',    () => setSignal('Connected'));
+socket.on('disconnect', () => setSignal('Disconnected'));
+
+socket.on('status', data => applyStatus(data));
+
+socket.on('trackStart', track => {
+  updateTrackInfo(
+    track.title  || 'LETW Radio',
+    track.artist || 'Light Encounter Tabernacle Worldwide'
+  );
+});
+
+socket.on('listenerChange', count => updateListeners(count));
+
+socket.on('live:started', info => {
+  isLive = true;
+  switchToLiveMode(info);
+});
+
+socket.on('live:ended', () => {
+  isLive = false;
+  exitLiveMode();
+});
+
+socket.on('chat:message', msg => appendChatMessage(msg, true));
+
+socket.on('chat:deleted', ({ id }) => {
+  const el = document.querySelector('[data-msg-id="' + id + '"]');
+  if (el) el.remove();
+});
+
+socket.on('chat:cleared', () => {
+  document.getElementById('chat-messages').innerHTML =
+    '<div class="chat-msg system"><div class="chat-text">Chat has been cleared.</div></div>';
+});
+
+socket.on('chat:reaction', ({ emoji }) => spawnFloatingEmoji(emoji));
+
+socket.on('ticker:update', ({ text, enabled }) => setTicker(text, enabled));
+
+// ── Status helpers ────────────────────────────────────────────
+function applyStatus(data) {
+  if (!data) return;
+  const badge = document.getElementById('status-badge');
+  const text  = document.getElementById('status-text');
+  if (data.isLive || isLive) {
+    badge.className = 'status-badge live';
+    text.textContent = 'LIVE BROADCAST';
+  } else if (data.isPlaying) {
+    badge.className = 'status-badge on-air';
+    text.textContent = 'ON AIR';
+  } else {
+    badge.className = 'status-badge offline';
+    text.textContent = 'OFFLINE';
+  }
+  if (data.currentTrack) {
+    updateTrackInfo(
+      data.currentTrack.title  || 'LETW Radio',
+      data.currentTrack.artist || 'Light Encounter Tabernacle Worldwide'
+    );
+  }
+  if (typeof data.listenerCount === 'number') updateListeners(data.listenerCount);
+  if (data.bitrate) document.getElementById('meta-bitrate').textContent = data.bitrate + ' kbps';
+}
+
+function updateTrackInfo(title, artist) {
+  document.getElementById('track-title').textContent  = title;
+  document.getElementById('track-artist').textContent = artist;
+  document.getElementById('onair-title').textContent  = title;
+  document.getElementById('onair-artist').textContent = artist;
+  if ('mediaSession' in navigator) {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title, artist, album: 'LETW Radio',
+      artwork: [{ src: '/logo.png', sizes: '512x512', type: 'image/png' }],
+    });
+  }
+}
+
+function updateListeners(count) {
+  document.getElementById('listener-count').textContent = count;
+  document.getElementById('meta-listeners').textContent = count;
+}
+
+function setSignal(val) {
+  document.getElementById('meta-signal').textContent = val;
+}
+
+// ── Live mode ─────────────────────────────────────────────────
+function switchToLiveMode(info) {
+  document.getElementById('player-card').classList.add('live-mode');
+  document.getElementById('play-btn').classList.add('live-mode');
+  document.getElementById('player-shimmer').classList.add('live');
+  document.getElementById('panel-shimmer').classList.add('live');
+  const badge = document.getElementById('status-badge');
+  badge.className = 'status-badge live';
+  document.getElementById('status-text').textContent = 'LIVE BROADCAST';
+  if (info && (info.title || info.artist)) {
+    updateTrackInfo(info.title || 'Live Broadcast', info.artist || 'LETW Radio');
+  }
+  if (isPlaying) reconnectAudio(LIVE_URL);
+}
+
+function exitLiveMode() {
+  document.getElementById('player-card').classList.remove('live-mode');
+  document.getElementById('play-btn').classList.remove('live-mode');
+  document.getElementById('player-shimmer').classList.remove('live');
+  document.getElementById('panel-shimmer').classList.remove('live');
+  const badge = document.getElementById('status-badge');
+  badge.className = 'status-badge on-air';
+  document.getElementById('status-text').textContent = 'ON AIR';
+  if (isPlaying) reconnectAudio(STREAM_URL);
+}
+
+function getStreamUrl() { return isLive ? LIVE_URL : STREAM_URL; }
+
+// ── Audio ─────────────────────────────────────────────────────
+const audio = document.getElementById('audio-element');
+audio.volume = currentVolume;
+
+audio.addEventListener('playing', () => {
+  isPlaying = true;
+  document.getElementById('play-icon').textContent = '⏸';
+  document.getElementById('play-btn').classList.add('playing');
+  setStatusBadge(true);
+  startVisualizerFromAudio();
+  requestWakeLock();
+  clearStallTimer();
+});
+
+audio.addEventListener('pause', () => {
+  isPlaying = false;
+  document.getElementById('play-icon').textContent = '▶';
+  document.getElementById('play-btn').classList.remove('playing');
+  setStatusBadge(false);
+  releaseWakeLock();
+});
+
+audio.addEventListener('waiting', () => {
+  document.getElementById('status-badge').className = 'status-badge buffering';
+  document.getElementById('status-text').textContent = 'BUFFERING';
+  startStallTimer();
+});
+
+audio.addEventListener('error', () => {
+  setStatusBadge(false);
+  if (isPlaying) scheduleReconnect();
+});
+
+function setStatusBadge(playing) {
+  if (isLive) return;
+  const badge = document.getElementById('status-badge');
+  const text  = document.getElementById('status-text');
+  badge.className = playing ? 'status-badge on-air' : 'status-badge offline';
+  text.textContent = playing ? 'ON AIR' : 'OFFLINE';
+}
+
+function togglePlay() {
+  if (isPlaying) stopPlayback(); else startPlayback();
+}
+
+function startPlayback() {
+  if (!audio.src || audio.src === window.location.href) {
+    audio.src = getStreamUrl();
+  }
+  audio.load();
+  audio.play().catch(() => {});
+}
+
+function stopPlayback() {
+  audio.pause();
+  audio.src = '';
+  isPlaying = false;
+  document.getElementById('play-icon').textContent = '▶';
+  document.getElementById('play-btn').classList.remove('playing');
+  setStatusBadge(false);
+  cancelSleepTimer();
+  releaseWakeLock();
+  clearStallTimer();
+}
+
+function reconnectAudio(url) {
+  const was = isPlaying;
+  audio.pause();
+  audio.src = url;
+  if (was) { audio.load(); audio.play().catch(() => {}); }
+}
+
+function scheduleReconnect() {
+  clearTimeout(reconnectTO);
+  reconnectTO = setTimeout(() => {
+    if (!isPlaying && audio.src) { audio.load(); audio.play().catch(() => {}); }
+  }, 3000);
+}
+
+function startStallTimer() {
+  clearStallTimer();
+  stallTimer = setTimeout(() => {
+    if (isPlaying) { audio.load(); audio.play().catch(() => {}); }
+  }, 8000);
+}
+function clearStallTimer() {
+  if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
+}
+
+// ── Volume ────────────────────────────────────────────────────
+const volSlider = document.getElementById('vol-slider');
+volSlider.value = currentVolume;
+
+volSlider.addEventListener('input', () => {
+  currentVolume = parseFloat(volSlider.value);
+  audio.volume  = isMuted ? 0 : currentVolume;
+  localStorage.setItem('letw_volume', currentVolume);
+  updateVolIcon();
+});
+
+function toggleMute() {
+  isMuted = !isMuted;
+  audio.volume = isMuted ? 0 : currentVolume;
+  updateVolIcon();
+}
+
+function updateVolIcon() {
+  const icon = document.getElementById('vol-icon');
+  if (isMuted || currentVolume === 0) icon.textContent = '🔇';
+  else if (currentVolume < 0.4)       icon.textContent = '🔈';
+  else if (currentVolume < 0.75)      icon.textContent = '🔉';
+  else                                icon.textContent = '🔊';
+}
+
+// ── Web Audio Visualizer ──────────────────────────────────────
+const canvas = document.getElementById('visualizer');
+const ctx2d  = canvas.getContext('2d');
+
+function startVisualizerFromAudio() {
+  if (vizRaf) cancelAnimationFrame(vizRaf);
   try {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume();
     if (sourceNode) { try { sourceNode.disconnect(); } catch(e) {} }
-    sourceNode = audioCtx.createMediaElementSource(audioEl);
+    sourceNode = audioCtx.createMediaElementSource(audio);
     analyser   = audioCtx.createAnalyser();
     analyser.fftSize = 128;
-    analyser.smoothingTimeConstant = 0.8;
     sourceNode.connect(analyser);
     analyser.connect(audioCtx.destination);
-  } catch(e) {}
+    drawAnalyserBars();
+  } catch(e) {
+    drawIdleVisualizer();
+  }
 }
 
-function drawVisualizer() {
-  visRAF = requestAnimationFrame(drawVisualizer);
+function drawAnalyserBars() {
   if (!analyser) return;
-  const W = canvas.offsetWidth;
-  const H = canvas.offsetHeight;
-  if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
-
   const bufLen = analyser.frequencyBinCount;
   const data   = new Uint8Array(bufLen);
-  analyser.getByteFrequencyData(data);
+  const W = canvas.offsetWidth;
+  const H = canvas.offsetHeight;
 
-  ctx2d.clearRect(0, 0, W, H);
+  function frame() {
+    vizRaf = requestAnimationFrame(frame);
+    analyser.getByteFrequencyData(data);
+    ctx2d.clearRect(0, 0, W, H);
 
-  const barCount = 48;
-  const gap      = 3;
-  const barW     = (W - gap * (barCount - 1)) / barCount;
-  const step     = Math.floor(bufLen / barCount);
-  const isLiveModeNow = document.getElementById('status-badge').classList.contains('live-on-air');
+    const color    = isLive ? '#e03060' : '#d4a843';
+    const colorDim = isLive ? 'rgba(224,48,96,0.25)' : 'rgba(212,168,67,0.25)';
+    const barW = (W / bufLen) * 2.1;
+    const gap  = 1.4;
 
-  for (let i = 0; i < barCount; i++) {
-    const val  = data[i * step] / 255;
-    const barH = Math.max(3, val * H * 0.92);
-    const x    = i * (barW + gap);
-    const y    = H - barH;
-
-    // Gradient per bar
-    const grad = ctx2d.createLinearGradient(0, H, 0, y);
-    if (isLiveModeNow) {
-      grad.addColorStop(0, 'rgba(224,80,112,0.9)');
-      grad.addColorStop(0.5,'rgba(255,107,138,0.7)');
-      grad.addColorStop(1, 'rgba(255,150,170,0.3)');
-    } else {
-      grad.addColorStop(0, 'rgba(212,168,67,0.9)');
-      grad.addColorStop(0.5,'rgba(240,200,90,0.7)');
-      grad.addColorStop(1, 'rgba(255,230,120,0.3)');
+    for (let i = 0; i < bufLen; i++) {
+      const barH = (data[i] / 255) * H;
+      if (barH < 1) continue;
+      const x = i * (barW + gap);
+      ctx2d.shadowColor = color;
+      ctx2d.shadowBlur  = 4;
+      const g = ctx2d.createLinearGradient(0, H - barH, 0, H);
+      g.addColorStop(0, color);
+      g.addColorStop(1, colorDim);
+      ctx2d.fillStyle = g;
+      ctx2d.beginPath();
+      if (ctx2d.roundRect) {
+        ctx2d.roundRect(x, H - barH, barW, barH, [2, 2, 0, 0]);
+      } else {
+        ctx2d.rect(x, H - barH, barW, barH);
+      }
+      ctx2d.fill();
+      ctx2d.shadowBlur = 0;
     }
-    ctx2d.fillStyle = grad;
-    const radius = Math.min(barW / 2, 3);
+  }
+  frame();
+}
+
+function drawIdleVisualizer() {
+  if (vizRaf) cancelAnimationFrame(vizRaf);
+  vizRaf = null;
+  const W = canvas.offsetWidth || 360;
+  const H = canvas.offsetHeight || 48;
+  ctx2d.clearRect(0, 0, W, H);
+  const n = 32;
+  const bw = (W / n) * 0.75;
+  const gap = (W / n) * 0.25;
+  for (let i = 0; i < n; i++) {
+    const h = 3 + Math.abs(Math.sin(i * 0.6)) * 5;
+    ctx2d.fillStyle = 'rgba(212,168,67,0.10)';
     ctx2d.beginPath();
-    ctx2d.roundRect(x, y, barW, barH, [radius, radius, 0, 0]);
+    if (ctx2d.roundRect) {
+      ctx2d.roundRect(i * (bw + gap), H - h, bw, h, [1, 1, 0, 0]);
+    } else {
+      ctx2d.rect(i * (bw + gap), H - h, bw, h);
+    }
     ctx2d.fill();
   }
 }
 
-function stopVisualizer() {
-  if (visRAF) { cancelAnimationFrame(visRAF); visRAF = null; }
-  if (ctx2d) { ctx2d.clearRect(0, 0, canvas.width, canvas.height); }
+// ── Sleep Timer ───────────────────────────────────────────────
+function toggleSleepMenu() {
+  document.getElementById('sleep-menu').classList.toggle('open');
 }
 
-function startVisualizer() {
-  if (!visRAF) drawVisualizer();
+function setSleepTimer(minutes) {
+  cancelSleepTimer();
+  document.getElementById('sleep-menu').classList.remove('open');
+  sleepEndTime = Date.now() + minutes * 60 * 1000;
+
+  sleepTick = setInterval(() => {
+    const remaining = sleepEndTime - Date.now();
+    if (remaining <= 0) {
+      cancelSleepTimer();
+      const fadeInterval = setInterval(() => {
+        if (audio.volume > 0.04) {
+          audio.volume = Math.max(0, audio.volume - 0.04);
+        } else {
+          clearInterval(fadeInterval);
+          stopPlayback();
+        }
+      }, 200);
+      return;
+    }
+    const m = Math.floor(remaining / 60000);
+    const s = Math.floor((remaining % 60000) / 1000);
+    document.getElementById('sleep-icon').textContent =
+      m + ':' + (s < 10 ? '0' : '') + s;
+  }, 1000);
+
+  document.getElementById('sleep-btn').classList.add('active');
 }
 
-// ── VOLUME ICON ──────────────────────────────────────────────────────────────
-const volInput = document.getElementById('volume');
-const savedVol = parseFloat(localStorage.getItem('letw_vol') || '0.85');
-document.getElementById('audio').volume = savedVol;
-volInput.value = savedVol;
-volInput.addEventListener('input', e => {
-  const v = parseFloat(e.target.value);
-  document.getElementById('audio').volume = v;
-  localStorage.setItem('letw_vol', e.target.value);
-  const icon = document.getElementById('vol-icon');
-  icon.textContent = v === 0 ? '🔇' : v < 0.5 ? '🔈' : '🔉';
-});
+function cancelSleepTimer() {
+  if (sleepTick) { clearInterval(sleepTick); sleepTick = null; }
+  sleepEndTime = null;
+  document.getElementById('sleep-icon').textContent = '💤';
+  document.getElementById('sleep-btn').classList.remove('active');
+}
 
-// ── SHARE ────────────────────────────────────────────────────────────────────
+// ── Share ─────────────────────────────────────────────────────
 function shareStation() {
-  const data = { title:'LETW Radio — Live', text:'Listen live to Light Encounter Tabernacle Worldwide Radio', url: window.location.href };
-  if (navigator.share) { navigator.share(data).catch(()=>{}); }
-  else { navigator.clipboard.writeText(window.location.href).then(()=>{ const btn=document.getElementById('share-btn'); btn.textContent='✓'; setTimeout(()=>btn.textContent='📤',2000); }).catch(()=>{}); }
+  const url = window.location.origin + '/listen';
+  if (navigator.share) {
+    navigator.share({ title: 'LETW Radio — Listen Live', text: 'Tune in to LETW Online Radio', url }).catch(() => {});
+  } else {
+    navigator.clipboard.writeText(url).then(() => {
+      const b = document.getElementById('share-btn');
+      b.textContent = '✓';
+      setTimeout(() => { b.textContent = '🔗'; }, 2000);
+    });
+  }
 }
 
-// ── SOCKET & STATE ────────────────────────────────────────────────────────────
-const socket    = io();
-const audioEl   = document.getElementById('audio');
-let isPlaying   = false;
-let isLiveMode  = false;
-let retryTimer  = null;
-let stallTimer  = null;
-let lastAudioT  = 0;
+// ── Push Notifications ────────────────────────────────────────
+async function initPush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  try {
+    const res  = await fetch('/api/push/vapid-public');
+    const data = await res.json();
+    vapidPublicKey = data.publicKey || '';
+    if (!vapidPublicKey) return;
+    const reg      = await navigator.serviceWorker.ready;
+    const existing = await reg.pushManager.getSubscription();
+    if (existing) {
+      pushSub     = existing;
+      pushEnabled = true;
+      updatePushBtn();
+    }
+  } catch(e) {}
+}
 
-// ── INITIAL STATUS ────────────────────────────────────────────────────────────
-fetch('/api/status').then(r => r.json()).then(s => {
-  if (s.isLive) {
-    setLiveMode(true, s.liveTitle, s.liveArtist);
+async function togglePush() {
+  if (!vapidPublicKey) { alert('Push notifications are not configured yet.'); return; }
+  if (pushEnabled) await unsubscribePush();
+  else             await subscribePush();
+}
+
+async function subscribePush() {
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') return;
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlB64ToUint8(vapidPublicKey),
+    });
+    pushSub = sub;
+    const p256dh = sub.getKey('p256dh');
+    const auth   = sub.getKey('auth');
+    await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        endpoint: sub.endpoint,
+        p256dh: btoa(String.fromCharCode(...new Uint8Array(p256dh))),
+        auth:   btoa(String.fromCharCode(...new Uint8Array(auth))),
+      }),
+    });
+    pushEnabled = true;
+    updatePushBtn();
+  } catch(e) {}
+}
+
+async function unsubscribePush() {
+  try {
+    if (pushSub) {
+      await fetch('/api/push/subscribe', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: pushSub.endpoint }),
+      });
+      await pushSub.unsubscribe();
+      pushSub = null;
+    }
+    pushEnabled = false;
+    updatePushBtn();
+  } catch(e) {}
+}
+
+function updatePushBtn() {
+  const btn = document.getElementById('push-btn');
+  btn.textContent = pushEnabled ? '🔕' : '🔔';
+  btn.classList.toggle('active', pushEnabled);
+}
+
+function urlB64ToUint8(b64) {
+  const pad = '='.repeat((4 - b64.length % 4) % 4);
+  const raw = window.atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+
+// ── Ticker ────────────────────────────────────────────────────
+function setTicker(text, enabled) {
+  const bar   = document.getElementById('ticker-bar');
+  const inner = document.getElementById('ticker-inner');
+  const app   = document.getElementById('app');
+  if (enabled && text && text.trim()) {
+    inner.textContent = text;
+    bar.classList.add('visible');
+    app.classList.add('has-ticker');
   } else {
-    setLive(s.isPlaying);
-    if (s.currentTrack) updateTrack(s.currentTrack);
+    bar.classList.remove('visible');
+    app.classList.remove('has-ticker');
   }
-  setMeta(s.listeners || 0);
-}).catch(()=>{});
+}
 
-// ── SOCKET EVENTS ─────────────────────────────────────────────────────────────
-socket.on('trackStart', t => { setLive(true); updateTrack(t); if (isPlaying && !isLiveMode) reconnect(); });
-socket.on('status',     s => {
-  if (s.isLive) { setLiveMode(true, s.liveTitle, s.liveArtist); }
-  else           { setLive(s.isPlaying); }
-  setMeta(s.listeners || 0);
-});
-socket.on('listenerChange', c => setMeta(c));
+async function loadTicker() {
+  try {
+    const res  = await fetch('/api/ticker');
+    const data = await res.json();
+    setTicker(data.text, data.enabled);
+  } catch(e) {}
+}
 
-// Live broadcast events
-socket.on('live:started', info => {
-  setLiveMode(true, info.title, info.artist);
-  // If currently playing file stream, switch to live stream
-  if (isPlaying && !isLiveMode) reconnect();
-});
-socket.on('live:ended', () => {
-  setLiveMode(false);
-  // Reconnect to regular stream
-  if (isPlaying) reconnect();
-});
+// ── Chat ──────────────────────────────────────────────────────
+async function loadChatHistory() {
+  try {
+    const res  = await fetch('/api/chat');
+    const msgs = await res.json();
+    const list = document.getElementById('chat-messages');
+    list.innerHTML = '<div class="chat-msg system"><div class="chat-text">Welcome to LETW Radio! 🙏</div></div>';
+    msgs.forEach(m => appendChatMessage(m, false));
+    list.scrollTop = list.scrollHeight;
+  } catch(e) {}
+}
 
-// ── VISIBILITY / NETWORK ──────────────────────────────────────────────────────
+function appendChatMessage(msg, scroll) {
+  const list = document.getElementById('chat-messages');
+  const el   = document.createElement('div');
+  el.className  = 'chat-msg';
+  el.dataset.msgId = msg.id || '';
+
+  if (msg.type === 'system') {
+    el.classList.add('system');
+    el.innerHTML = '<div class="chat-text">' + esc(msg.message) + '</div>';
+  } else {
+    const color = msg.color || userColor(msg.username || '');
+    const d     = msg.created_at ? new Date(msg.created_at) : new Date();
+    const time  = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    el.innerHTML =
+      '<div class="chat-msg-header">' +
+        '<span class="chat-user-dot" style="background:' + color + '"></span>' +
+        '<span class="chat-username" style="color:' + color + '">' + esc(msg.username) + '</span>' +
+        '<span class="chat-time">' + time + '</span>' +
+      '</div>' +
+      '<div class="chat-text">' + esc(msg.message) + '</div>';
+  }
+
+  list.appendChild(el);
+  if (scroll !== false) list.scrollTop = list.scrollHeight;
+}
+
+async function sendChat() {
+  const input   = document.getElementById('chat-input');
+  const message = input.value.trim();
+  if (!message) return;
+  const username = getUsername();
+  const color    = userColor(username);
+  input.value    = '';
+  try {
+    await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, message, color }),
+    });
+  } catch(e) {
+    input.value = message;
+  }
+}
+
+// ── Floating Reactions ────────────────────────────────────────
+function sendReaction(emoji) {
+  socket.emit('chat:reaction', emoji);
+  spawnFloatingEmoji(emoji);
+}
+
+function spawnFloatingEmoji(emoji) {
+  const overlay = document.getElementById('reactions-overlay');
+  const el = document.createElement('div');
+  el.className = 'float-emoji';
+  el.textContent = emoji;
+  el.style.left = (10 + Math.random() * 80) + '%';
+  el.style.animationDuration = (2.5 + Math.random() * 2) + 's';
+  overlay.appendChild(el);
+  el.addEventListener('animationend', () => el.remove());
+}
+
+// ── Schedule ──────────────────────────────────────────────────
+async function loadSchedule() {
+  try {
+    const res  = await fetch('/api/planning');
+    const rows = await res.json();
+    const now  = new Date();
+    const dow  = now.getDay();
+    const today = rows.filter(r => Number(r.day_of_week) === dow);
+    const list  = document.getElementById('schedule-list');
+
+    if (!today.length) {
+      list.innerHTML = '<div style="font-size:12px;color:var(--text-dim);text-align:center;padding:20px;">No programs scheduled today.</div>';
+      return;
+    }
+
+    const nowStr = now.toTimeString().slice(0, 5);
+    list.innerHTML = '';
+    today.forEach(row => {
+      const current = row.start_time <= nowStr && row.end_time > nowStr;
+      const div = document.createElement('div');
+      div.className = 'schedule-item' + (current ? ' current' : '');
+      div.innerHTML =
+        '<div class="schedule-dot"></div>' +
+        '<div class="schedule-time">' + row.start_time + ' – ' + row.end_time + '</div>' +
+        '<div class="schedule-name">' + esc(row.content_name) + '</div>';
+      list.appendChild(div);
+    });
+  } catch(e) {
+    document.getElementById('schedule-list').innerHTML =
+      '<div style="font-size:12px;color:var(--text-dim);text-align:center;padding:20px;">Could not load schedule.</div>';
+  }
+}
+
+// ── Tabs ──────────────────────────────────────────────────────
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + tab));
+  if (tab === 'onair') loadSchedule();
+}
+
+// ── Request ───────────────────────────────────────────────────
+function setReqType(type) {
+  currentReqType = type;
+  document.querySelectorAll('.req-type-btn').forEach(b => b.classList.toggle('active', b.dataset.type === type));
+  const label  = document.getElementById('req-text-label');
+  const area   = document.getElementById('req-text');
+  const dedGrp = document.getElementById('req-dedication-group');
+  if (type === 'song') {
+    label.textContent = 'Song / Artist Name';
+    area.placeholder  = 'What song would you like to hear?';
+    dedGrp.style.display = 'none';
+  } else if (type === 'prayer') {
+    label.textContent = 'Prayer Request';
+    area.placeholder  = 'Share your prayer request...';
+    dedGrp.style.display = 'none';
+  } else {
+    label.textContent = 'Dedication Message';
+    area.placeholder  = 'Write your dedication...';
+    dedGrp.style.display = 'block';
+  }
+}
+
+async function submitRequest() {
+  const username  = document.getElementById('req-name').value.trim() || getUsername();
+  const text      = document.getElementById('req-text').value.trim();
+  const dedicated = document.getElementById('req-dedicated').value.trim();
+  if (!text) return;
+  try {
+    const res = await fetch('/api/requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username,
+        request_type: currentReqType,
+        request_text: text,
+        dedicated_to: dedicated,
+      }),
+    });
+    if (res.ok) {
+      document.getElementById('req-text').value      = '';
+      document.getElementById('req-dedicated').value = '';
+      const toast = document.getElementById('req-toast');
+      toast.classList.add('visible');
+      setTimeout(() => toast.classList.remove('visible'), 3500);
+    }
+  } catch(e) {}
+}
+
+// ── Mobile Panel ──────────────────────────────────────────────
+function toggleMobilePanel() {
+  mobilePanelOpen = !mobilePanelOpen;
+  document.getElementById('community-panel').classList.toggle('open', mobilePanelOpen);
+  document.getElementById('mobile-chat-toggle').textContent = mobilePanelOpen ? '✕' : '💬';
+}
+
+// ── Wake Lock ─────────────────────────────────────────────────
+async function requestWakeLock() {
+  if (!('wakeLock' in navigator)) return;
+  try { wakeLock = await navigator.wakeLock.request('screen'); } catch(e) {}
+}
+async function releaseWakeLock() {
+  if (wakeLock) { try { await wakeLock.release(); } catch(e) {} wakeLock = null; }
+}
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') {
-    fetch('/api/status').then(r=>r.json()).then(s=>{
-      if (s.isLive) setLiveMode(true, s.liveTitle, s.liveArtist);
-      else { setLive(s.isPlaying); if (s.currentTrack) updateTrack(s.currentTrack); }
-      setMeta(s.listeners||0);
-    }).catch(()=>{});
-    if (isPlaying && audioEl.paused) reconnect();
+  if (document.visibilityState === 'visible' && isPlaying) requestWakeLock();
+});
+
+// ── Media Session ─────────────────────────────────────────────
+function setupMediaSession() {
+  if (!('mediaSession' in navigator)) return;
+  navigator.mediaSession.setActionHandler('play',  () => startPlayback());
+  navigator.mediaSession.setActionHandler('pause', () => stopPlayback());
+  navigator.mediaSession.setActionHandler('stop',  () => stopPlayback());
+}
+
+// ── Keyboard Shortcuts ────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+  if (e.code === 'KeyM')  { toggleMute(); }
+  if (e.code === 'ArrowUp') {
+    currentVolume = Math.min(1, currentVolume + 0.05);
+    volSlider.value = currentVolume;
+    audio.volume = isMuted ? 0 : currentVolume;
+    localStorage.setItem('letw_volume', currentVolume);
+    updateVolIcon();
+  }
+  if (e.code === 'ArrowDown') {
+    currentVolume = Math.max(0, currentVolume - 0.05);
+    volSlider.value = currentVolume;
+    audio.volume = isMuted ? 0 : currentVolume;
+    localStorage.setItem('letw_volume', currentVolume);
+    updateVolIcon();
   }
 });
-window.addEventListener('online', () => { if (isPlaying) reconnect(); });
 
-// ── UI HELPERS ────────────────────────────────────────────────────────────────
-function setLive(live) {
-  if (isLiveMode) return; // live broadcast overrides
-  const badge = document.getElementById('status-badge');
-  badge.className = 'status-badge ' + (live ? 'live' : 'offline');
-  document.getElementById('badge-text').textContent = live ? 'ON AIR' : 'OFFLINE';
-  document.getElementById('meta-signal').textContent = live ? '●●●●' : '—';
-  document.getElementById('meta-signal').style.color = live ? 'var(--gold)' : 'var(--text3)';
-  if (!live) {
-    document.getElementById('track-title').textContent  = 'No broadcast active';
-    document.getElementById('track-artist').textContent = 'Light Encounter Tabernacle Worldwide';
+document.addEventListener('click', e => {
+  if (!e.target.closest('.sleep-wrap')) {
+    document.getElementById('sleep-menu').classList.remove('open');
   }
-}
-
-function setLiveMode(active, title, artist) {
-  isLiveMode = active;
-  const badge    = document.getElementById('status-badge');
-  const topbar   = document.getElementById('card-topbar');
-  const rings    = document.getElementById('rings');
-  const playBtn  = document.getElementById('play-btn');
-  const metaFmt  = document.getElementById('meta-format');
-
-  if (active) {
-    badge.className = 'status-badge live-on-air';
-    document.getElementById('badge-text').textContent = '🔴 LIVE BROADCAST';
-    document.getElementById('track-title').textContent  = title  || 'Live Broadcast';
-    document.getElementById('track-artist').textContent = artist || 'Light Encounter Tabernacle Worldwide';
-    topbar.classList.add('live-bar');
-    rings.classList.add('live-mode');
-    playBtn.classList.add('live-btn');
-    metaFmt.textContent = 'LIVE';
-    document.getElementById('meta-signal').textContent = '●●●●';
-    document.getElementById('meta-signal').style.color = 'var(--live2)';
-    document.title = '🔴 LIVE — LETW Radio';
-    updateMediaSession(title, artist);
-  } else {
-    badge.className = 'status-badge offline';
-    document.getElementById('badge-text').textContent = 'OFFLINE';
-    topbar.classList.remove('live-bar');
-    rings.classList.remove('live-mode');
-    playBtn.classList.remove('live-btn');
-    metaFmt.textContent = 'MP3';
-    document.title = 'LETW Radio';
-  }
-}
-
-function setMeta(c) {
-  document.getElementById('meta-listeners').textContent = c;
-  document.getElementById('listener-count').textContent = c;
-}
-
-function updateTrack(t) {
-  if (isLiveMode) return;
-  const el = document.getElementById('track-title');
-  el.textContent = t.title || 'Worship & Word';
-  document.getElementById('track-artist').textContent = t.artist || 'Light Encounter Tabernacle Worldwide';
-  el.classList.remove('fade-in'); void el.offsetWidth; el.classList.add('fade-in');
-  document.getElementById('meta-bitrate').textContent = (t.bitrate || 128) + 'k';
-  document.title = (t.title || 'Live') + ' — LETW Radio';
-  updateMediaSession(t.title, t.artist);
-}
-
-function setPlayingUI(playing) {
-  document.getElementById('play-btn').innerHTML = playing ? '⏸' : '▶';
-  document.getElementById('logo-wrap').classList.toggle('playing', playing);
-  document.getElementById('rings').classList.toggle('playing', playing && !isLiveMode);
-  if ('mediaSession' in navigator) navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
-  if (playing) {
-    document.getElementById('vis-idle').style.display = 'none';
-    canvas.style.display = 'block';
-    startVisualizer();
-  } else {
-    stopVisualizer();
-    canvas.style.display = 'none';
-    document.getElementById('vis-idle').style.display = 'flex';
-  }
-}
-
-// ── AUDIO CONTROLS ────────────────────────────────────────────────────────────
-function togglePlay() { isPlaying ? stopAudio() : startAudio(); }
-
-function startAudio() {
-  clearTimeout(retryTimer);
-
-  // Resume AudioContext if suspended (autoplay policy)
-  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
-
-  const badge = document.getElementById('status-badge');
-  badge.className = 'status-badge connecting';
-  document.getElementById('badge-text').textContent = 'CONNECTING…';
-
-  const src = isLiveMode
-    ? window.location.origin + '/live-stream?t=' + Date.now()
-    : window.location.origin + '/stream?t='      + Date.now();
-
-  // Setup Web Audio on first play
-  if (!audioCtx) setupVisualizer(audioEl);
-
-  audioEl.src = src;
-  audioEl.load();
-  audioEl.play().then(() => {
-    isPlaying = true;
-    setPlayingUI(true);
-    if (isLiveMode) setLiveMode(true, document.getElementById('track-title').textContent, document.getElementById('track-artist').textContent);
-    else setLive(true);
-    requestWakeLock();
-    startStallDetection();
-  }).catch(err => {
-    isPlaying = false;
-    setPlayingUI(false);
-    document.getElementById('track-title').textContent = 'Tap ▶ to listen live';
-    if (err.name !== 'AbortError') retryTimer = setTimeout(startAudio, 3000);
-  });
-}
-
-function stopAudio() {
-  clearTimeout(retryTimer); clearTimeout(stallTimer);
-  audioEl.pause(); audioEl.src = '';
-  isPlaying = false;
-  setPlayingUI(false);
-  releaseWakeLock();
-}
-
-function reconnect() {
-  clearTimeout(retryTimer); clearTimeout(stallTimer);
-  audioEl.pause(); audioEl.src = '';
-  retryTimer = setTimeout(startAudio, 1200);
-}
-
-// ── STALL DETECTION ───────────────────────────────────────────────────────────
-function startStallDetection() {
-  clearTimeout(stallTimer);
-  lastAudioT = audioEl.currentTime;
-  stallTimer = setTimeout(checkStall, 8000);
-}
-function checkStall() {
-  if (!isPlaying) return;
-  if (audioEl.currentTime === lastAudioT && !audioEl.paused) { console.warn('[LETW] Stalled — reconnecting'); reconnect(); }
-  else { lastAudioT = audioEl.currentTime; stallTimer = setTimeout(checkStall, 8000); }
-}
-
-// ── AUDIO ELEMENT EVENTS ──────────────────────────────────────────────────────
-audioEl.addEventListener('playing', () => { setPlayingUI(true); if (!isLiveMode) setLive(true); startStallDetection(); });
-audioEl.addEventListener('waiting', () => {
-  if (isPlaying) { const b=document.getElementById('status-badge'); b.className='status-badge connecting'; document.getElementById('badge-text').textContent='BUFFERING…'; }
 });
-audioEl.addEventListener('error',  () => { if (!isPlaying) return; clearTimeout(retryTimer); retryTimer=setTimeout(startAudio,3000); });
-audioEl.addEventListener('ended',  () => { if (!isPlaying) return; clearTimeout(retryTimer); retryTimer=setTimeout(startAudio,2000); });
+
+// ── PWA ───────────────────────────────────────────────────────
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredInstall = e;
+  if (!localStorage.getItem('letw_install_dismissed')) {
+    document.getElementById('install-banner').classList.add('visible');
+  }
+});
+
+function installPWA() {
+  if (!deferredInstall) return;
+  deferredInstall.prompt();
+  deferredInstall.userChoice.then(() => { deferredInstall = null; dismissInstall(); });
+}
+
+function dismissInstall() {
+  document.getElementById('install-banner').classList.remove('visible');
+  localStorage.setItem('letw_install_dismissed', '1');
+}
+
+// ── Service Worker ────────────────────────────────────────────
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
+// ── Util ──────────────────────────────────────────────────────
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
+
+// ── Init ──────────────────────────────────────────────────────
+(async function init() {
+  // Set up canvas dimensions
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width  = (canvas.parentElement ? canvas.parentElement.offsetWidth - 56 : 360) * dpr;
+  canvas.height = 48 * dpr;
+  canvas.style.width  = '';
+  canvas.style.height = '48px';
+  ctx2d.scale(dpr, dpr);
+  drawIdleVisualizer();
+
+  // Username
+  document.getElementById('chat-username-display').textContent = getUsername();
+  document.getElementById('req-name').value = getUsername();
+
+  // Volume
+  updateVolIcon();
+
+  // Async loads
+  await loadTicker();
+  await loadChatHistory();
+
+  // Fetch status
+  try {
+    const res  = await fetch('/api/status');
+    const data = await res.json();
+    applyStatus(data);
+    if (data.radioName) document.title = data.radioName + ' — Listen Live';
+  } catch(e) {}
+
+  // Push
+  await initPush();
+
+  // Media session
+  setupMediaSession();
+})();
 </script>
 </body>
 </html>

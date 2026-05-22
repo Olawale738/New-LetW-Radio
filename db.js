@@ -74,12 +74,51 @@ function initSchema(sqlDb) {
       id INTEGER PRIMARY KEY AUTOINCREMENT, track_id TEXT NOT NULL,
       played_at DATETIME DEFAULT CURRENT_TIMESTAMP, duration_played REAL DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL,
+      message TEXT NOT NULL,
+      type TEXT DEFAULT 'message',
+      color TEXT DEFAULT '#d4a843',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL,
+      request_type TEXT DEFAULT 'song',
+      request_text TEXT NOT NULL,
+      dedicated_to TEXT DEFAULT '',
+      status TEXT DEFAULT 'pending',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS listener_stats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      count INTEGER NOT NULL,
+      recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      endpoint TEXT UNIQUE NOT NULL,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   const defaults = {
-    radio_name: 'LETW Radio', radio_description: 'A bible believing church where the word of God is taught with simplicity and clarity.',
-    radio_genre: 'Gospel / Christian', radio_language: 'English', stream_bitrate: '128',
-    max_listeners: '100', filler_enabled: '1', filler_playlist: '', logo_url: '',
+    radio_name: 'LETW Radio',
+    radio_description: 'A bible believing church where the word of God is taught with simplicity and clarity.',
+    radio_genre: 'Gospel / Christian',
+    radio_language: 'English',
+    stream_bitrate: '128',
+    max_listeners: '100',
+    filler_enabled: '1',
+    filler_playlist: '',
+    logo_url: '',
+    ticker_text: '',
+    ticker_enabled: '0',
+    vapid_public: '',
+    vapid_private: '',
   };
   for (const [k, v] of Object.entries(defaults)) {
     sqlDb.run(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`, [k, v]);
@@ -143,7 +182,7 @@ async function initDb() {
   }
   initSchema(_sqlDb);
   saveToDisk();
-  console.log('✅ Database initialized');
+  console.log('Database initialized');
 }
 
 db.init = initDb;

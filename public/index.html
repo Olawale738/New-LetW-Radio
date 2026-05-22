@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Space+Grotesk:wght@300;400;500;600;700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="/socket.io/socket.io.js"></script>
   <style>
     :root {
@@ -841,6 +842,11 @@
     <span id="live-nav-dot" style="display:none;position:absolute;right:10px;top:50%;transform:translateY(-50%);width:8px;height:8px;background:#e05070;border-radius:50%;animation:liveDot 1s infinite;"></span>
   </div>
 
+  <div class="nav-item" data-page="community">
+    <span class="nav-icon">💬</span><span>Community</span>
+    <span id="community-badge" style="display:none;margin-left:auto;background:#e03060;color:#fff;font-size:9px;font-weight:900;padding:2px 6px;border-radius:10px;letter-spacing:0.5px;">NEW</span>
+  </div>
+
   <div class="nav-section">Other</div>
   <div class="nav-item" data-page="history">
     <span class="nav-icon">📜</span><span>History</span>
@@ -979,6 +985,22 @@
             <a href="/listen" target="_blank" class="btn btn-secondary" style="justify-content:flex-start;text-decoration:none;">
               🔗 Share Radio Link
             </a>
+          </div>
+        </div>
+      </div>
+
+      <!-- LISTENERS CHART -->
+      <div class="card" style="margin-top:20px;" id="listeners-chart-card">
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+          <div class="card-title">📊 Listener Activity — Last 24 Hours</div>
+          <button class="btn btn-secondary" style="padding:4px 12px;font-size:11px;" onclick="loadListenersChart()">Refresh</button>
+        </div>
+        <div style="padding:16px;">
+          <div style="position:relative;height:200px;width:100%;">
+            <canvas id="listeners-chart"></canvas>
+          </div>
+          <div style="margin-top:8px;font-size:10px;color:rgba(192,168,216,0.35);letter-spacing:0.5px;text-align:right;">
+            Recorded every 60 seconds — last 1440 data points max
           </div>
         </div>
       </div>
@@ -1239,6 +1261,81 @@
         </div>
 
       </div>
+    </div>
+
+    <!-- ===== COMMUNITY ===== -->
+    <div class="page" id="page-community">
+
+      <!-- Ticker / Announcement Card -->
+      <div class="card" style="margin-bottom:20px;">
+        <div class="card-header"><div class="card-title">📢 Ticker / Announcement</div></div>
+        <div style="padding:16px;">
+          <div style="margin-bottom:12px;">
+            <label class="form-label">Announcement Text</label>
+            <input type="text" id="ticker-text-input" class="form-control" placeholder="Type your announcement here..." style="width:100%;margin-bottom:8px;">
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+              <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text3);cursor:pointer;">
+                <input type="checkbox" id="ticker-enabled-chk" style="accent-color:var(--gold);">
+                Enable ticker bar on listener player
+              </label>
+              <button class="btn btn-primary" style="padding:5px 14px;font-size:12px;" onclick="saveTicker()">Save Ticker</button>
+              <span id="ticker-save-msg" style="font-size:12px;color:#4caf82;display:none;">Saved!</span>
+            </div>
+          </div>
+          <div style="background:rgba(26,15,0,0.7);border:1px solid rgba(212,168,67,0.25);border-radius:8px;padding:8px 14px;overflow:hidden;">
+            <div style="font-size:9px;letter-spacing:2px;color:rgba(192,168,216,0.4);margin-bottom:4px;text-transform:uppercase;">Preview</div>
+            <div id="ticker-preview" style="font-size:12px;font-weight:700;color:#f0c85a;letter-spacing:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">—</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chat Moderation Card -->
+      <div class="card" style="margin-bottom:20px;">
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+          <div class="card-title">💬 Chat Moderation</div>
+          <button class="btn btn-secondary" style="padding:4px 12px;font-size:11px;color:#e05070;border-color:rgba(224,80,112,0.4);" onclick="clearChat()">Clear All Chat</button>
+        </div>
+        <div id="chat-mod-list" style="max-height:340px;overflow-y:auto;scrollbar-width:thin;">
+          <div style="padding:20px;text-align:center;font-size:13px;color:var(--text3);">Loading chat...</div>
+        </div>
+      </div>
+
+      <!-- Requests Card -->
+      <div class="card" style="margin-bottom:20px;">
+        <div class="card-header"><div class="card-title">🎵 Song / Prayer Requests</div></div>
+        <div style="padding:0;overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;" id="requests-table">
+            <thead>
+              <tr style="border-bottom:1px solid rgba(212,168,67,0.15);">
+                <th style="padding:10px 14px;text-align:left;font-size:9px;letter-spacing:1.5px;color:rgba(192,168,216,0.45);text-transform:uppercase;font-weight:700;">Type</th>
+                <th style="padding:10px 14px;text-align:left;font-size:9px;letter-spacing:1.5px;color:rgba(192,168,216,0.45);text-transform:uppercase;font-weight:700;">From</th>
+                <th style="padding:10px 14px;text-align:left;font-size:9px;letter-spacing:1.5px;color:rgba(192,168,216,0.45);text-transform:uppercase;font-weight:700;">Request</th>
+                <th style="padding:10px 14px;text-align:left;font-size:9px;letter-spacing:1.5px;color:rgba(192,168,216,0.45);text-transform:uppercase;font-weight:700;">Status</th>
+                <th style="padding:10px 14px;"></th>
+              </tr>
+            </thead>
+            <tbody id="requests-tbody">
+              <tr><td colspan="5" style="padding:20px;text-align:center;color:var(--text3);font-size:13px;">Loading requests...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Push Notifications Card -->
+      <div class="card" style="margin-bottom:20px;">
+        <div class="card-header"><div class="card-title">🔔 Push Notifications</div></div>
+        <div style="padding:16px;">
+          <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+            <div style="font-size:13px;color:var(--text3);">Active subscribers: <strong id="push-sub-count" style="color:var(--gold);">–</strong></div>
+            <button class="btn btn-secondary" style="padding:4px 12px;font-size:11px;" onclick="sendTestPush()">Send Test Push</button>
+            <span id="push-test-msg" style="font-size:12px;color:#4caf82;display:none;">Test sent!</span>
+          </div>
+          <div style="margin-top:10px;font-size:11px;color:var(--text3);line-height:1.6;">
+            Push notifications are sent automatically when a live broadcast starts. Subscribers must have notifications enabled in their browser on the /listen page.
+          </div>
+        </div>
+      </div>
+
     </div>
 
     <!-- ===== SETTINGS ===== -->
@@ -1612,9 +1709,15 @@ function navigate(page) {
     dashboard: 'Dashboard', library: 'Library', playlists: 'Playlists',
     programs: 'Programs', planning: 'Planning', breaks: 'Breaks',
     dailygen: 'Daily Generation', history: 'History', settings: 'Settings',
-    golive: '🎙️ Go Live — Browser Broadcast'
+    golive: '🎙️ Go Live — Browser Broadcast',
+    community: '💬 Community'
   };
   document.getElementById('topbar-title').textContent = titles[page] || page;
+
+  if (page === 'community') {
+    const badge = document.getElementById('community-badge');
+    if (badge) badge.style.display = 'none';
+  }
 
   const loaders = {
     library: loadTracks,
@@ -1626,7 +1729,8 @@ function navigate(page) {
     settings: loadSettings,
     dashboard: loadDashboardStats,
     dailygen: () => { document.getElementById('dailygen-date').valueAsDate = new Date(); loadDailyGen(); },
-    golive: initGoLivePage
+    golive: initGoLivePage,
+    community: loadCommunity
   };
   if (loaders[page]) loaders[page]();
 }
@@ -1746,6 +1850,7 @@ async function loadDashboardStats() {
     document.getElementById('stat-playlists').textContent = playlists.length;
     updateStatusUI(status);
     loadHistoryMini();
+    loadListenersChart();
 
     // Set stream/player URLs
     const base = window.location.origin;
@@ -2646,6 +2751,225 @@ socket.on('listenerChange', count => {
   const el = document.getElementById('live-listener-count');
   if (el) el.textContent = count;
 });
+
+socket.on('request:new', () => {
+  const badge = document.getElementById('community-badge');
+  if (badge && state.currentPage !== 'community') badge.style.display = 'inline';
+});
+
+// ── apiFetch helper (wraps native fetch for community functions) ──────────────
+const apiFetch = (path, opts = {}) => fetch(path, opts);
+const escHtml = esc;
+
+// ── Community page loader ─────────────────────────────────────────────────────
+async function loadCommunity() {
+  await Promise.all([loadTickerAdmin(), loadChatMod(), loadRequestsAdmin(), loadPushCount()]);
+}
+
+// ── Ticker ────────────────────────────────────────────────────────────────────
+async function loadTickerAdmin() {
+  try {
+    const res  = await apiFetch('/api/ticker');
+    const data = await res.json();
+    const inp  = document.getElementById('ticker-text-input');
+    const chk  = document.getElementById('ticker-enabled-chk');
+    const prev = document.getElementById('ticker-preview');
+    if (inp)  inp.value   = data.text || '';
+    if (chk)  chk.checked = !!data.enabled;
+    if (prev) prev.textContent = data.text || '—';
+  } catch(e) {}
+}
+
+document.getElementById('ticker-text-input') && document.getElementById('ticker-text-input').addEventListener('input', function() {
+  const prev = document.getElementById('ticker-preview');
+  if (prev) prev.textContent = this.value || '—';
+});
+
+async function saveTicker() {
+  const text    = (document.getElementById('ticker-text-input') || {}).value || '';
+  const enabled = !!(document.getElementById('ticker-enabled-chk') || {}).checked;
+  try {
+    await apiFetch('/api/ticker', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, enabled }),
+    });
+    const msg = document.getElementById('ticker-save-msg');
+    if (msg) { msg.style.display = 'inline'; setTimeout(() => { msg.style.display = 'none'; }, 2500); }
+  } catch(e) { alert('Failed to save ticker: ' + e.message); }
+}
+
+// ── Chat moderation ───────────────────────────────────────────────────────────
+async function loadChatMod() {
+  const container = document.getElementById('chat-mod-list');
+  if (!container) return;
+  try {
+    const res  = await apiFetch('/api/chat');
+    const msgs = await res.json();
+    if (!msgs.length) {
+      container.innerHTML = '<div style="padding:20px;text-align:center;font-size:13px;color:var(--text3);">No chat messages yet.</div>';
+      return;
+    }
+    const recent = msgs.slice(-50).reverse();
+    container.innerHTML = '';
+    recent.forEach(msg => {
+      const row = document.createElement('div');
+      row.dataset.chatId = msg.id;
+      row.style.cssText = 'display:flex;align-items:flex-start;gap:10px;padding:10px 14px;border-bottom:1px solid rgba(212,168,67,0.07);transition:background 0.15s;';
+      row.onmouseenter = () => { row.style.background = 'rgba(212,168,67,0.04)'; };
+      row.onmouseleave = () => { row.style.background = ''; };
+      const color = msg.color || '#d4a843';
+      const d     = msg.created_at ? new Date(msg.created_at) : new Date();
+      const time  = d.toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+      row.innerHTML =
+        '<div style="flex:0 0 8px;width:8px;height:8px;border-radius:50%;background:' + color + ';margin-top:5px;"></div>' +
+        '<div style="flex:1;min-width:0;">' +
+          '<div style="display:flex;gap:8px;align-items:center;margin-bottom:2px;">' +
+            '<span style="font-size:11px;font-weight:700;color:' + color + ';">' + escHtml(msg.username) + '</span>' +
+            '<span style="font-size:9px;color:rgba(192,168,216,0.4);">' + time + '</span>' +
+          '</div>' +
+          '<div style="font-size:12px;color:var(--text3);word-break:break-word;">' + escHtml(msg.message) + '</div>' +
+        '</div>' +
+        '<button onclick="deleteChat(' + msg.id + ')" style="flex-shrink:0;background:rgba(224,48,96,0.1);border:1px solid rgba(224,48,96,0.3);color:#e03060;border-radius:6px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:inherit;" onmouseenter="this.style.background=\'rgba(224,48,96,0.2)\'" onmouseleave="this.style.background=\'rgba(224,48,96,0.1)\'">Delete</button>';
+      container.appendChild(row);
+    });
+  } catch(e) {
+    container.innerHTML = '<div style="padding:20px;text-align:center;font-size:13px;color:var(--text3);">Failed to load chat.</div>';
+  }
+}
+
+async function clearChat() {
+  if (!confirm('Clear all chat messages? This cannot be undone.')) return;
+  try {
+    await apiFetch('/api/chat/all', { method: 'DELETE' });
+    await loadChatMod();
+  } catch(e) { alert('Failed to clear chat: ' + e.message); }
+}
+
+async function deleteChat(id) {
+  try {
+    await apiFetch('/api/chat/' + id, { method: 'DELETE' });
+    const row = document.querySelector('[data-chat-id="' + id + '"]');
+    if (row) row.remove();
+  } catch(e) { alert('Failed to delete message: ' + e.message); }
+}
+
+// ── Requests ──────────────────────────────────────────────────────────────────
+async function loadRequestsAdmin() {
+  const tbody = document.getElementById('requests-tbody');
+  if (!tbody) return;
+  try {
+    const res  = await apiFetch('/api/requests');
+    const rows = await res.json();
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--text3);font-size:13px;">No requests yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = '';
+    rows.forEach(req => {
+      const tr = document.createElement('tr');
+      tr.dataset.reqId = req.id;
+      tr.style.borderBottom = '1px solid rgba(212,168,67,0.07)';
+      tr.onmouseenter = () => { tr.style.background = 'rgba(212,168,67,0.03)'; };
+      tr.onmouseleave = () => { tr.style.background = ''; };
+      const typeEmoji = req.request_type === 'prayer' ? '🙏' : req.request_type === 'dedication' ? '💌' : '🎵';
+      const statusColor = { pending:'#c0a8d8', approved:'#4caf82', played:'#d4a843', rejected:'#e05070' }[req.status] || '#c0a8d8';
+      const dedLine = req.dedicated_to ? '<div style="font-size:10px;color:rgba(192,168,216,0.5);margin-top:2px;">For: ' + escHtml(req.dedicated_to) + '</div>' : '';
+      tr.innerHTML =
+        '<td style="padding:10px 14px;white-space:nowrap;">' + typeEmoji + ' <span style="font-size:11px;color:var(--text3);text-transform:capitalize;">' + escHtml(req.request_type) + '</span></td>' +
+        '<td style="padding:10px 14px;font-size:12px;color:var(--text3);">' + escHtml(req.username) + '</td>' +
+        '<td style="padding:10px 14px;font-size:12px;max-width:220px;"><div style="word-break:break-word;">' + escHtml(req.request_text) + '</div>' + dedLine + '</td>' +
+        '<td style="padding:10px 14px;"><select onchange="updateRequest(' + req.id + ', this.value)" style="background:rgba(255,255,255,0.04);border:1px solid rgba(212,168,67,0.2);border-radius:6px;padding:4px 8px;color:' + statusColor + ';font-size:11px;font-family:inherit;cursor:pointer;outline:none;">' +
+          '<option value="pending"'   + (req.status==='pending'   ? ' selected' : '') + ' style="background:#0e0a0f;color:#c0a8d8;">Pending</option>' +
+          '<option value="approved"'  + (req.status==='approved'  ? ' selected' : '') + ' style="background:#0e0a0f;color:#4caf82;">Approved</option>' +
+          '<option value="played"'    + (req.status==='played'    ? ' selected' : '') + ' style="background:#0e0a0f;color:#d4a843;">Played</option>' +
+          '<option value="rejected"'  + (req.status==='rejected'  ? ' selected' : '') + ' style="background:#0e0a0f;color:#e05070;">Rejected</option>' +
+        '</select></td>' +
+        '<td style="padding:10px 14px;"><button onclick="deleteRequest(' + req.id + ')" style="background:rgba(224,48,96,0.1);border:1px solid rgba(224,48,96,0.3);color:#e03060;border-radius:6px;padding:4px 10px;font-size:10px;cursor:pointer;font-family:inherit;" onmouseenter="this.style.background=\'rgba(224,48,96,0.2)\'" onmouseleave="this.style.background=\'rgba(224,48,96,0.1)\'">Delete</button></td>';
+      tbody.appendChild(tr);
+    });
+  } catch(e) {
+    tbody.innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--text3);font-size:13px;">Failed to load requests.</td></tr></tr>';
+  }
+}
+
+async function updateRequest(id, status) {
+  try {
+    await apiFetch('/api/requests/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
+  } catch(e) { alert('Failed to update request: ' + e.message); }
+}
+
+async function deleteRequest(id) {
+  try {
+    await apiFetch('/api/requests/' + id, { method: 'DELETE' });
+    const row = document.querySelector('[data-req-id="' + id + '"]');
+    if (row) row.remove();
+  } catch(e) { alert('Failed to delete request: ' + e.message); }
+}
+
+// ── Push subscriber count ─────────────────────────────────────────────────────
+async function loadPushCount() {
+  try {
+    const res  = await apiFetch('/api/push/subscribers/count');
+    const data = await res.json();
+    const el   = document.getElementById('push-sub-count');
+    if (el) el.textContent = data.count || 0;
+  } catch(e) {}
+}
+
+async function sendTestPush() {
+  const msg = document.getElementById('push-test-msg');
+  if (msg) { msg.style.display = 'inline'; setTimeout(() => { msg.style.display = 'none'; }, 2500); }
+}
+
+// ── Analytics listeners chart ─────────────────────────────────────────────────
+let listenersChartInstance = null;
+
+async function loadListenersChart() {
+  const canvas = document.getElementById('listeners-chart');
+  if (!canvas || typeof Chart === 'undefined') return;
+  try {
+    const res    = await apiFetch('/api/analytics/listeners');
+    const rows   = await res.json();
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const filtered = rows.filter(r => new Date(r.recorded_at).getTime() >= cutoff);
+    const labels   = filtered.map(r => new Date(r.recorded_at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }));
+    const counts   = filtered.map(r => Number(r.count));
+    if (listenersChartInstance) { listenersChartInstance.destroy(); listenersChartInstance = null; }
+    listenersChartInstance = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Listeners', data: counts, fill: true, tension: 0.4,
+          borderColor: '#d4a843', borderWidth: 2, pointRadius: 0, pointHoverRadius: 4,
+          pointHoverBackgroundColor: '#f0c85a',
+          backgroundColor: (ctx) => {
+            const g = ctx.chart.ctx.createLinearGradient(0, 0, 0, ctx.chart.height);
+            g.addColorStop(0, 'rgba(212,168,67,0.25)'); g.addColorStop(1, 'rgba(212,168,67,0.0)');
+            return g;
+          },
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: 'rgba(14,10,16,0.95)', borderColor: 'rgba(212,168,67,0.3)', borderWidth: 1,
+            titleColor: '#f0c85a', bodyColor: '#c0a8d8',
+            callbacks: { label: ctx => ' Listeners: ' + ctx.parsed.y },
+          },
+        },
+        scales: {
+          x: { grid: { color: 'rgba(212,168,67,0.06)' }, ticks: { color: 'rgba(192,168,216,0.45)', font: { size: 10 }, maxTicksLimit: 12 } },
+          y: { beginAtZero: true, grid: { color: 'rgba(212,168,67,0.06)' }, ticks: { color: 'rgba(192,168,216,0.45)', font: { size: 10 }, precision: 0 } },
+        },
+      },
+    });
+  } catch(e) {}
+}
 </script>
 </body>
 </html>
