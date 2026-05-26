@@ -186,7 +186,17 @@ class AudioEngine extends EventEmitter {
       'Connection': 'keep-alive',
       'Transfer-Encoding': 'chunked',
       'Access-Control-Allow-Origin': '*',
+      'X-Accel-Buffering': 'no',          // nginx: don't buffer live stream
+      'X-Content-Type-Options': 'nosniff',
     });
+    // TCP-level keepalive — prevent reverse-proxy idle timeouts from dropping
+    // the long-lived live-stream HTTP connection between broadcasts.
+    try {
+      if (res.socket) {
+        res.socket.setKeepAlive(true, 5000);
+        res.socket.setTimeout(0);
+      }
+    } catch (e) {}
     // Send the stored WebM init segment so late-joining listeners can decode
     if (this.liveInitChunk) {
       try { res.write(this.liveInitChunk); } catch (e) {}
