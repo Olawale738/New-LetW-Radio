@@ -1669,6 +1669,9 @@ let sleepEndTime  = null;
 let audioCtx      = null;
 let analyser      = null;
 let sourceNode    = null;
+let audioComp     = null;  // persisted across stream switches
+let audioBass     = null;
+let audioPresence = null;
 let vizRaf        = null;
 let wakeLock      = null;
 let pushEnabled   = false;
@@ -1971,17 +1974,17 @@ audio.addEventListener('waiting', () => {
 
 // stalled = browser stopped fetching data even though more is expected
 audio.addEventListener('stalled', () => {
-  if (isPlaying) scheduleReconnect();
+  if (isPlaying || isLive) scheduleReconnect();
 });
 
 // ended = stream unexpectedly terminated (should not happen for live radio, but handle it)
 audio.addEventListener('ended', () => {
-  if (isPlaying) scheduleReconnect();
+  if (isPlaying || isLive) scheduleReconnect();
 });
 
 audio.addEventListener('error', () => {
   setStatusBadge(false);
-  if (isPlaying) scheduleReconnect();
+  if (isPlaying || isLive) scheduleReconnect();
 });
 
 function setStatusBadge(playing) {
@@ -2058,7 +2061,7 @@ function scheduleReconnect() {
   if (heroStatus) heroStatus.textContent = 'RECONNECTING';
   reconnectTO = setTimeout(() => {
     reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
-    if (isPlaying) {
+    if (isPlaying || isLive) {
       // Always refresh src to force a fresh TCP connection to the server
       audio.src = getStreamUrl();
       audio.load();
@@ -2071,7 +2074,7 @@ function startStallTimer() {
   clearStallTimer();
   stallTimer = setTimeout(() => {
     // If still buffering after 4 s, escalate to a full reconnect
-    if (isPlaying) {
+    if (isPlaying || isLive) {
       audio.src = getStreamUrl();
       audio.load();
       audio.play().catch(() => scheduleReconnect());
@@ -2082,12 +2085,12 @@ function clearStallTimer() {
   if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
 }
 
-// Keepalive: every 10 s, check for the zombie state where isPlaying is true
-// but the audio element is actually paused (e.g., autoplay policy killed playback
-// or the element silently stopped without emitting an error event).
+// Keepalive: every 10 s, check for the zombie state where the player is
+// logically on (isPlaying or isLive) but the audio element is silently paused.
+// This catches autoplay-policy kills and silent network drops with no error event.
 setInterval(() => {
-  if (isPlaying && audio.paused && !reconnectTO) {
-    console.warn('[Keepalive] Audio paused while isPlaying=true — reconnecting');
+  if ((isPlaying || isLive) && audio.paused && !reconnectTO) {
+    console.warn('[Keepalive] Audio paused while active — reconnecting');
     scheduleReconnect();
   }
 }, 10000);
@@ -2128,52 +2131,58 @@ function startVisualizerFromAudio() {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
     if (audioCtx.state === 'suspended') audioCtx.resume();
-    if (sourceNode) { try { sourceNode.disconnect(); } catch(e) {} }
-    sourceNode = audioCtx.createMediaElementSource(audio);
 
-    // ── Radio Sound Enhancement Chain ─────────────────────────────────────
-    // Applies professional broadcast-style processing so the stream sounds
-    // loud, warm, and clear regardless of the original track's loudness.
-    //
-    //  source → compressor → bass → presence → analyser → speakers
+    if (!sourceNode) {
+      // ── Build the Web Audio chain ONCE ───────────────────────────────────
+      // createMediaElementSource() permanently captures the <audio> element.
+      // Calling it a second time throws InvalidStateError (Chrome/Firefox/Safari).
+      // All processing nodes are stored as module-level variables so they
+      // survive stream-source switches (regular → live → regular).
+      //
+      //  audio → compressor → bass-shelf → presence-peak → analyser → speakers
 
-    // 1. Dynamics compressor: gentle 3:1 radio compression
-    //    Makes quiet tracks louder and prevents loud tracks from distorting.
-    //    Threshold -18 dBFS with a soft knee for transparent operation.
-    const comp = audioCtx.createDynamicsCompressor();
-    comp.threshold.value = -18;   // start compressing here
-    comp.knee.value      = 10;    // soft knee: gradual onset
-    comp.ratio.value     = 3;     // 3:1 — standard radio ratio
-    comp.attack.value    = 0.003; // 3 ms: fast enough to catch transients
-    comp.release.value   = 0.25;  // 250 ms release: sounds natural
+      sourceNode = audioCtx.createMediaElementSource(audio);
 
-    // 2. Bass warmth — low-shelf +3 dB at 100 Hz
-    //    Adds body and weight, especially on small phone speakers.
-    const bassBoost = audioCtx.createBiquadFilter();
-    bassBoost.type            = 'lowshelf';
-    bassBoost.frequency.value = 100;
-    bassBoost.gain.value      = 3;
+      // 1. Dynamics compressor — gentle 3:1 radio compression.
+      //    Makes quiet tracks louder and prevents loud ones from distorting.
+      audioComp = audioCtx.createDynamicsCompressor();
+      audioComp.threshold.value = -18;   // start compressing here
+      audioComp.knee.value      = 10;    // soft knee: gradual onset
+      audioComp.ratio.value     = 3;     // 3:1 — standard radio ratio
+      audioComp.attack.value    = 0.003; // 3 ms: fast enough to catch transients
+      audioComp.release.value   = 0.25;  // 250 ms release: sounds natural
 
-    // 3. Voice presence — peaking +2.5 dB at 2.8 kHz
-    //    Lifts sermon/speech clarity without sibilance (the 3–4 kHz "bite"
-    //    of human voice that cuts through mix nicely on radio).
-    const presence = audioCtx.createBiquadFilter();
-    presence.type            = 'peaking';
-    presence.frequency.value = 2800;
-    presence.Q.value         = 0.9;
-    presence.gain.value      = 2.5;
+      // 2. Bass warmth — low-shelf +3 dB at 100 Hz.
+      //    Adds body and weight, especially on small phone speakers.
+      audioBass = audioCtx.createBiquadFilter();
+      audioBass.type            = 'lowshelf';
+      audioBass.frequency.value = 100;
+      audioBass.gain.value      = 3;
 
-    analyser         = audioCtx.createAnalyser();
-    analyser.fftSize = 128;
+      // 3. Voice presence — peaking +2.5 dB at 2.8 kHz.
+      //    Lifts sermon/speech clarity without sibilance.
+      audioPresence = audioCtx.createBiquadFilter();
+      audioPresence.type            = 'peaking';
+      audioPresence.frequency.value = 2800;
+      audioPresence.Q.value         = 0.9;
+      audioPresence.gain.value      = 2.5;
 
-    sourceNode.connect(comp);
-    comp.connect(bassBoost);
-    bassBoost.connect(presence);
-    presence.connect(analyser);
-    analyser.connect(audioCtx.destination);
+      analyser         = audioCtx.createAnalyser();
+      analyser.fftSize = 128;
 
+      sourceNode.connect(audioComp);
+      audioComp.connect(audioBass);
+      audioBass.connect(audioPresence);
+      audioPresence.connect(analyser);
+      analyser.connect(audioCtx.destination);
+    }
+
+    // Chain already exists — just restart the animation loop.
     drawAnalyserBars();
   } catch(e) {
+    // Build failed (should only happen on the very first call if AudioContext
+    // is unavailable).  Fall back to the idle canvas animation so the
+    // visualizer at least looks alive.
     drawIdleVisualizer();
   }
 }
