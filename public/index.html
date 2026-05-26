@@ -1293,9 +1293,9 @@
           <div style="margin-bottom:16px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
               <div style="font-size:10px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;">🔊 Mic Boost</div>
-              <span id="live-gain-display" style="font-size:11px;color:var(--gold);font-family:var(--mono);font-weight:700;">800%</span>
+              <span id="live-gain-display" style="font-size:11px;color:var(--gold);font-family:var(--mono);font-weight:700;">400%</span>
             </div>
-            <input type="range" id="live-gain-slider" min="1" max="15" step="0.1" value="8"
+            <input type="range" id="live-gain-slider" min="1" max="15" step="0.1" value="4"
               oninput="updateLiveGain(this.value)"
               style="width:100%;accent-color:var(--gold);cursor:pointer;">
             <div style="font-size:10px;color:rgba(212,168,67,0.45);margin-top:4px;">Raise until voice is clearly loud. Lower only if it sounds distorted.</div>
@@ -2792,7 +2792,7 @@ let liveTrebleNode    = null;   // high-shelf EQ (soprano / air)
 let liveNoiseGateNode = null;   // ScriptProcessorNode noise gate
 // Noise gate state — accessed from onaudioprocess (must be module-level)
 let _ngEnabled   = true;
-let _ngThreshold = 0.012;  // RMS threshold; voice ≈ 0.02–0.30, bg noise ≈ 0.001–0.01
+let _ngThreshold = 0.002;  // Pre-gain RMS threshold; raw mic voice ≈ 0.005–0.05, bg noise ≈ 0.0005–0.003
 let _ngSmoothed  = 1.0;    // smoothed gate gain (avoids clicks on open/close)
 let monitorGainNode   = null;
 let monitorSourceNode = null;
@@ -2939,24 +2939,27 @@ async function startLiveBroadcast() {
   limiter.attack.value    = 0.001;// 1 ms
   limiter.release.value   = 0.04;
 
-  // 7. Noise gate — silences dead air between words; improved with a hold counter
-  //    so the gate stays open for a few extra frames after signal drops, preventing
-  //    the choppy "word chopping" effect that was happening before.
+  // 7. Noise gate — placed BEFORE the gain so it operates on the raw, quiet mic
+  //    signal. This prevents the cricket/chirping problem where the gate was
+  //    seeing 8× amplified room noise and bouncing at the threshold.
+  //    Pre-gain threshold is ~6-7× lower, so scale is 0.006 (not 0.04).
+  //    Longer hold (20 frames ≈ 93 ms) and slower close (0.008) feel natural.
   _ngSmoothed = 1.0;
   let _ngHoldCount = 0;
-  const NG_HOLD_FRAMES = 10; // stay open for 10 frames (~46 ms) after signal drops
+  const NG_HOLD_FRAMES = 20; // ~93 ms — holds gate open through brief pauses
 
   const noiseChk = document.getElementById('live-noise-toggle');
   const noiseSld = document.getElementById('live-noise-threshold');
   _ngEnabled   = noiseChk ? noiseChk.checked : true;
-  _ngThreshold = noiseSld ? (parseInt(noiseSld.value) / 100) * 0.04 : 0.012;
+  // Pre-gain scale: raw mic RMS ≈ 0.001–0.006, so 30 on slider → ~0.0018 threshold
+  _ngThreshold = noiseSld ? (parseInt(noiseSld.value) / 100) * 0.006 : 0.002;
 
   liveNoiseGateNode = liveMicCtx.createScriptProcessor(2048, 1, 1);
   liveNoiseGateNode.onaudioprocess = (evt) => {
     const inp = evt.inputBuffer.getChannelData(0);
     const out = evt.outputBuffer.getChannelData(0);
 
-    // RMS level of this frame
+    // RMS level of this frame (pre-gain, raw mic signal)
     let sq = 0;
     for (let i = 0; i < inp.length; i++) sq += inp[i] * inp[i];
     const rms = Math.sqrt(sq / inp.length);
@@ -2978,31 +2981,34 @@ async function startLiveBroadcast() {
 
     // Asymmetric smoothing: fast open (voice must not be clipped), slow close (natural)
     _ngSmoothed += target > _ngSmoothed
-      ? 0.40 * (target - _ngSmoothed)   // fast open
-      : 0.02 * (target - _ngSmoothed);  // slow close — smooth natural fade
+      ? 0.40 * (target - _ngSmoothed)    // fast open
+      : 0.008 * (target - _ngSmoothed);  // very slow close — no abrupt cutoff noise
 
     for (let i = 0; i < out.length; i++) out[i] = inp[i] * _ngSmoothed;
   };
 
-  // 8. Analyser — drives the level meter; reads post-gate
+  // 8. Analyser — drives the level meter; reads post-compression/post-limiter
   liveMicAnalyser         = liveMicCtx.createAnalyser();
   liveMicAnalyser.fftSize = 256;
 
   // 9. MediaStreamDestination — captures processed audio for MediaRecorder
   const dest = liveMicCtx.createMediaStreamDestination();
 
-  // Wire: mic → HPF → Bass → Presence → Treble → LPF → Gain → Comp → MakeupGain → Limiter → Gate → Analyser → out
+  // Wire: mic → HPF → Gate(raw) → Bass → Presence → Treble → LPF → Gain → Comp → MakeupGain → Limiter → Analyser → out
+  // Gate is BEFORE gain: it sees the quiet raw signal, not the amplified one.
+  // This eliminates the cricket/chirping that happened when amplified room noise
+  // bounced against the gate threshold.
   src.connect(hpf);
-  hpf.connect(liveBassNode);
+  hpf.connect(liveNoiseGateNode);        // ← gate on raw signal
+  liveNoiseGateNode.connect(liveBassNode);
   liveBassNode.connect(livePresenceNode);
   livePresenceNode.connect(liveTrebleNode);
   liveTrebleNode.connect(lpf);
-  lpf.connect(liveGainNode);
+  lpf.connect(liveGainNode);             // ← then amplify
   liveGainNode.connect(comp);
   comp.connect(makeupGain);
   makeupGain.connect(limiter);
-  limiter.connect(liveNoiseGateNode);
-  liveNoiseGateNode.connect(liveMicAnalyser);
+  limiter.connect(liveMicAnalyser);      // ← analyser after final limiting
   liveMicAnalyser.connect(dest);
 
   animateMicLevel();
@@ -3109,9 +3115,9 @@ function toggleNoiseFilter(enabled) {
 }
 
 function updateNoiseThreshold(val) {
-  // Map slider 1–100 → RMS threshold 0.0004–0.04
-  // Low value = subtle gating; high value = aggressive gating
-  _ngThreshold = (parseInt(val) / 100) * 0.04;
+  // Pre-gain scale: raw mic RMS ≈ 0.001–0.006, so 1–100 maps to 0.00006–0.006
+  // Gate operates before gain boost, so threshold is much lower than before.
+  _ngThreshold = (parseInt(val) / 100) * 0.006;
   const display = document.getElementById('live-noise-level');
   if (display) display.textContent = val + '%';
 }
