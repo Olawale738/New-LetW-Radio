@@ -1264,6 +1264,18 @@
             </div>
           </div>
 
+          <!-- Mic Boost (input gain) -->
+          <div style="margin-bottom:16px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <div style="font-size:10px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;">🔊 Mic Boost</div>
+              <span id="live-gain-display" style="font-size:11px;color:var(--gold);font-family:var(--mono);font-weight:700;">250%</span>
+            </div>
+            <input type="range" id="live-gain-slider" min="0.5" max="6" step="0.1" value="2.5"
+              oninput="updateLiveGain(this.value)"
+              style="width:100%;accent-color:var(--gold);cursor:pointer;">
+            <div style="font-size:10px;color:rgba(212,168,67,0.45);margin-top:4px;">Raise this if listeners say your voice is too quiet. Lower it if it sounds distorted.</div>
+          </div>
+
           <!-- Monitor (hear yourself) -->
           <div style="margin-bottom:16px;padding:12px 14px;background:rgba(212,168,67,0.04);border:1px solid rgba(212,168,67,0.15);border-radius:10px;">
             <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -2694,6 +2706,7 @@ let liveMicAnalyser   = null;
 let liveMicCtx        = null;
 let liveMicRAF        = null;
 let liveTimerInterval = null;
+let liveGainNode      = null;   // gain node for the live audio processing chain
 let monitorGainNode   = null;
 let monitorSourceNode = null;
 let monitorActive     = false;
@@ -2743,26 +2756,72 @@ async function startLiveBroadcast() {
 
   try {
     liveMicStream = await navigator.mediaDevices.getUserMedia({
-      audio: { deviceId: micId ? { exact: micId } : undefined, echoCancellation: true, noiseSuppression: true, sampleRate: 44100 }
+      audio: {
+        deviceId:         micId ? { exact: micId } : undefined,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl:  false,  // we apply our own gain via GainNode below
+        channelCount:     1,      // mono — voice only needs one channel, halves data
+      }
     });
   } catch (err) {
     alert('Could not access microphone:\n' + err.message);
     return;
   }
 
-  // Start mic level meter
-  liveMicCtx     = new (window.AudioContext || window.webkitAudioContext)();
-  const src      = liveMicCtx.createMediaStreamSource(liveMicStream);
-  liveMicAnalyser = liveMicCtx.createAnalyser();
+  // ── Audio processing chain ────────────────────────────────────────────────
+  // Raw mic → High-pass filter → Gain boost → Compressor → Analyser → Output
+  // The processed output (dest.stream) is what MediaRecorder actually records.
+  liveMicCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (liveMicCtx.state === 'suspended') await liveMicCtx.resume();
+
+  const src = liveMicCtx.createMediaStreamSource(liveMicStream);
+
+  // 1. High-pass filter — remove low-frequency rumble (A/C hum, room noise, plosives)
+  const hpf           = liveMicCtx.createBiquadFilter();
+  hpf.type            = 'highpass';
+  hpf.frequency.value = 80;   // cut everything below 80 Hz
+  hpf.Q.value         = 0.7;  // flat response, no resonance
+
+  // 2. Gain node — boost quiet microphones to a clearly audible level
+  liveGainNode = liveMicCtx.createGain();
+  const gainSlider = document.getElementById('live-gain-slider');
+  liveGainNode.gain.value = gainSlider ? parseFloat(gainSlider.value) : 2.5;
+
+  // 3. Dynamics compressor — normalise volume peaks, keep voice consistently loud
+  const comp           = liveMicCtx.createDynamicsCompressor();
+  comp.threshold.value = -18;   // dB: compress above this level
+  comp.knee.value      = 8;     // dB: smooth transition
+  comp.ratio.value     = 4;     // 4:1 ratio — firm but natural voice sound
+  comp.attack.value    = 0.002; // 2 ms — fast attack catches sudden loud peaks
+  comp.release.value   = 0.20;  // 200 ms — natural-sounding release
+
+  // 4. Analyser — drives the mic-level bar in the UI (reads post-processing)
+  liveMicAnalyser         = liveMicCtx.createAnalyser();
   liveMicAnalyser.fftSize = 256;
-  src.connect(liveMicAnalyser);
+
+  // 5. MediaStreamDestination — output the processed audio to MediaRecorder
+  const dest = liveMicCtx.createMediaStreamDestination();
+
+  // Wire the chain: mic → HPF → gain → compressor → analyser → output
+  src.connect(hpf);
+  hpf.connect(liveGainNode);
+  liveGainNode.connect(comp);
+  comp.connect(liveMicAnalyser);
+  liveMicAnalyser.connect(dest);
+
   animateMicLevel();
 
-  // Choose best supported MIME type
+  // ── MediaRecorder ─────────────────────────────────────────────────────────
+  // Prefer Opus codec (best quality for voice at low bitrate)
   const mimeType = ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/ogg']
     .find(m => MediaRecorder.isTypeSupported(m)) || '';
 
-  liveMediaRecorder = new MediaRecorder(liveMicStream, { mimeType, audioBitsPerSecond: 128000 });
+  // Record from dest.stream (processed audio), NOT the raw liveMicStream
+  liveMediaRecorder = new MediaRecorder(dest.stream, {
+    mimeType,
+    audioBitsPerSecond: 96000,   // 96 kbps Opus: excellent voice quality
+  });
 
   liveMediaRecorder.addEventListener('dataavailable', e => {
     if (e.data && e.data.size > 0) {
@@ -2776,7 +2835,7 @@ async function startLiveBroadcast() {
   socket.auth = { token: getAdminToken() };
   socket.emit('live:start', { title, artist });
 
-  liveMediaRecorder.start(250); // emit chunk every 250ms
+  liveMediaRecorder.start(250); // emit chunk every 250 ms
 
   // UI: on-air state
   setLiveUIState(true);
@@ -2796,6 +2855,7 @@ function stopLiveBroadcast() {
   }
 
   if (liveMicCtx) { liveMicCtx.close(); liveMicCtx = null; }
+  liveGainNode = null;
   if (liveMicRAF) { cancelAnimationFrame(liveMicRAF); liveMicRAF = null; }
   if (liveTimerInterval) { clearInterval(liveTimerInterval); liveTimerInterval = null; }
 
@@ -2807,6 +2867,14 @@ function stopLiveBroadcast() {
   setLiveUIState(false);
   // Stop monitor when broadcast stops
   if (monitorActive) stopMonitor();
+}
+
+// ── Live gain control ─────────────────────────────────────────────────────────
+function updateLiveGain(val) {
+  const pct = Math.round(parseFloat(val) * 100);
+  const display = document.getElementById('live-gain-display');
+  if (display) display.textContent = pct + '%';
+  if (liveGainNode) liveGainNode.gain.value = parseFloat(val);
 }
 
 // ── Monitor (hear yourself while live) ───────────────────────────────────────
