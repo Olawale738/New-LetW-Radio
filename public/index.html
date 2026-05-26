@@ -1276,6 +1276,26 @@
             <div style="font-size:10px;color:rgba(212,168,67,0.45);margin-top:4px;">Raise this if listeners say your voice is too quiet. Lower it if it sounds distorted.</div>
           </div>
 
+          <!-- Noise Filter (noise gate + LPF) -->
+          <div style="margin-bottom:16px;padding:12px 14px;background:rgba(76,175,130,0.05);border:1px solid rgba(76,175,130,0.2);border-radius:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+              <div style="font-size:11px;font-weight:700;color:var(--text);letter-spacing:0.5px;">🔕 Noise Filter</div>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">
+                <input type="checkbox" id="live-noise-toggle" checked onchange="toggleNoiseFilter(this.checked)"
+                  style="accent-color:#4caf82;width:15px;height:15px;cursor:pointer;">
+                <span id="live-noise-label" style="font-size:11px;color:#4caf82;font-weight:700;min-width:24px;">ON</span>
+              </label>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+              <span style="font-size:10px;color:var(--text3);white-space:nowrap;letter-spacing:1px;text-transform:uppercase;">Strength</span>
+              <input type="range" id="live-noise-threshold" min="1" max="100" value="30"
+                oninput="updateNoiseThreshold(this.value)"
+                style="flex:1;accent-color:#4caf82;cursor:pointer;">
+              <span id="live-noise-level" style="font-size:11px;color:var(--text3);min-width:30px;text-align:right;font-family:var(--mono);">30%</span>
+            </div>
+            <div style="font-size:10px;color:rgba(76,175,130,0.55);line-height:1.5;">Blocks background noise between words. Increase strength if noise breaks through; decrease if your voice gets clipped.</div>
+          </div>
+
           <!-- Monitor (hear yourself) -->
           <div style="margin-bottom:16px;padding:12px 14px;background:rgba(212,168,67,0.04);border:1px solid rgba(212,168,67,0.15);border-radius:10px;">
             <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -2707,6 +2727,11 @@ let liveMicCtx        = null;
 let liveMicRAF        = null;
 let liveTimerInterval = null;
 let liveGainNode      = null;   // gain node for the live audio processing chain
+let liveNoiseGateNode = null;   // ScriptProcessorNode noise gate
+// Noise gate state — accessed from onaudioprocess (must be module-level)
+let _ngEnabled   = true;
+let _ngThreshold = 0.012;  // RMS threshold; voice ≈ 0.02–0.30, bg noise ≈ 0.001–0.01
+let _ngSmoothed  = 1.0;    // smoothed gate gain (avoids clicks on open/close)
 let monitorGainNode   = null;
 let monitorSourceNode = null;
 let monitorActive     = false;
@@ -2769,45 +2794,85 @@ async function startLiveBroadcast() {
     return;
   }
 
-  // ── Audio processing chain ────────────────────────────────────────────────
-  // Raw mic → High-pass filter → Gain boost → Compressor → Analyser → Output
+  // ── Audio processing chain ───────────────────────────────────────────────────
+  // mic → HPF → LPF → Gain → Compressor → Noise Gate → Analyser → Destination
   // The processed output (dest.stream) is what MediaRecorder actually records.
   liveMicCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (liveMicCtx.state === 'suspended') await liveMicCtx.resume();
 
   const src = liveMicCtx.createMediaStreamSource(liveMicStream);
 
-  // 1. High-pass filter — remove low-frequency rumble (A/C hum, room noise, plosives)
+  // 1. High-pass filter — remove low-frequency rumble (A/C hum, room noise, plosive thumps)
   const hpf           = liveMicCtx.createBiquadFilter();
   hpf.type            = 'highpass';
   hpf.frequency.value = 80;   // cut everything below 80 Hz
-  hpf.Q.value         = 0.7;  // flat response, no resonance
+  hpf.Q.value         = 0.7;
 
-  // 2. Gain node — boost quiet microphones to a clearly audible level
+  // 2. Low-pass filter — cut high-frequency hiss and electrical noise above the voice band
+  const lpf           = liveMicCtx.createBiquadFilter();
+  lpf.type            = 'lowpass';
+  lpf.frequency.value = 8000; // voice sits within 80–8000 Hz; cut hiss above this
+  lpf.Q.value         = 0.7;
+
+  // 3. Gain node — boost quiet microphones to a clearly audible level
   liveGainNode = liveMicCtx.createGain();
   const gainSlider = document.getElementById('live-gain-slider');
   liveGainNode.gain.value = gainSlider ? parseFloat(gainSlider.value) : 2.5;
 
-  // 3. Dynamics compressor — normalise volume peaks, keep voice consistently loud
+  // 4. Dynamics compressor — normalise volume peaks, keep voice consistently loud
   const comp           = liveMicCtx.createDynamicsCompressor();
-  comp.threshold.value = -18;   // dB: compress above this level
+  comp.threshold.value = -18;   // dB: start compressing here
   comp.knee.value      = 8;     // dB: smooth transition
-  comp.ratio.value     = 4;     // 4:1 ratio — firm but natural voice sound
-  comp.attack.value    = 0.002; // 2 ms — fast attack catches sudden loud peaks
+  comp.ratio.value     = 4;     // 4:1 — firm but natural voice sound
+  comp.attack.value    = 0.002; // 2 ms — fast attack catches sudden peaks
   comp.release.value   = 0.20;  // 200 ms — natural-sounding release
 
-  // 4. Analyser — drives the mic-level bar in the UI (reads post-processing)
+  // 5. Noise gate (ScriptProcessorNode) — silences audio below the RMS threshold.
+  //    Blocks background noise between words without affecting the voice itself.
+  //    Uses asymmetric smoothing: fast open (voice arrives quickly), slow close
+  //    (avoids cutting trailing syllables / reverb).
+  _ngSmoothed = 1.0; // reset state for new broadcast
+  // Sync gate state with the current UI values
+  const noiseChk = document.getElementById('live-noise-toggle');
+  const noiseSld = document.getElementById('live-noise-threshold');
+  _ngEnabled   = noiseChk ? noiseChk.checked : true;
+  _ngThreshold = noiseSld ? (parseInt(noiseSld.value) / 100) * 0.04 : 0.012;
+
+  liveNoiseGateNode = liveMicCtx.createScriptProcessor(2048, 1, 1);
+  liveNoiseGateNode.onaudioprocess = (evt) => {
+    const inp = evt.inputBuffer.getChannelData(0);
+    const out = evt.outputBuffer.getChannelData(0);
+
+    // Compute RMS of this 2048-sample frame
+    let sq = 0;
+    for (let i = 0; i < inp.length; i++) sq += inp[i] * inp[i];
+    const rms = Math.sqrt(sq / inp.length);
+
+    // Target: 1 (open) if voice detected or gate is off, else 0 (closed)
+    const target = (!_ngEnabled || rms > _ngThreshold) ? 1.0 : 0.0;
+
+    // Asymmetric smoothing — fast open (0.25 step), slow close (0.04 step)
+    _ngSmoothed += target > _ngSmoothed ? 0.25 * (target - _ngSmoothed)
+                                        : 0.04 * (target - _ngSmoothed);
+
+    for (let i = 0; i < out.length; i++) out[i] = inp[i] * _ngSmoothed;
+  };
+
+  // 6. Analyser — drives the mic-level bar; reads post-gate so the meter
+  //    accurately reflects what listeners actually hear
   liveMicAnalyser         = liveMicCtx.createAnalyser();
   liveMicAnalyser.fftSize = 256;
 
-  // 5. MediaStreamDestination — output the processed audio to MediaRecorder
+  // 7. MediaStreamDestination — final output for MediaRecorder
   const dest = liveMicCtx.createMediaStreamDestination();
 
-  // Wire the chain: mic → HPF → gain → compressor → analyser → output
+  // Wire the chain: mic → HPF → LPF → gain → compressor → noise gate → analyser → out
   src.connect(hpf);
-  hpf.connect(liveGainNode);
+  hpf.connect(lpf);
+  lpf.connect(liveGainNode);
   liveGainNode.connect(comp);
-  comp.connect(liveMicAnalyser);
+  comp.connect(liveNoiseGateNode);
+  liveNoiseGateNode.connect(liveMicAnalyser);
   liveMicAnalyser.connect(dest);
 
   animateMicLevel();
@@ -2855,7 +2920,8 @@ function stopLiveBroadcast() {
   }
 
   if (liveMicCtx) { liveMicCtx.close(); liveMicCtx = null; }
-  liveGainNode = null;
+  liveGainNode      = null;
+  liveNoiseGateNode = null;
   if (liveMicRAF) { cancelAnimationFrame(liveMicRAF); liveMicRAF = null; }
   if (liveTimerInterval) { clearInterval(liveTimerInterval); liveTimerInterval = null; }
 
@@ -2875,6 +2941,24 @@ function updateLiveGain(val) {
   const display = document.getElementById('live-gain-display');
   if (display) display.textContent = pct + '%';
   if (liveGainNode) liveGainNode.gain.value = parseFloat(val);
+}
+
+// ── Noise filter controls ─────────────────────────────────────────────────────
+function toggleNoiseFilter(enabled) {
+  _ngEnabled = enabled;
+  const label = document.getElementById('live-noise-label');
+  if (label) {
+    label.textContent  = enabled ? 'ON' : 'OFF';
+    label.style.color  = enabled ? '#4caf82' : 'var(--text3)';
+  }
+}
+
+function updateNoiseThreshold(val) {
+  // Map slider 1–100 → RMS threshold 0.0004–0.04
+  // Low value = subtle gating; high value = aggressive gating
+  _ngThreshold = (parseInt(val) / 100) * 0.04;
+  const display = document.getElementById('live-noise-level');
+  if (display) display.textContent = val + '%';
 }
 
 // ── Monitor (hear yourself while live) ───────────────────────────────────────
