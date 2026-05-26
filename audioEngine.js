@@ -5,13 +5,6 @@ const { EventEmitter } = require('events');
 const CHUNK_SIZE = 8192;
 const ICY_METAINT = 8192;
 
-// Pre-built minimal silent MP3 frame (128 kbps, 44.1 kHz, stereo).
-// Sent to connected clients while nothing is playing so proxies/firewalls
-// do not drop the idle TCP connection.
-const SILENT_MP3_FRAME = Buffer.from(
-  'fffb9064' + '0'.repeat(416),  // 209-byte frame of zeroed payload
-  'hex'
-);
 
 function buildIcyMeta(track) {
   if (!track) return Buffer.alloc(1);
@@ -46,15 +39,6 @@ class AudioEngine extends EventEmitter {
     this._watchdogTimer   = null;
     this._lastChunkTime   = Date.now(); // initialised to now so watchdog does not false-fire
     this._playGeneration  = 0;          // incremented on each new playTrack; guards stale closures
-    this._keepaliveTimer  = null;
-
-    // Keepalive: while not playing, send a silent frame every 10 s so TCP connections
-    // are not dropped by reverse proxies / firewalls with short idle timeouts.
-    this._keepaliveTimer = setInterval(() => {
-      if (!this.isPlaying && !this.isLive && this.clients.size > 0) {
-        try { this.broadcast(SILENT_MP3_FRAME); } catch (e) {}
-      }
-    }, 10000);
   }
 
   // ─── Scheduled-file clients (/stream) ──────────────────────────────────────
@@ -82,6 +66,16 @@ class AudioEngine extends EventEmitter {
     if (wantsIcy) headers['icy-metaint'] = String(ICY_METAINT);
 
     res.writeHead(200, headers);
+
+    // TCP-level keepalive: prevent reverse proxies / firewalls from dropping
+    // idle connections during silent gaps.  Does NOT affect the audio stream.
+    try {
+      if (res.socket) {
+        res.socket.setKeepAlive(true, 5000);
+        res.socket.setTimeout(0); // disable Node's own idle-connection timeout
+      }
+    } catch (e) {}
+
     this.clients.set(id, { res, wantsIcy, bytesSinceLastMeta: 0 });
     this._updateListeners();
 

@@ -226,9 +226,12 @@ function startScheduler(io) {
 
   // Per-minute check: load scheduled slots whose start_time has just arrived.
   // Without this, programs scheduled for later in the day never trigger after startup.
+  // Only triggers when the engine has nothing to play so the active queue is never replaced.
   cron.schedule('* * * * *', () => {
     try {
-      if (audioEngine.isLive) return; // live mode: don't interfere
+      if (audioEngine.isLive) return;                    // live mode: don't interfere
+      if (audioEngine.isPlaying) return;                  // already playing — leave queue alone
+      if (audioEngine.queue.length > 0) return;           // has queued items — leave them alone
       const currentTime = getTimeString();
       const today = getDateString();
       loadAndPlayQueue(today, currentTime);
