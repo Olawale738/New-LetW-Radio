@@ -2789,11 +2789,13 @@ let liveGainNode      = null;   // pre-gain (main loudness)
 let liveBassNode      = null;   // low-shelf EQ (bass warmth)
 let livePresenceNode  = null;   // peaking EQ (voice clarity)
 let liveTrebleNode    = null;   // high-shelf EQ (soprano / air)
-let liveNoiseGateNode = null;   // ScriptProcessorNode noise gate
-// Noise gate state — accessed from onaudioprocess (must be module-level)
+let liveNoiseGateNode = null;   // AudioWorkletNode (or ScriptProcessorNode fallback) noise gate
+let liveDestStream    = null;   // processed MediaStream from MediaStreamDestination (for monitor)
+let _ngUsingWorklet   = false;  // true when AudioWorklet is used instead of ScriptProcessorNode
+// Noise gate state
 let _ngEnabled   = true;
 let _ngThreshold = 0.002;  // Pre-gain RMS threshold; raw mic voice ≈ 0.005–0.05, bg noise ≈ 0.0005–0.003
-let _ngSmoothed  = 1.0;    // smoothed gate gain (avoids clicks on open/close)
+let _ngSmoothed  = 1.0;    // smoothed gate gain (avoids clicks on open/close — only used by ScriptProcessorNode fallback)
 let monitorGainNode   = null;
 let monitorSourceNode = null;
 let monitorActive     = false;
@@ -2844,20 +2846,26 @@ async function startLiveBroadcast() {
   try {
     liveMicStream = await navigator.mediaDevices.getUserMedia({
       audio: {
-        deviceId:         micId ? { exact: micId } : undefined,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl:  false,  // we apply our own gain via GainNode below
-        channelCount:     1,      // mono — voice only needs one channel
-        sampleRate:       48000,  // 48 kHz: broadcast standard, best Opus quality
-        latency:          0,      // request lowest possible mic latency
+        deviceId:                 micId ? { exact: micId } : undefined,
+        echoCancellation:         true,   // browser AEC removes speaker echo
+        noiseSuppression:         true,   // browser NS removes background noise
+        autoGainControl:          false,  // we apply our own gain via GainNode
+        suppressLocalAudioPlayback: true, // Chrome 113+: excludes local playback from mic
+        channelCount:             1,      // mono — voice only needs one channel
+        sampleRate:               48000,  // 48 kHz: broadcast standard, best Opus quality
+        // NOTE: do NOT set latency:0 here — it shrinks the AEC processing window
+        // and degrades echo cancellation. Let the browser choose its own latency.
       }
     });
   } catch (err) {
     // Fallback: retry without advanced constraints (some older browsers reject them)
     try {
       liveMicStream = await navigator.mediaDevices.getUserMedia({
-        audio: { deviceId: micId ? { exact: micId } : undefined }
+        audio: {
+          deviceId:         micId ? { exact: micId } : undefined,
+          echoCancellation: true,
+          noiseSuppression: true,
+        }
       });
     } catch (err2) {
       alert('Could not access microphone:\n' + (err2.message || err.message));
@@ -2939,14 +2947,17 @@ async function startLiveBroadcast() {
   limiter.attack.value    = 0.001;// 1 ms
   limiter.release.value   = 0.04;
 
-  // 7. Noise gate — placed BEFORE the gain so it operates on the raw, quiet mic
-  //    signal. This prevents the cricket/chirping problem where the gate was
-  //    seeing 8× amplified room noise and bouncing at the threshold.
-  //    Pre-gain threshold is ~6-7× lower, so scale is 0.006 (not 0.04).
-  //    Longer hold (20 frames ≈ 93 ms) and slower close (0.008) feel natural.
-  _ngSmoothed = 1.0;
-  let _ngHoldCount = 0;
-  const NG_HOLD_FRAMES = 20; // ~93 ms — holds gate open through brief pauses
+  // 7. Noise gate — AudioWorklet (preferred) or ScriptProcessorNode fallback
+  //
+  //    WHY AUDIOWORKLET?
+  //    ScriptProcessorNode has 2048-sample buffer = 42.7 ms of variable latency.
+  //    The browser's AEC (echoCancellation) needs to know the exact latency to
+  //    subtract the speaker echo from the mic. Variable latency confuses AEC →
+  //    echo slips through. AudioWorklet runs in 128-sample frames (2.67 ms) with
+  //    DETERMINISTIC latency, so AEC works correctly and echo is eliminated.
+  //
+  //    Gate is placed BEFORE the gain: operates on quiet raw mic (RMS ≈0.001–0.005)
+  //    not amplified signal (RMS ≈0.008–0.040). This prevents cricket chirping.
 
   const noiseChk = document.getElementById('live-noise-toggle');
   const noiseSld = document.getElementById('live-noise-threshold');
@@ -2954,38 +2965,68 @@ async function startLiveBroadcast() {
   // Pre-gain scale: raw mic RMS ≈ 0.001–0.006, so 30 on slider → ~0.0018 threshold
   _ngThreshold = noiseSld ? (parseInt(noiseSld.value) / 100) * 0.006 : 0.002;
 
-  liveNoiseGateNode = liveMicCtx.createScriptProcessor(2048, 1, 1);
-  liveNoiseGateNode.onaudioprocess = (evt) => {
-    const inp = evt.inputBuffer.getChannelData(0);
-    const out = evt.outputBuffer.getChannelData(0);
-
-    // RMS level of this frame (pre-gain, raw mic signal)
+  // AudioWorklet code embedded as Blob URL — no extra server file needed
+  const _GATE_CODE = `
+class NoiseGateProcessor extends AudioWorkletProcessor {
+  constructor(opts) {
+    super(opts);
+    this._s = 1; this._hc = 0; this._en = true; this._thr = 0.002;
+    this.port.onmessage = ({ data: d }) => {
+      if (d.enabled   !== undefined) this._en  = !!d.enabled;
+      if (d.threshold !== undefined) this._thr = +d.threshold;
+    };
+  }
+  process(inputs, outputs) {
+    const i = inputs[0]?.[0], o = outputs[0]?.[0];
+    if (!i || !o || !i.length) return true;
     let sq = 0;
-    for (let i = 0; i < inp.length; i++) sq += inp[i] * inp[i];
-    const rms = Math.sqrt(sq / inp.length);
-
-    // Gate decision with hold — prevents chopping trailing syllables / reverb
-    let target;
-    if (!_ngEnabled) {
-      target = 1.0;
-      _ngHoldCount = 0;
-    } else if (rms > _ngThreshold) {
-      target = 1.0;
-      _ngHoldCount = NG_HOLD_FRAMES; // reset hold timer on every active frame
-    } else if (_ngHoldCount > 0) {
-      target = 1.0;  // in hold phase — keep gate open
-      _ngHoldCount--;
-    } else {
-      target = 0.0;  // below threshold and hold expired — close gate
-    }
-
-    // Asymmetric smoothing: fast open (voice must not be clipped), slow close (natural)
-    _ngSmoothed += target > _ngSmoothed
-      ? 0.40 * (target - _ngSmoothed)    // fast open
-      : 0.008 * (target - _ngSmoothed);  // very slow close — no abrupt cutoff noise
-
-    for (let i = 0; i < out.length; i++) out[i] = inp[i] * _ngSmoothed;
-  };
+    for (let n = 0; n < i.length; n++) sq += i[n] * i[n];
+    const rms = Math.sqrt(sq / i.length);
+    let tgt;
+    if (!this._en)         { tgt = 1; this._hc = 0; }
+    else if (rms > this._thr) { tgt = 1; this._hc = 20; }
+    else if (this._hc > 0)    { tgt = 1; this._hc--; }
+    else                       { tgt = 0; }
+    this._s += tgt > this._s ? 0.4 * (tgt - this._s) : 0.008 * (tgt - this._s);
+    for (let n = 0; n < o.length; n++) o[n] = i[n] * this._s;
+    return true;
+  }
+}
+registerProcessor('letw-noise-gate', NoiseGateProcessor);
+`;
+  _ngUsingWorklet = false;
+  try {
+    const _blob = new Blob([_GATE_CODE], { type: 'application/javascript' });
+    const _burl = URL.createObjectURL(_blob);
+    await liveMicCtx.audioWorklet.addModule(_burl);
+    URL.revokeObjectURL(_burl);
+    liveNoiseGateNode = new AudioWorkletNode(liveMicCtx, 'letw-noise-gate');
+    liveNoiseGateNode.port.postMessage({ enabled: _ngEnabled, threshold: _ngThreshold });
+    _ngUsingWorklet = true;
+  } catch (_awErr) {
+    // Fallback: ScriptProcessorNode (older browsers)
+    console.warn('[NoiseGate] AudioWorklet unavailable, using ScriptProcessorNode fallback:', _awErr.message);
+    _ngSmoothed = 1.0;
+    let _ngHoldCount = 0;
+    liveNoiseGateNode = liveMicCtx.createScriptProcessor(512, 1, 1); // 512 instead of 2048 — less latency
+    liveNoiseGateNode.onaudioprocess = (evt) => {
+      const inp = evt.inputBuffer.getChannelData(0);
+      const out = evt.outputBuffer.getChannelData(0);
+      let sq = 0;
+      for (let i = 0; i < inp.length; i++) sq += inp[i] * inp[i];
+      const rms = Math.sqrt(sq / inp.length);
+      let target;
+      if (!_ngEnabled)           { target = 1.0; _ngHoldCount = 0; }
+      else if (rms > _ngThreshold) { target = 1.0; _ngHoldCount = 20; }
+      else if (_ngHoldCount > 0)   { target = 1.0; _ngHoldCount--; }
+      else                          { target = 0.0; }
+      _ngSmoothed += target > _ngSmoothed
+        ? 0.40 * (target - _ngSmoothed)
+        : 0.008 * (target - _ngSmoothed);
+      for (let i = 0; i < out.length; i++) out[i] = inp[i] * _ngSmoothed;
+    };
+    _ngUsingWorklet = false;
+  }
 
   // 8. Analyser — drives the level meter; reads post-compression/post-limiter
   liveMicAnalyser         = liveMicCtx.createAnalyser();
@@ -2993,6 +3034,7 @@ async function startLiveBroadcast() {
 
   // 9. MediaStreamDestination — captures processed audio for MediaRecorder
   const dest = liveMicCtx.createMediaStreamDestination();
+  liveDestStream = dest.stream;  // store so monitor can play processed audio (not raw mic)
 
   // Wire: mic → HPF → Gate(raw) → Bass → Presence → Treble → LPF → Gain → Comp → MakeupGain → Limiter → Analyser → out
   // Gate is BEFORE gain: it sees the quiet raw signal, not the amplified one.
@@ -3061,6 +3103,8 @@ function stopLiveBroadcast() {
   livePresenceNode  = null;
   liveTrebleNode    = null;
   liveNoiseGateNode = null;
+  liveDestStream    = null;
+  _ngUsingWorklet   = false;
   if (liveMicRAF) { cancelAnimationFrame(liveMicRAF); liveMicRAF = null; }
   if (liveTimerInterval) { clearInterval(liveTimerInterval); liveTimerInterval = null; }
 
@@ -3106,18 +3150,24 @@ function updateLiveTreble(val) {
 
 // ── Noise filter controls ─────────────────────────────────────────────────────
 function toggleNoiseFilter(enabled) {
-  _ngEnabled = enabled;
+  _ngEnabled = !!enabled;
+  // Propagate to AudioWorklet via message port (or ScriptProcessorNode reads _ngEnabled directly)
+  if (_ngUsingWorklet && liveNoiseGateNode && liveNoiseGateNode.port) {
+    liveNoiseGateNode.port.postMessage({ enabled: _ngEnabled });
+  }
   const label = document.getElementById('live-noise-label');
   if (label) {
-    label.textContent  = enabled ? 'ON' : 'OFF';
-    label.style.color  = enabled ? '#4caf82' : 'var(--text3)';
+    label.textContent = _ngEnabled ? 'ON' : 'OFF';
+    label.style.color = _ngEnabled ? '#4caf82' : 'var(--text3)';
   }
 }
 
 function updateNoiseThreshold(val) {
   // Pre-gain scale: raw mic RMS ≈ 0.001–0.006, so 1–100 maps to 0.00006–0.006
-  // Gate operates before gain boost, so threshold is much lower than before.
   _ngThreshold = (parseInt(val) / 100) * 0.006;
+  if (_ngUsingWorklet && liveNoiseGateNode && liveNoiseGateNode.port) {
+    liveNoiseGateNode.port.postMessage({ threshold: _ngThreshold });
+  }
   const display = document.getElementById('live-noise-level');
   if (display) display.textContent = val + '%';
 }
@@ -3133,19 +3183,26 @@ async function toggleMonitor() {
 
 async function startMonitor() {
   try {
-    // Use the existing mic stream if already live; otherwise open a fresh one
-    let stream = liveMicStream;
+    // When live, monitor plays the PROCESSED audio (dest.stream = what listeners hear).
+    // This is critical for two reasons:
+    //   1. Admin hears exactly what listeners hear (processed, EQ'd, limited).
+    //   2. The browser's AEC reference is the processed stream — NOT the raw mic — so
+    //      the AEC can properly subtract speaker output from the mic signal.
+    //      Playing raw liveMicStream to speakers creates a self-referential loop that
+    //      confuses AEC and causes repetitive echo artifacts.
+    //
+    // When not live, we fall back to opening a raw mic stream for preview.
+    let stream = liveDestStream || liveMicStream;
     if (!stream) {
       const micId = document.getElementById('live-mic-select').value;
       if (!micId) { alert('Select a microphone first.'); return; }
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { deviceId: { exact: micId }, echoCancellation: false, noiseSuppression: false }
+        audio: { deviceId: { exact: micId }, echoCancellation: true, noiseSuppression: true }
       });
-      // Store so we can stop these tracks when monitor is turned off
-      monitorCtx = stream;
+      monitorCtx = stream; // store so we can stop these tracks on monitor off
     }
 
-    const ctx  = liveMicCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = liveMicCtx || new (window.AudioContext || window.webkitAudioContext)();
     if (!liveMicCtx) liveMicCtx = ctx;
     if (ctx.state === 'suspended') await ctx.resume();
 
