@@ -1006,6 +1006,21 @@
           </div>
         </div>
 
+        <!-- FLASH ALERT CARD -->
+        <div class="card" style="border-color:rgba(212,168,67,0.3);">
+          <div class="card-header"><div class="card-title">⚡ Flash Alert</div></div>
+          <div style="padding:4px 0;">
+            <div style="font-size:11px;color:var(--text3);margin-bottom:10px;">Send an instant pop-up message to all listeners right now.</div>
+            <input type="text" class="form-control" id="flash-alert-text" maxlength="280" placeholder="Type your urgent message (max 280 chars)..." style="margin-bottom:8px;">
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+              <label style="font-size:11px;color:var(--text3);white-space:nowrap;">Colour</label>
+              <input type="color" id="flash-alert-color" value="#d4a843" style="width:36px;height:28px;border:none;background:none;cursor:pointer;border-radius:6px;">
+            </div>
+            <button class="btn btn-primary" style="width:100%;" onclick="sendFlashAlert()">⚡ Send Flash Alert to All Listeners</button>
+            <div id="flash-alert-status" style="font-size:11px;color:#4caf82;margin-top:8px;display:none;">Sent!</div>
+          </div>
+        </div>
+
         <!-- ACTIVITY LOG -->
         <div class="card">
           <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;">
@@ -1087,6 +1102,7 @@
                 <th>Album</th>
                 <th>Duration</th>
                 <th>Plays</th>
+                <th>❤️</th>
                 <th>Tray</th>
                 <th style="width:120px;">Actions</th>
               </tr>
@@ -1245,6 +1261,15 @@
             <div class="form-group">
               <label class="form-label">Speaker / Artist</label>
               <input class="form-control" id="live-artist" placeholder="e.g. Pastor Name" value="Light Encounter Tabernacle Worldwide">
+            </div>
+          </div>
+
+          <!-- Record toggle (opt-in: must check to save broadcast) -->
+          <div style="margin-bottom:14px;padding:10px 14px;background:rgba(76,175,130,0.05);border:1px solid rgba(76,175,130,0.2);border-radius:10px;display:flex;align-items:center;gap:10px;">
+            <input type="checkbox" id="live-record-check" style="accent-color:#4caf82;width:16px;height:16px;cursor:pointer;flex-shrink:0;">
+            <div>
+              <div style="font-size:12px;font-weight:700;color:var(--text);letter-spacing:0.3px;">🔴 Save recording to Library</div>
+              <div style="font-size:10px;color:var(--text3);margin-top:2px;">When checked, the broadcast is automatically saved to the Recordings tray after you stop.</div>
             </div>
           </div>
 
@@ -2030,7 +2055,7 @@ async function loadTracks() {
 function renderTracks(tracks) {
   const tbody = document.getElementById('tracks-tbody');
   if (!tracks.length) {
-    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;"><div class="empty-state"><div class="empty-icon">🎵</div><div class="empty-title">No tracks found</div><div class="empty-sub">Upload your first audio file</div></div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;"><div class="empty-state"><div class="empty-icon">🎵</div><div class="empty-title">No tracks found</div><div class="empty-sub">Upload your first audio file</div></div></td></tr>`;
     return;
   }
   tbody.innerHTML = tracks.map((t, i) => `
@@ -2042,6 +2067,7 @@ function renderTracks(tracks) {
       <td style="color:var(--text3);">${esc(t.album || '—')}</td>
       <td class="duration-cell">${formatDuration(t.duration)}</td>
       <td style="font-family:var(--mono);color:var(--gold);text-align:center;">${t.play_count || 0}</td>
+      <td style="font-family:var(--mono);color:#e05070;text-align:center;">${t.likes || 0}</td>
       <td><span class="badge badge-cyan">${t.tray}</span></td>
       <td>
         <div style="display:flex;gap:4px;">
@@ -2898,7 +2924,8 @@ async function startLiveBroadcast() {
 
   // Send the admin token so server accepts live events
   socket.auth = { token: getAdminToken() };
-  socket.emit('live:start', { title, artist });
+  const recordCheck = document.getElementById('live-record-check');
+  socket.emit('live:start', { title, artist, record: recordCheck ? recordCheck.checked : false });
 
   liveMediaRecorder.start(250); // emit chunk every 250 ms
 
@@ -3107,6 +3134,31 @@ function logActivity(msg) {
 function clearActivityLog() {
   const log = document.getElementById('activity-log');
   if (log) log.innerHTML = '<div style="color:var(--text3);font-style:italic;">Cleared.</div>';
+}
+
+// ── Flash Alert ───────────────────────────────────────────────────────────────
+async function sendFlashAlert() {
+  const text  = (document.getElementById('flash-alert-text') || {}).value || '';
+  const color = (document.getElementById('flash-alert-color') || {}).value || '#d4a843';
+  if (!text.trim()) { alert('Please enter a message.'); return; }
+  try {
+    const res = await apiFetch('/api/flash-alert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text.trim(), color }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const status = document.getElementById('flash-alert-status');
+    if (status) {
+      status.textContent = '⚡ Sent to all listeners!';
+      status.style.display = 'block';
+      setTimeout(() => { status.style.display = 'none'; }, 3000);
+    }
+    document.getElementById('flash-alert-text').value = '';
+    logActivity(`⚡ Flash alert: "${text.slice(0, 60)}"`);
+  } catch(e) {
+    alert('Failed to send: ' + e.message);
+  }
 }
 
 // ── Broadcast Announcement ────────────────────────────────────────────────────

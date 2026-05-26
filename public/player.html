@@ -37,6 +37,72 @@
       --reconnecting: #d4a843;
     }
 
+    /* ── Flash Alert Overlay ────────────────────────────────── */
+    #flash-alert-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 9999;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding-top: 70px;
+      pointer-events: none;
+    }
+    #flash-alert-box {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 22px;
+      border-radius: 14px;
+      background: rgba(14, 8, 18, 0.97);
+      border: 2px solid var(--gold);
+      box-shadow: 0 8px 40px rgba(0,0,0,0.8), 0 0 24px rgba(212,168,67,0.25);
+      max-width: 360px;
+      width: 90%;
+      pointer-events: auto;
+      transform: translateY(-120%);
+      opacity: 0;
+      transition: transform 0.45s cubic-bezier(0.34,1.56,0.64,1), opacity 0.3s;
+    }
+    #flash-alert-box.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+    #flash-alert-icon { font-size: 22px; flex-shrink: 0; }
+    #flash-alert-text { font-size: 14px; font-weight: 700; color: var(--text); line-height: 1.4; flex: 1; }
+    #flash-alert-close {
+      background: none; border: none; color: var(--text-muted);
+      font-size: 16px; cursor: pointer; flex-shrink: 0; padding: 4px;
+      transition: color 0.15s;
+    }
+    #flash-alert-close:hover { color: var(--text); }
+
+    /* ── Like Button ────────────────────────────────────────── */
+    .like-btn { position: relative; }
+    .like-btn.liked { color: #e05070 !important; border-color: rgba(224,80,112,0.5) !important; }
+    .like-count {
+      position: absolute;
+      top: -6px; right: -4px;
+      font-size: 9px;
+      font-weight: 700;
+      background: var(--gold);
+      color: #070508;
+      border-radius: 10px;
+      padding: 1px 4px;
+      line-height: 1.4;
+      min-width: 16px;
+      text-align: center;
+      pointer-events: none;
+      display: none;
+    }
+    .like-count.visible { display: block; }
+    @keyframes like-pop {
+      0%   { transform: scale(1); }
+      40%  { transform: scale(1.5); }
+      100% { transform: scale(1); }
+    }
+    .like-btn.pop { animation: like-pop 0.35s ease-out; }
+
     html, body {
       height: 100%;
       background: var(--bg-deep);
@@ -1165,7 +1231,11 @@
             <span id="play-icon">▶</span>
           </button>
 
-          <button class="icon-btn fav-btn" id="fav-btn" onclick="toggleFavourite()" title="Favourite">🤍</button>
+          <button class="icon-btn fav-btn" id="fav-btn" onclick="toggleFavourite()" title="Save to favourites">🤍</button>
+          <button class="icon-btn like-btn" id="like-btn" onclick="likeCurrentTrack()" title="Like this track">
+            ❤
+            <span class="like-count" id="like-count"></span>
+          </button>
 
           <div class="sleep-wrap">
             <div class="sleep-ring-wrap" id="sleep-btn" onclick="toggleSleepMenu()" title="Sleep Timer">
@@ -1337,6 +1407,15 @@
   <div class="rst-text" style="font-size:12px;color:var(--text-muted);"></div>
 </div>
 
+<!-- Flash Alert Overlay -->
+<div id="flash-alert-overlay">
+  <div id="flash-alert-box">
+    <span id="flash-alert-icon">📢</span>
+    <span id="flash-alert-text"></span>
+    <button id="flash-alert-close" onclick="dismissFlashAlert()" title="Dismiss">✕</button>
+  </div>
+</div>
+
 <!-- Hidden audio element -->
 <audio id="audio-element" preload="none"></audio>
 
@@ -1373,6 +1452,11 @@ let reconnectTO   = null;
 let currentReqType = 'song';
 let mobilePanelOpen = false;
 let deferredInstall = null;
+let currentTrackId  = null;   // set on trackStart for the like button
+let likeDebounce    = false;  // prevent double-tap likes
+let crossfadeRAF    = null;   // animation frame for volume crossfade
+let crossfadeSecs   = 3;      // default; updated from trackWillEnd event
+let flashAlertTimer = null;   // auto-dismiss timer for flash alerts
 
 // ── Username ──────────────────────────────────────────────────
 function getUsername() {
@@ -1414,6 +1498,14 @@ socket.on('trackStart', track => {
     track.title  || 'LETW Radio',
     track.artist || 'Light Encounter Tabernacle Worldwide'
   );
+  // Update like button for the new track
+  resetLikeBtn();
+  currentTrackId = track.id || null;
+  // Crossfade: fade in volume
+  if (isPlaying && !isMuted) {
+    audio.volume = 0;
+    fadeTo(currentVolume, crossfadeSecs * 1000);
+  }
 });
 
 socket.on('listenerChange', count => updateListeners(count));
@@ -1447,6 +1539,18 @@ socket.on('ticker:update', ({ text, enabled }) => setTicker(text, enabled));
 socket.on('request:updated', ({ id, status, request_text }) => {
   if (status === 'approved' || status === 'played') {
     showRequestToast(status, request_text);
+  }
+});
+
+socket.on('flash:alert', ({ message, color }) => {
+  showFlashAlert(message, color);
+});
+
+socket.on('trackWillEnd', ({ secondsLeft }) => {
+  crossfadeSecs = secondsLeft || 3;
+  // Crossfade: fade out volume before track ends
+  if (isPlaying && !isMuted) {
+    fadeTo(0, (secondsLeft || 3) * 1000);
   }
 });
 
@@ -2006,6 +2110,70 @@ function urlB64ToUint8(b64) {
   const arr = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
   return arr;
+}
+
+// ── Like Current Track ────────────────────────────────────────
+async function likeCurrentTrack() {
+  if (!currentTrackId || likeDebounce) return;
+  likeDebounce = true;
+  const btn = document.getElementById('like-btn');
+  if (btn) {
+    btn.classList.add('liked', 'pop');
+    setTimeout(() => btn.classList.remove('pop'), 400);
+  }
+  try {
+    const res  = await fetch(`/api/tracks/${currentTrackId}/like`, { method: 'POST' });
+    const data = await res.json();
+    const badge = document.getElementById('like-count');
+    if (badge && data.likes != null) {
+      badge.textContent = data.likes > 999 ? '999+' : data.likes;
+      badge.classList.toggle('visible', data.likes > 0);
+    }
+  } catch(e) {}
+  setTimeout(() => { likeDebounce = false; }, 2000); // cooldown 2 s
+}
+
+function resetLikeBtn() {
+  const btn   = document.getElementById('like-btn');
+  const badge = document.getElementById('like-count');
+  if (btn)   btn.classList.remove('liked');
+  if (badge) { badge.textContent = ''; badge.classList.remove('visible'); }
+  currentTrackId = null;
+  likeDebounce   = false;
+}
+
+// ── Crossfade volume animation ────────────────────────────────
+function fadeTo(targetVol, durationMs) {
+  if (crossfadeRAF) { cancelAnimationFrame(crossfadeRAF); crossfadeRAF = null; }
+  if (durationMs <= 0) { if (!isMuted) audio.volume = Math.max(0, Math.min(1, targetVol)); return; }
+  const startVol  = isMuted ? 0 : audio.volume;
+  const startTime = performance.now();
+  function step(now) {
+    const p = Math.min(1, (now - startTime) / durationMs);
+    if (!isMuted) audio.volume = startVol + (targetVol - startVol) * p;
+    if (p < 1) { crossfadeRAF = requestAnimationFrame(step); } else { crossfadeRAF = null; }
+  }
+  crossfadeRAF = requestAnimationFrame(step);
+}
+
+// ── Flash Alert ───────────────────────────────────────────────
+function showFlashAlert(message, color) {
+  clearTimeout(flashAlertTimer);
+  const box  = document.getElementById('flash-alert-box');
+  const text = document.getElementById('flash-alert-text');
+  const icon = document.getElementById('flash-alert-icon');
+  if (!box || !text) return;
+  text.textContent  = message;
+  icon.textContent  = '📢';
+  box.style.borderColor = color || '#d4a843';
+  box.classList.add('show');
+  flashAlertTimer = setTimeout(dismissFlashAlert, 8000); // auto-dismiss after 8 s
+}
+
+function dismissFlashAlert() {
+  clearTimeout(flashAlertTimer);
+  const box = document.getElementById('flash-alert-box');
+  if (box) box.classList.remove('show');
 }
 
 // ── Ticker ────────────────────────────────────────────────────

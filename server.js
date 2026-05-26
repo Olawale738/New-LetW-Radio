@@ -2,7 +2,9 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const fs = require('fs');
 const cors = require('cors');
+const { v4: uuidv4 } = require('uuid');
 
 const db = require('./db');
 const audioEngine = require('./audioEngine');
@@ -20,6 +22,13 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Segun123@';
+
+// ── Live recording state (opt-in; only active when admin checks "Record") ──────
+let liveRecordingEnabled = false;
+let liveRecordingStream  = null;
+let liveRecordingFile    = '';
+let liveRecordingTitle   = '';
+let liveRecordingArtist  = '';
 
 // Base64 encode the password so special chars like @ never break cookie values
 const SESSION_TOKEN = Buffer.from(ADMIN_PASSWORD).toString('base64');
@@ -257,12 +266,32 @@ app.use('/api', apiRoutes);
 const { setIo } = require('./routes/api');
 setIo(io);
 
-// Auto-fill with random tracks when queue runs dry
+// ── Flash Alert — instant pop-up to all listeners (admin only) ────────────────
+app.post('/api/flash-alert', (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ error: 'Forbidden' });
+  const { message, color } = req.body || {};
+  if (!message || !String(message).trim()) return res.status(400).json({ error: 'Message required' });
+  const alert = { message: String(message).trim().slice(0, 280), color: color || '#d4a843', ts: Date.now() };
+  io.emit('flash:alert', alert);
+  console.log(`[Flash Alert] Sent: "${alert.message}"`);
+  res.json({ success: true });
+});
+
+// Auto-fill with random tracks when queue runs dry (Smart no-repeat: skip recently played)
 audioEngine.on('queueEmpty', () => {
   try {
-    const fillerTracks = db.prepare(`SELECT * FROM tracks ORDER BY RANDOM() LIMIT 30`).all();
+    // Prefer tracks not played in the last 2 hours
+    let fillerTracks = db.prepare(
+      `SELECT * FROM tracks WHERE id NOT IN (
+         SELECT track_id FROM history WHERE played_at > datetime('now','-2 hours')
+       ) ORDER BY RANDOM() LIMIT 30`
+    ).all();
+    // Fall back to all tracks if the library is too small for meaningful no-repeat
+    if (fillerTracks.length < 5) {
+      fillerTracks = db.prepare(`SELECT * FROM tracks ORDER BY RANDOM() LIMIT 30`).all();
+    }
     if (fillerTracks.length > 0) {
-      console.log(`[AutoFiller] Queue empty — loading ${fillerTracks.length} random tracks`);
+      console.log(`[AutoFiller] Queue empty — loading ${fillerTracks.length} tracks (smart no-repeat)`);
       audioEngine.setQueue(fillerTracks);
       audioEngine.playNext();
     }
@@ -307,6 +336,70 @@ app.get('/live-stream', (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // 📋  PLS PLAYLIST — VLC, Winamp, most desktop and mobile radio apps
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// 🔲  EMBEDDABLE WIDGET  /widget
+// Minimal iframe-ready player — embed anywhere with:
+//   <iframe src="https://your-domain/widget" width="320" height="120"
+//           style="border:none;border-radius:16px;" allow="autoplay"></iframe>
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/widget', (req, res) => {
+  const settings = getSettings();
+  const name = settings.radio_name || 'LETW Radio';
+  const desc = settings.radio_description || 'Light Encounter Tabernacle Worldwide';
+  res.setHeader('X-Frame-Options', 'ALLOWALL');
+  res.setHeader('Content-Security-Policy', "frame-ancestors *");
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${name} Widget</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#0e0a0f;color:#f5f0ff;font-family:'Segoe UI',Arial,sans-serif;height:100vh;display:flex;align-items:center;justify-content:center;overflow:hidden;}
+.w{display:flex;align-items:center;gap:14px;background:rgba(20,12,24,0.98);border:1px solid rgba(212,168,67,0.35);border-radius:14px;padding:12px 18px;width:100%;max-width:420px;box-shadow:0 8px 32px rgba(0,0,0,0.7);}
+.logo{width:44px;height:44px;border-radius:10px;background:#fff;overflow:hidden;flex-shrink:0;}
+.logo img{width:100%;height:100%;object-fit:cover;}
+.info{flex:1;min-width:0;}
+.name{font-size:13px;font-weight:700;color:#d4a843;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.track{font-size:11px;color:#c0a8d8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;}
+.btn{width:42px;height:42px;border-radius:50%;border:2px solid #d4a843;background:rgba(212,168,67,0.12);color:#d4a843;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background 0.15s;}
+.btn:hover{background:rgba(212,168,67,0.28);}
+.btn.playing{background:#d4a843;color:#070508;}
+.dot{width:7px;height:7px;border-radius:50%;background:#e03060;animation:pulse 1.4s ease-in-out infinite;flex-shrink:0;display:none;}
+.dot.on{display:block;}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:0.5;transform:scale(0.75);}}
+</style>
+</head>
+<body>
+<div class="w">
+  <div class="logo"><img src="/logo.png" onerror="this.style.display='none'" alt=""></div>
+  <div class="info">
+    <div class="name" id="wname">${name}</div>
+    <div class="track" id="wtrack">${desc}</div>
+  </div>
+  <div class="dot" id="wdot"></div>
+  <button class="btn" id="wbtn" onclick="toggle()" title="Play / Pause">▶</button>
+</div>
+<audio id="wa" preload="none"></audio>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const audio=document.getElementById('wa');
+const btn=document.getElementById('wbtn');
+const dot=document.getElementById('wdot');
+const wtrack=document.getElementById('wtrack');
+let playing=false;
+function toggle(){playing?stop():play();}
+function play(){audio.src='/stream?t='+Date.now();audio.load();audio.play().catch(()=>{});playing=true;btn.textContent='⏸';btn.classList.add('playing');dot.classList.add('on');}
+function stop(){audio.pause();audio.src='';playing=false;btn.textContent='▶';btn.classList.remove('playing');dot.classList.remove('on');}
+const socket=io({transports:['websocket','polling']});
+socket.on('trackStart',t=>{wtrack.textContent=(t.artist?t.artist+' – ':'')+t.title;});
+socket.on('live:started',i=>{wtrack.textContent='🔴 LIVE: '+(i.title||'Live Broadcast');});
+socket.on('live:ended',()=>{wtrack.textContent='${desc}';});
+</script>
+</body>
+</html>`);
+});
+
 app.get('/stream.pls', (req, res) => {
   const settings = getSettings();
   const name = settings.radio_name || 'LETW Radio';
@@ -783,9 +876,28 @@ io.on('connection', (socket) => {
   // Admin signals "going live"
   socket.on('live:start', (data) => {
     if (!isAdminSocket()) return;
-    const { title, artist } = data || {};
+    const { title, artist, record } = data || {};
     console.log(`[Live] Admin started live broadcast: "${title}"`);
     audioEngine.startLive(title, artist);
+
+    // Recording (opt-in: admin must check "Record This Broadcast")
+    if (record) {
+      const recFile = path.join(__dirname, 'uploads', `live-${Date.now()}.webm`);
+      if (!fs.existsSync(path.join(__dirname, 'uploads'))) {
+        fs.mkdirSync(path.join(__dirname, 'uploads'), { recursive: true });
+      }
+      try {
+        liveRecordingStream  = fs.createWriteStream(recFile);
+        liveRecordingFile    = recFile;
+        liveRecordingTitle   = title  || 'Live Broadcast';
+        liveRecordingArtist  = artist || 'LETW Radio';
+        liveRecordingEnabled = true;
+        console.log(`[Live] Recording to: ${recFile}`);
+      } catch(e) {
+        console.error('[Live] Could not start recording:', e.message);
+        liveRecordingEnabled = false;
+      }
+    }
     // live:started is broadcast by audioEngine.on('liveStart') below — no double emit
   });
 
@@ -795,6 +907,10 @@ io.on('connection', (socket) => {
     if (!audioEngine.isLive) return;
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     audioEngine.broadcastLive(buf);
+    // Write to recording file if recording is active
+    if (liveRecordingEnabled && liveRecordingStream) {
+      try { liveRecordingStream.write(buf); } catch(e) {}
+    }
   });
 
   // Admin ends the live broadcast
@@ -804,6 +920,35 @@ io.on('connection', (socket) => {
     audioEngine.stopLive();
     io.emit('live:ended');
     io.emit('status', audioEngine.getStatus());
+
+    // Finalise recording if active
+    if (liveRecordingEnabled && liveRecordingStream) {
+      liveRecordingEnabled = false;
+      const stream = liveRecordingStream;
+      const file   = liveRecordingFile;
+      const rtitle = liveRecordingTitle;
+      const rartist = liveRecordingArtist;
+      liveRecordingStream = null;
+      liveRecordingFile   = '';
+
+      stream.end(() => {
+        try {
+          const stat = fs.statSync(file);
+          if (stat.size > 10000) { // must be at least 10 KB to be valid
+            const id       = uuidv4();
+            const duration = Math.floor(stat.size / 12000); // ~12 KB/s at 96 kbps Opus
+            db.prepare(`INSERT INTO tracks (id, title, artist, duration, file_path, file_size, bitrate, tray) VALUES (?,?,?,?,?,?,?,?)`)
+              .run(id, rtitle, rartist, duration, file, stat.size, 96, 'recordings');
+            console.log(`[Live] Recording saved to library: "${rtitle}" (${duration}s)`);
+          } else {
+            try { fs.unlinkSync(file); } catch(e) {}
+            console.log('[Live] Recording too small, discarded');
+          }
+        } catch(e) {
+          console.error('[Live] Recording save error:', e.message);
+        }
+      });
+    }
   });
 
   socket.on('disconnect', () => {});
@@ -903,9 +1048,14 @@ db.init().then(() => {
           audioEngine.setQueue(tracks);
           audioEngine.playNext();
         } else {
-          const fillers = db.prepare(`SELECT * FROM tracks ORDER BY RANDOM() LIMIT 20`).all();
+          let fillers = db.prepare(
+            `SELECT * FROM tracks WHERE id NOT IN (
+               SELECT track_id FROM history WHERE played_at > datetime('now','-2 hours')
+             ) ORDER BY RANDOM() LIMIT 20`
+          ).all();
+          if (fillers.length < 3) fillers = db.prepare(`SELECT * FROM tracks ORDER BY RANDOM() LIMIT 20`).all();
           if (fillers.length > 0) {
-            console.log('[HealthCheck] Radio was stopped — loading filler tracks');
+            console.log('[HealthCheck] Radio was stopped — loading filler tracks (smart no-repeat)');
             audioEngine.setQueue(fillers);
             audioEngine.playNext();
           }

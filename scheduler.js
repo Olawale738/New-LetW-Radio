@@ -181,6 +181,20 @@ function startScheduler(io) {
         db.prepare(`UPDATE daily_queue SET played = 1 WHERE date = ? AND track_id = ? AND played = 0 LIMIT 1`)
           .run(track.date, track.id);
       }
+
+      // Crossfade: emit trackWillEnd event N seconds before the track ends
+      const durationSecs = track.duration || 0;
+      if (durationSecs > 8) {
+        const cfRow  = db.prepare(`SELECT value FROM settings WHERE key = 'crossfade_time'`).get();
+        const cfSecs = Math.max(1, parseInt(cfRow ? cfRow.value : '3', 10));
+        const delayMs = Math.max(0, (durationSecs - cfSecs) * 1000);
+        const trackId = track.id;
+        setTimeout(() => {
+          if (audioEngine.currentTrack && audioEngine.currentTrack.id === trackId && audioEngine.isPlaying) {
+            if (io) io.emit('trackWillEnd', { secondsLeft: cfSecs });
+          }
+        }, delayMs);
+      }
     } catch (err) {
       console.error('[Scheduler] trackStart handler error:', err.message);
     }

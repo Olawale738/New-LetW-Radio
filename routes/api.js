@@ -517,6 +517,19 @@ router.get('/analytics/listeners', (req, res) => {
   res.json(db.prepare(`SELECT * FROM listener_stats ORDER BY recorded_at ASC LIMIT 1440`).all());
 });
 
+// ==================== LIKE SYSTEM ====================
+router.post('/tracks/:id/like', (req, res) => {
+  try {
+    const track = db.prepare(`SELECT id FROM tracks WHERE id = ?`).get(req.params.id);
+    if (!track) return res.status(404).json({ error: 'Track not found' });
+    db.prepare(`UPDATE tracks SET likes = likes + 1 WHERE id = ?`).run(req.params.id);
+    const updated = db.prepare(`SELECT likes FROM tracks WHERE id = ?`).get(req.params.id);
+    res.json({ likes: updated ? updated.likes : 0 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ==================== PUSH ====================
 router.post('/push/subscribe', (req, res) => {
   const { endpoint, p256dh, auth } = req.body;

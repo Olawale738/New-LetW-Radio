@@ -108,6 +108,7 @@ function initSchema(sqlDb) {
 
   // Migrations for existing databases
   try { sqlDb.run(`ALTER TABLE tracks ADD COLUMN play_count INTEGER DEFAULT 0`); } catch {}
+  try { sqlDb.run(`ALTER TABLE tracks ADD COLUMN likes INTEGER DEFAULT 0`); } catch {}
 
   const defaults = {
     radio_name: 'LETW Radio',
