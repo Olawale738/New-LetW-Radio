@@ -1293,12 +1293,45 @@
           <div style="margin-bottom:16px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
               <div style="font-size:10px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;">🔊 Mic Boost</div>
-              <span id="live-gain-display" style="font-size:11px;color:var(--gold);font-family:var(--mono);font-weight:700;">450%</span>
+              <span id="live-gain-display" style="font-size:11px;color:var(--gold);font-family:var(--mono);font-weight:700;">800%</span>
             </div>
-            <input type="range" id="live-gain-slider" min="0.5" max="8" step="0.1" value="4.5"
+            <input type="range" id="live-gain-slider" min="1" max="15" step="0.1" value="8"
               oninput="updateLiveGain(this.value)"
               style="width:100%;accent-color:var(--gold);cursor:pointer;">
-            <div style="font-size:10px;color:rgba(212,168,67,0.45);margin-top:4px;">Default 450% suits most mics. Lower it only if your voice sounds distorted. Raise it if still too quiet.</div>
+            <div style="font-size:10px;color:rgba(212,168,67,0.45);margin-top:4px;">Raise until voice is clearly loud. Lower only if it sounds distorted.</div>
+          </div>
+
+          <!-- Voice EQ (Bass / Presence / Soprano) -->
+          <div style="margin-bottom:16px;padding:12px 14px;background:rgba(212,168,67,0.04);border:1px solid rgba(212,168,67,0.18);border-radius:10px;">
+            <div style="font-size:11px;font-weight:700;color:var(--text);letter-spacing:0.5px;margin-bottom:12px;">🎚 Voice EQ</div>
+
+            <!-- Bass -->
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+              <span style="font-size:10px;color:var(--text3);width:64px;letter-spacing:1px;text-transform:uppercase;flex-shrink:0;">🔉 Bass</span>
+              <input type="range" id="live-bass-slider" min="-6" max="12" step="0.5" value="4"
+                oninput="updateLiveBass(this.value)"
+                style="flex:1;accent-color:#4a9fd4;cursor:pointer;">
+              <span id="live-bass-display" style="font-size:11px;color:#4a9fd4;width:36px;text-align:right;font-family:var(--mono);font-weight:700;">+4dB</span>
+            </div>
+
+            <!-- Presence (mid clarity) -->
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+              <span style="font-size:10px;color:var(--text3);width:64px;letter-spacing:1px;text-transform:uppercase;flex-shrink:0;">✨ Clarity</span>
+              <input type="range" id="live-presence-slider" min="-6" max="12" step="0.5" value="5"
+                oninput="updateLivePresence(this.value)"
+                style="flex:1;accent-color:#d4a843;cursor:pointer;">
+              <span id="live-presence-display" style="font-size:11px;color:var(--gold);width:36px;text-align:right;font-family:var(--mono);font-weight:700;">+5dB</span>
+            </div>
+
+            <!-- Soprano / Treble / Air -->
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+              <span style="font-size:10px;color:var(--text3);width:64px;letter-spacing:1px;text-transform:uppercase;flex-shrink:0;">🎵 Treble</span>
+              <input type="range" id="live-treble-slider" min="-6" max="12" step="0.5" value="3"
+                oninput="updateLiveTreble(this.value)"
+                style="flex:1;accent-color:#9b6fd4;cursor:pointer;">
+              <span id="live-treble-display" style="font-size:11px;color:#9b6fd4;width:36px;text-align:right;font-family:var(--mono);font-weight:700;">+3dB</span>
+            </div>
+            <div style="font-size:10px;color:rgba(212,168,67,0.4);margin-top:8px;line-height:1.5;">Bass = warmth &amp; body · Clarity = voice cut-through · Treble = air &amp; sparkle (soprano range)</div>
           </div>
 
           <!-- Noise Filter (noise gate + LPF) -->
@@ -2752,7 +2785,10 @@ let liveMicAnalyser   = null;
 let liveMicCtx        = null;
 let liveMicRAF        = null;
 let liveTimerInterval = null;
-let liveGainNode      = null;   // gain node for the live audio processing chain
+let liveGainNode      = null;   // pre-gain (main loudness)
+let liveBassNode      = null;   // low-shelf EQ (bass warmth)
+let livePresenceNode  = null;   // peaking EQ (voice clarity)
+let liveTrebleNode    = null;   // high-shelf EQ (soprano / air)
 let liveNoiseGateNode = null;   // ScriptProcessorNode noise gate
 // Noise gate state — accessed from onaudioprocess (must be module-level)
 let _ngEnabled   = true;
@@ -2847,46 +2883,61 @@ async function startLiveBroadcast() {
   hpf.frequency.value = 100;  // slightly raised for cleaner radio voice
   hpf.Q.value         = 0.65;
 
-  // 2. Presence / clarity boost — peaking EQ centred at 2800 Hz (+5 dB)
-  //    This is the "radio voice" secret: boosting here makes speech cut through
-  //    clearly without sounding harsh. Announcers, preachers, and broadcasters
-  //    all benefit from a 2–4 kHz lift.
-  const presence           = liveMicCtx.createBiquadFilter();
-  presence.type            = 'peaking';
-  presence.frequency.value = 2800;  // centre of voice clarity / intelligibility band
-  presence.gain.value      = 5;     // +5 dB boost — noticeable but not harsh
-  presence.Q.value         = 0.8;
+  // 2. Bass boost — low-shelf at 100 Hz, adds warmth and body to voice
+  liveBassNode = liveMicCtx.createBiquadFilter();
+  liveBassNode.type            = 'lowshelf';
+  liveBassNode.frequency.value = 100;
+  const bassSlider = document.getElementById('live-bass-slider');
+  liveBassNode.gain.value = bassSlider ? parseFloat(bassSlider.value) : 4;
 
-  // 3. Low-pass filter — raised to 14 kHz so all consonants (S/T/F/CH) are preserved.
-  //    The old 8 kHz ceiling made voices sound muffled. Human speech intelligibility
-  //    requires frequencies up to 10–12 kHz.
+  // 3. Presence / clarity boost — peaking EQ at 2800 Hz
+  //    The "radio voice" frequency: makes speech intelligible and cuts through
+  livePresenceNode = liveMicCtx.createBiquadFilter();
+  livePresenceNode.type            = 'peaking';
+  livePresenceNode.frequency.value = 2800;
+  livePresenceNode.Q.value         = 0.8;
+  const presSlider = document.getElementById('live-presence-slider');
+  livePresenceNode.gain.value = presSlider ? parseFloat(presSlider.value) : 5;
+
+  // 4. Treble / Soprano — high-shelf at 8 kHz, adds air, sparkle, and consonant brightness
+  liveTrebleNode = liveMicCtx.createBiquadFilter();
+  liveTrebleNode.type            = 'highshelf';
+  liveTrebleNode.frequency.value = 8000;
+  const trebSlider = document.getElementById('live-treble-slider');
+  liveTrebleNode.gain.value = trebSlider ? parseFloat(trebSlider.value) : 3;
+
+  // 5. Low-pass filter — gentle ceiling at 18 kHz removes only extreme hiss
   const lpf           = liveMicCtx.createBiquadFilter();
   lpf.type            = 'lowpass';
-  lpf.frequency.value = 14000;
-  lpf.Q.value         = 0.65;
+  lpf.frequency.value = 18000;
+  lpf.Q.value         = 0.5;
 
-  // 4. Gain node — boosts quiet microphones; default raised to 4.5× for audibility
+  // 6. Pre-gain — main loudness control; default 8× (800%)
   liveGainNode = liveMicCtx.createGain();
   const gainSlider = document.getElementById('live-gain-slider');
-  liveGainNode.gain.value = gainSlider ? parseFloat(gainSlider.value) : 4.5;
+  liveGainNode.gain.value = gainSlider ? parseFloat(gainSlider.value) : 8;
 
-  // 5. Broadcast compressor — aggressive levelling keeps voice consistently loud.
-  //    Ratio 8:1 irons out volume differences between soft and loud speech.
+  // 7. Broadcast compressor — levels out soft and loud speech for consistent loudness
   const comp           = liveMicCtx.createDynamicsCompressor();
-  comp.threshold.value = -20;   // start compressing earlier (catches quieter voice)
-  comp.knee.value      = 5;     // tighter knee for more consistent output
-  comp.ratio.value     = 8;     // 8:1 — firm broadcast-style levelling
-  comp.attack.value    = 0.003; // 3 ms — fast enough to catch transients
-  comp.release.value   = 0.12;  // 120 ms — quick recovery so next word comes in loud
+  comp.threshold.value = -18;   // start compressing at -18 dBFS
+  comp.knee.value      = 4;     // tight knee for firm, consistent output
+  comp.ratio.value     = 6;     // 6:1 — strong but not squashed
+  comp.attack.value    = 0.003; // 3 ms
+  comp.release.value   = 0.10;  // 100 ms — fast recovery keeps every word loud
 
-  // 6. Output limiter — hard ceiling at –1 dB prevents clipping and distortion.
-  //    Placed after the compressor so boosted peaks never clip the encoder.
+  // 8. Makeup gain — compensates for the level reduction caused by compression.
+  //    Without this the compressed signal is quieter than the raw mic input.
+  //    +8 dB (≈ 2.5×) brings it back to a full, hot broadcast level.
+  const makeupGain       = liveMicCtx.createGain();
+  makeupGain.gain.value  = 2.5; // +8 dB makeup
+
+  // 9. Output limiter — hard ceiling at –0.5 dB, prevents any clipping reaching the encoder
   const limiter           = liveMicCtx.createDynamicsCompressor();
-  limiter.threshold.value = -1;   // only triggers on true peaks
-  limiter.knee.value      = 0;    // brickwall — no soft knee
-  limiter.ratio.value     = 20;   // 20:1 ≈ hard limiter
-  limiter.attack.value    = 0.001;// 1 ms — catches peaks before they clip
-  limiter.release.value   = 0.05; // 50 ms release
+  limiter.threshold.value = -0.5;
+  limiter.knee.value      = 0;    // brickwall
+  limiter.ratio.value     = 20;   // ≈ hard limit
+  limiter.attack.value    = 0.001;// 1 ms
+  limiter.release.value   = 0.04;
 
   // 7. Noise gate — silences dead air between words; improved with a hold counter
   //    so the gate stays open for a few extra frames after signal drops, preventing
@@ -2940,13 +2991,16 @@ async function startLiveBroadcast() {
   // 9. MediaStreamDestination — captures processed audio for MediaRecorder
   const dest = liveMicCtx.createMediaStreamDestination();
 
-  // Wire: mic → HPF → Presence → LPF → Gain → Compressor → Limiter → Gate → Analyser → out
+  // Wire: mic → HPF → Bass → Presence → Treble → LPF → Gain → Comp → MakeupGain → Limiter → Gate → Analyser → out
   src.connect(hpf);
-  hpf.connect(presence);
-  presence.connect(lpf);
+  hpf.connect(liveBassNode);
+  liveBassNode.connect(livePresenceNode);
+  livePresenceNode.connect(liveTrebleNode);
+  liveTrebleNode.connect(lpf);
   lpf.connect(liveGainNode);
   liveGainNode.connect(comp);
-  comp.connect(limiter);
+  comp.connect(makeupGain);
+  makeupGain.connect(limiter);
   limiter.connect(liveNoiseGateNode);
   liveNoiseGateNode.connect(liveMicAnalyser);
   liveMicAnalyser.connect(dest);
@@ -2997,6 +3051,9 @@ function stopLiveBroadcast() {
 
   if (liveMicCtx) { liveMicCtx.close(); liveMicCtx = null; }
   liveGainNode      = null;
+  liveBassNode      = null;
+  livePresenceNode  = null;
+  liveTrebleNode    = null;
   liveNoiseGateNode = null;
   if (liveMicRAF) { cancelAnimationFrame(liveMicRAF); liveMicRAF = null; }
   if (liveTimerInterval) { clearInterval(liveTimerInterval); liveTimerInterval = null; }
@@ -3017,6 +3074,28 @@ function updateLiveGain(val) {
   const display = document.getElementById('live-gain-display');
   if (display) display.textContent = pct + '%';
   if (liveGainNode) liveGainNode.gain.value = parseFloat(val);
+}
+
+// ── EQ controls ───────────────────────────────────────────────────────────────
+function updateLiveBass(val) {
+  const db = parseFloat(val);
+  const display = document.getElementById('live-bass-display');
+  if (display) display.textContent = (db >= 0 ? '+' : '') + db + 'dB';
+  if (liveBassNode) liveBassNode.gain.value = db;
+}
+
+function updateLivePresence(val) {
+  const db = parseFloat(val);
+  const display = document.getElementById('live-presence-display');
+  if (display) display.textContent = (db >= 0 ? '+' : '') + db + 'dB';
+  if (livePresenceNode) livePresenceNode.gain.value = db;
+}
+
+function updateLiveTreble(val) {
+  const db = parseFloat(val);
+  const display = document.getElementById('live-treble-display');
+  if (display) display.textContent = (db >= 0 ? '+' : '') + db + 'dB';
+  if (liveTrebleNode) liveTrebleNode.gain.value = db;
 }
 
 // ── Noise filter controls ─────────────────────────────────────────────────────
