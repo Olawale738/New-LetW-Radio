@@ -224,18 +224,8 @@
       color: var(--gold);
       text-shadow: 0 0 12px rgba(212,168,67,0.35);
     }
-    #hero-status {
-      font-size: 9px;
-      font-weight: 700;
-      letter-spacing: 2px;
-      color: var(--text-dim);
-      text-transform: uppercase;
-      transition: color 0.3s;
-    }
-    #hero-status.live-status { color: #ff80a0; text-shadow: 0 0 8px rgba(224,48,96,0.5); }
-    #hero-status.on-air-status { color: var(--gold-light); text-shadow: 0 0 8px rgba(212,168,67,0.4); }
+    #hero-status-dot { display:flex; align-items:center; }
     #hero-listeners { font-size: 11px; color: var(--text-dim); }
-    #hero-listeners span { color: var(--gold); font-weight: 700; }
 
     /* ── Main Layout ──────────────────────────────────────────── */
     #app {
@@ -758,23 +748,6 @@
       font-weight: 700;
       color: var(--text-muted);
     }
-
-    /* ── Quality Selector ────────────────────────────────────── */
-    #quality-select {
-      background: rgba(255,255,255,0.04);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      color: var(--text-muted);
-      font-size: 10px;
-      font-family: 'Lato', sans-serif;
-      padding: 4px 8px;
-      outline: none;
-      cursor: pointer;
-      transition: border-color 0.2s;
-      width: 100%;
-    }
-    #quality-select:focus { border-color: var(--border-mid); }
-    #quality-select option { background: #0e0a0f; color: var(--text); }
 
     /* ── Church Info ──────────────────────────────────────────── */
     .church-info {
@@ -1369,8 +1342,11 @@
 <!-- Hero Bar -->
 <div id="hero-bar">
   <div id="hero-radio-name">LETW RADIO</div>
-  <div id="hero-status">OFFLINE</div>
-  <div id="hero-listeners">👥 <span id="hero-listener-count">0</span></div>
+  <div id="hero-status-dot">
+    <span id="hero-dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:rgba(180,160,120,0.4);margin-right:6px;transition:background 0.4s;"></span>
+    <span id="hero-status" style="font-size:9px;font-weight:700;letter-spacing:2px;color:var(--text-dim);text-transform:uppercase;transition:color 0.3s;"></span>
+  </div>
+  <div id="hero-listeners" style="font-size:11px;color:var(--text-dim);">👥 <span id="hero-listener-count" style="color:var(--gold);font-weight:700;">0</span></div>
 </div>
 
 <!-- Ticker Bar -->
@@ -1466,26 +1442,16 @@
 
         <div class="meta-row">
           <div class="meta-item">
-            <div class="meta-label">Listeners</div>
-            <div class="meta-value" id="meta-listeners">–</div>
-          </div>
-          <div class="meta-item">
             <div class="meta-label">Bitrate</div>
             <div class="meta-value" id="meta-bitrate">128 kbps</div>
           </div>
           <div class="meta-item">
             <div class="meta-label">Format</div>
-            <div class="meta-value">MP3</div>
+            <div class="meta-value">MP3 · Stereo</div>
           </div>
           <div class="meta-item">
             <div class="meta-label">Signal</div>
             <div class="meta-value" id="meta-signal">–</div>
-          </div>
-          <div class="meta-item">
-            <div class="meta-label">Quality</div>
-            <select id="quality-select">
-              <option value="128">Auto (128k)</option>
-            </select>
           </div>
         </div>
 
@@ -1500,10 +1466,9 @@
       </div>
 
       <div class="tune-strip">
-        <span class="tune-label">Also tune in via</span>
-        <a class="tune-link" href="/stream" target="_blank">🔗 Stream</a>
-        <a class="tune-link" href="/stream.pls" download>⬇ VLC</a>
-        <a class="tune-link" href="/stream.m3u" download>⬇ M3U</a>
+        <span class="tune-label">Tune in via external app</span>
+        <a class="tune-link" href="/stream.pls" download>⬇ VLC / Winamp</a>
+        <a class="tune-link" href="/stream.m3u" download>⬇ M3U Playlist</a>
       </div>
     </div>
 
@@ -1924,7 +1889,7 @@ function updateTrackInfo(title, artist) {
 
 function updateListeners(count) {
   document.getElementById('listener-count').textContent = count;
-  document.getElementById('meta-listeners').textContent = count;
+  // meta-listeners removed from DOM; listener count shown in hero bar only
   const heroCount = document.getElementById('hero-listener-count');
   if (heroCount) heroCount.textContent = count;
 }
@@ -1944,6 +1909,8 @@ function switchToLiveMode(info) {
   document.getElementById('status-text').textContent = 'LIVE BROADCAST';
   const heroStatus = document.getElementById('hero-status');
   if (heroStatus) heroStatus.textContent = 'LIVE';
+  const heroDot = document.getElementById('hero-dot');
+  if (heroDot) heroDot.style.background = '#e03060';
   if (info && (info.title || info.artist)) {
     updateTrackInfo(info.title || 'Live Broadcast', info.artist || 'LETW Radio');
   }
@@ -2022,10 +1989,12 @@ function setStatusBadge(playing) {
   const badge      = document.getElementById('status-badge');
   const text       = document.getElementById('status-text');
   const heroStatus = document.getElementById('hero-status');
+  const heroDot    = document.getElementById('hero-dot');
   const progress   = document.getElementById('now-playing-progress');
   badge.className = playing ? 'status-badge on-air' : 'status-badge offline';
   text.textContent = playing ? 'ON AIR' : 'OFFLINE';
   if (heroStatus) heroStatus.textContent = playing ? 'ON AIR' : 'OFFLINE';
+  if (heroDot) heroDot.style.background = playing ? 'var(--gold)' : 'rgba(180,160,120,0.3)';
   if (progress) progress.classList.toggle('active', playing);
   setVinylPlaying(playing);
 }
