@@ -879,10 +879,23 @@ db.init().then(() => {
     db.prepare('DELETE FROM listener_stats WHERE recorded_at < datetime("now", "-2 days")').run();
   }, 60000);
 
-  // Health check: auto-restart playback if radio has stopped unexpectedly
+  // Health check: auto-restart playback if radio has stopped unexpectedly.
+  // Runs every 20 s (down from 60 s) so silent gaps are caught quickly.
+  // Also handles the edge case where isPlaying=true but the watchdog has not yet
+  // fired: if _lastChunkTime is >30 s stale we treat it as a hung state.
   setInterval(() => {
-    if (!audioEngine.isLive && !audioEngine.isPlaying) {
-      try {
+    try {
+      const nowStale = !audioEngine.isLive && audioEngine.isPlaying &&
+                       Date.now() - audioEngine._lastChunkTime > 30000;
+      const stopped  = !audioEngine.isLive && !audioEngine.isPlaying;
+
+      if (stopped || nowStale) {
+        if (nowStale) {
+          console.log('[HealthCheck] isPlaying=true but no chunks sent for >30 s — force restart');
+          audioEngine.isPlaying = false;
+          audioEngine._playGeneration++;
+          if (audioEngine.playbackTimer) { clearTimeout(audioEngine.playbackTimer); audioEngine.playbackTimer = null; }
+        }
         const date = getDateString();
         const tracks = db.prepare(`SELECT dq.*, t.title, t.artist, t.file_path, t.duration, t.bitrate FROM daily_queue dq JOIN tracks t ON t.id = dq.track_id WHERE dq.date = ? AND dq.played = 0 ORDER BY dq.position`).all(date);
         if (tracks.length > 0) {
@@ -897,9 +910,11 @@ db.init().then(() => {
             audioEngine.playNext();
           }
         }
-      } catch(e) {}
+      }
+    } catch(e) {
+      console.error('[HealthCheck] Error:', e.message);
     }
-  }, 60000);
+  }, 20000);
 }).catch(err => {
   console.error('Failed to initialize database:', err);
   process.exit(1);

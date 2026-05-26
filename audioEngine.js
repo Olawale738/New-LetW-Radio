@@ -5,9 +5,18 @@ const { EventEmitter } = require('events');
 const CHUNK_SIZE = 8192;
 const ICY_METAINT = 8192;
 
+// Pre-built minimal silent MP3 frame (128 kbps, 44.1 kHz, stereo).
+// Sent to connected clients while nothing is playing so proxies/firewalls
+// do not drop the idle TCP connection.
+const SILENT_MP3_FRAME = Buffer.from(
+  'fffb9064' + '0'.repeat(416),  // 209-byte frame of zeroed payload
+  'hex'
+);
+
 function buildIcyMeta(track) {
   if (!track) return Buffer.alloc(1);
-  const title = [track.artist, track.title].filter(Boolean).join(' - ');
+  // Truncate title to ICY spec maximum (255 × 16 = 4080 bytes) to prevent RangeError
+  const title = [track.artist, track.title].filter(Boolean).join(' - ').slice(0, 3900);
   const raw = `StreamTitle='${title.replace(/'/g, '')}';`;
   const padded = raw.padEnd(Math.ceil(raw.length / 16) * 16, '\0');
   const lenByte = padded.length / 16;
@@ -20,22 +29,32 @@ function buildIcyMeta(track) {
 class AudioEngine extends EventEmitter {
   constructor() {
     super();
-    this.clients     = new Map(); // id -> { res, wantsIcy, bytesSinceLastMeta }
-    this.liveClients = new Map(); // id -> res  (connected to /live-stream)
+    this.clients          = new Map(); // id -> { res, wantsIcy, bytesSinceLastMeta }
+    this.liveClients      = new Map(); // id -> res  (connected to /live-stream)
     this.currentTrack     = null;
     this.currentTrackInfo = null;
-    this.queue       = [];
-    this.isPlaying   = false;
-    this.isLive      = false;      // true while admin is broadcasting live
-    this.liveTitle   = 'Live Broadcast';
-    this.liveArtist  = 'Light Encounter Tabernacle Worldwide';
-    this.playbackTimer = null;
-    this.bytesPerSecond = 16384;
-    this.startTime   = null;
-    this.pauseBuffer = null;
-    this._listenerCount = 0;
-    this._watchdogTimer = null;
-    this._lastChunkTime = 0;
+    this.queue            = [];
+    this.isPlaying        = false;
+    this.isLive           = false;      // true while admin is broadcasting live
+    this.liveTitle        = 'Live Broadcast';
+    this.liveArtist       = 'Light Encounter Tabernacle Worldwide';
+    this.playbackTimer    = null;
+    this.bytesPerSecond   = 16384;
+    this.startTime        = null;
+    this.pauseBuffer      = null;
+    this._listenerCount   = 0;
+    this._watchdogTimer   = null;
+    this._lastChunkTime   = Date.now(); // initialised to now so watchdog does not false-fire
+    this._playGeneration  = 0;          // incremented on each new playTrack; guards stale closures
+    this._keepaliveTimer  = null;
+
+    // Keepalive: while not playing, send a silent frame every 10 s so TCP connections
+    // are not dropped by reverse proxies / firewalls with short idle timeouts.
+    this._keepaliveTimer = setInterval(() => {
+      if (!this.isPlaying && !this.isLive && this.clients.size > 0) {
+        try { this.broadcast(SILENT_MP3_FRAME); } catch (e) {}
+      }
+    }, 10000);
   }
 
   // ─── Scheduled-file clients (/stream) ──────────────────────────────────────
@@ -123,16 +142,18 @@ class AudioEngine extends EventEmitter {
   }
 
   broadcastMetaUpdate() {
-    const meta = buildIcyMeta(this.currentTrackInfo);
-    for (const [, client] of this.clients) {
-      if (!client.wantsIcy) continue;
-      try {
-        const padding = ICY_METAINT - client.bytesSinceLastMeta;
-        if (padding > 0 && padding < ICY_METAINT) client.res.write(Buffer.alloc(padding));
-        client.res.write(meta);
-        client.bytesSinceLastMeta = 0;
-      } catch (e) {}
-    }
+    try {
+      const meta = buildIcyMeta(this.currentTrackInfo);
+      for (const [, client] of this.clients) {
+        if (!client.wantsIcy) continue;
+        try {
+          const padding = ICY_METAINT - client.bytesSinceLastMeta;
+          if (padding > 0 && padding < ICY_METAINT) client.res.write(Buffer.alloc(padding));
+          client.res.write(meta);
+          client.bytesSinceLastMeta = 0;
+        } catch (e) {}
+      }
+    } catch (e) {}
   }
 
   // ─── Live streaming (/live-stream) ─────────────────────────────────────────
@@ -177,17 +198,21 @@ class AudioEngine extends EventEmitter {
 
   startLive(title, artist) {
     this.isLive          = true;
+    this.isPlaying       = false;  // reset so health-check & queueEmpty can fire after live ends
+    this._playGeneration++;        // invalidate any in-flight readAndBroadcast closure
     this.liveTitle       = title  || 'Live Broadcast';
     this.liveArtist      = artist || 'Light Encounter Tabernacle Worldwide';
     this.liveInitChunk   = null;   // reset init segment for new session
     this._liveChunkCount = 0;
     // Pause file playback so the scheduled stream goes silent
     if (this.playbackTimer) { clearTimeout(this.playbackTimer); this.playbackTimer = null; }
+    if (this._watchdogTimer) { clearInterval(this._watchdogTimer); this._watchdogTimer = null; }
     this.emit('liveStart', { title: this.liveTitle, artist: this.liveArtist });
   }
 
   stopLive() {
-    this.isLive = false;
+    this.isLive    = false;
+    this.isPlaying = false;  // ensure clean state so playNext / queueEmpty work correctly
     if (this._watchdogTimer) { clearInterval(this._watchdogTimer); this._watchdogTimer = null; }
     // Drain all connected live-stream HTTP clients gracefully
     for (const [, res] of this.liveClients) {
@@ -196,8 +221,8 @@ class AudioEngine extends EventEmitter {
     this.liveClients.clear();
     this._updateListeners();
     this.emit('liveStop');
-    // Resume scheduled playback if queue has items
-    if (this.queue.length > 0) this.playNext();
+    // Always call playNext — emits queueEmpty if the queue is empty so fillers can kick in
+    this.playNext();
   }
 
   // ─── File queue / playback ──────────────────────────────────────────────────
@@ -207,8 +232,8 @@ class AudioEngine extends EventEmitter {
   async playNext() {
     if (this.isLive) return; // don't start file playback during live mode
     if (this.queue.length === 0) {
-      this.isPlaying = false;
-      this.currentTrack = null;
+      this.isPlaying        = false;
+      this.currentTrack     = null;
       this.currentTrackInfo = null;
       this.emit('queueEmpty');
       return;
@@ -218,86 +243,123 @@ class AudioEngine extends EventEmitter {
 
   async playTrack(track) {
     if (this.isLive) return;
-    if (!fs.existsSync(track.file_path)) {
-      console.warn(`[AudioEngine] File not found: ${track.file_path}`);
+
+    // Stop any currently running playback loop before starting a new one
+    if (this.playbackTimer) { clearTimeout(this.playbackTimer); this.playbackTimer = null; }
+    this._playGeneration++; // stale readAndBroadcast closures will see a mismatched generation
+
+    try {
+      if (!fs.existsSync(track.file_path)) {
+        console.warn(`[AudioEngine] File not found: ${track.file_path}`);
+        this.playNext();
+        return;
+      }
+
+      const stat = fs.statSync(track.file_path);
+      const totalBytes = stat.size;
+      if (totalBytes === 0) {
+        console.warn(`[AudioEngine] Empty file, skipping: ${track.file_path}`);
+        this.playNext();
+        return;
+      }
+
+      this.isPlaying        = true;
+      this.currentTrack     = track;
+      this.currentTrackInfo = track;
+      this.startTime        = Date.now();
+      this._lastChunkTime   = Date.now(); // reset so watchdog does not false-fire immediately
+
+      // Guard against bitrate = 0 (would produce setTimeout(fn, Infinity) and freeze radio)
+      const bitrate = (track.bitrate && track.bitrate > 0) ? track.bitrate : 128;
+      this.bytesPerSecond = (bitrate * 1000) / 8;
+      const chunkInterval = Math.max(10, Math.floor((CHUNK_SIZE / this.bytesPerSecond) * 1000));
+
+      this.emit('trackStart', track);
+      this.broadcastMetaUpdate();
+
+      const fd           = fs.openSync(track.file_path, 'r');
+      const myGeneration = this._playGeneration; // capture for closure guard
+      let   offset       = 0;
+
+      const readAndBroadcast = () => {
+        // Guard: if a newer track has started, close our fd and stop
+        if (!this.isPlaying || this.isLive || this._playGeneration !== myGeneration) {
+          try { fs.closeSync(fd); } catch (e) {}
+          return;
+        }
+        const remaining = totalBytes - offset;
+        if (remaining <= 0) {
+          try { fs.closeSync(fd); } catch (e) {}
+          this.emit('trackEnd', track);
+          this.emit('historyAdd', track.id);
+          this.playNext();
+          return;
+        }
+        const bytesToRead = Math.min(CHUNK_SIZE, remaining);
+        const buffer      = Buffer.alloc(bytesToRead);
+        try {
+          const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
+          if (bytesRead === 0) {
+            // End of file reached unexpectedly
+            try { fs.closeSync(fd); } catch (e) {}
+            this.emit('trackEnd', track);
+            this.emit('historyAdd', track.id);
+            this.playNext();
+            return;
+          }
+          offset += bytesRead;
+          const chunk = buffer.subarray(0, bytesRead);
+          this.pauseBuffer = chunk;
+          this.broadcast(chunk);
+        } catch (e) {
+          console.error('[AudioEngine] Read error:', e.message);
+          try { fs.closeSync(fd); } catch {}
+          this.isPlaying = false;
+          this.playNext();
+          return;
+        }
+        this.playbackTimer = setTimeout(readAndBroadcast, chunkInterval);
+      };
+
+      readAndBroadcast();
+
+      // Watchdog: detects a stalled readAndBroadcast loop.
+      // Fires every 15 s; triggers if no chunk has been broadcast in the last 12 s.
+      if (this._watchdogTimer) clearInterval(this._watchdogTimer);
+      this._watchdogTimer = setInterval(() => {
+        if (this.isPlaying && !this.isLive && Date.now() - this._lastChunkTime > 12000) {
+          console.log('[AudioEngine] Watchdog: stall detected, restarting playback');
+          clearInterval(this._watchdogTimer);
+          this._watchdogTimer = null;
+          if (this.playbackTimer) { clearTimeout(this.playbackTimer); this.playbackTimer = null; }
+          this.isPlaying = false;
+          this._playGeneration++; // kill the stale closure
+          this.playNext();
+        }
+      }, 15000);
+
+    } catch (err) {
+      console.error('[AudioEngine] playTrack error:', err.message);
+      this.isPlaying = false;
       this.playNext();
-      return;
     }
-
-    this.isPlaying = true;
-    this.currentTrack = track;
-    this.currentTrackInfo = track;
-    this.startTime = Date.now();
-
-    const bitrate = track.bitrate || 128;
-    this.bytesPerSecond = (bitrate * 1000) / 8;
-    const chunkInterval = Math.floor((CHUNK_SIZE / this.bytesPerSecond) * 1000);
-
-    this.emit('trackStart', track);
-    this.broadcastMetaUpdate();
-
-    const stat = fs.statSync(track.file_path);
-    const totalBytes = stat.size;
-    let offset = 0;
-    const fd = fs.openSync(track.file_path, 'r');
-
-    const readAndBroadcast = () => {
-      if (!this.isPlaying || this.isLive) {
-        try { fs.closeSync(fd); } catch (e) {}
-        return;
-      }
-      const remaining = totalBytes - offset;
-      if (remaining <= 0) {
-        try { fs.closeSync(fd); } catch (e) {}
-        this.emit('trackEnd', track);
-        this.emit('historyAdd', track.id);
-        this.playNext();
-        return;
-      }
-      const bytesToRead = Math.min(CHUNK_SIZE, remaining);
-      const buffer = Buffer.alloc(bytesToRead);
-      try {
-        const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
-        offset += bytesRead;
-        const chunk = buffer.subarray(0, bytesRead);
-        this.pauseBuffer = chunk;
-        this.broadcast(chunk);
-      } catch (e) {
-        console.error('[AudioEngine] Read error:', e.message);
-        try { fs.closeSync(fd); } catch {}
-        this.playNext();
-        return;
-      }
-      this.playbackTimer = setTimeout(readAndBroadcast, chunkInterval);
-    };
-
-    readAndBroadcast();
-
-    // Watchdog: detect stalled playback and restart
-    if (this._watchdogTimer) clearInterval(this._watchdogTimer);
-    this._watchdogTimer = setInterval(() => {
-      if (this.isPlaying && !this.isLive && Date.now() - this._lastChunkTime > 25000) {
-        console.log('[AudioEngine] Watchdog: stall detected, restarting track');
-        clearInterval(this._watchdogTimer);
-        this._watchdogTimer = null;
-        this.playNext();
-      }
-    }, 30000);
   }
 
   stop() {
     this.isPlaying = false;
+    this._playGeneration++; // kill in-flight readAndBroadcast
     if (this.playbackTimer) { clearTimeout(this.playbackTimer); this.playbackTimer = null; }
     if (this._watchdogTimer) { clearInterval(this._watchdogTimer); this._watchdogTimer = null; }
-    this.queue = [];
-    this.currentTrack = null;
+    this.queue            = [];
+    this.currentTrack     = null;
     this.currentTrackInfo = null;
-    this.pauseBuffer = null;
+    this.pauseBuffer      = null;
   }
 
   skip() {
     if (!this.isPlaying) return; // guard: avoid double-advance
-    if (this.playbackTimer) clearTimeout(this.playbackTimer);
+    this._playGeneration++;      // kill the current readAndBroadcast closure immediately
+    if (this.playbackTimer) { clearTimeout(this.playbackTimer); this.playbackTimer = null; }
     this.isPlaying = false;
     this.emit('trackEnd', this.currentTrack);
     this.playNext();

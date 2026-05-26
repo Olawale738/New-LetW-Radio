@@ -1575,6 +1575,16 @@ audio.addEventListener('waiting', () => {
   startStallTimer();
 });
 
+// stalled = browser stopped fetching data even though more is expected
+audio.addEventListener('stalled', () => {
+  if (isPlaying) scheduleReconnect();
+});
+
+// ended = stream unexpectedly terminated (should not happen for live radio, but handle it)
+audio.addEventListener('ended', () => {
+  if (isPlaying) scheduleReconnect();
+});
+
 audio.addEventListener('error', () => {
   setStatusBadge(false);
   if (isPlaying) scheduleReconnect();
@@ -1608,6 +1618,10 @@ function stopPlayback() {
   audio.pause();
   audio.src = '';
   isPlaying = false;
+  // Cancel any pending reconnect so the user's stop action is respected
+  clearTimeout(reconnectTO);
+  reconnectTO = null;
+  reconnectDelay = 2000; // reset backoff for next play session
   document.getElementById('play-icon').textContent = '▶';
   document.getElementById('play-btn').classList.remove('playing');
   setStatusBadge(false);
@@ -1625,6 +1639,7 @@ function reconnectAudio(url) {
 
 function scheduleReconnect() {
   clearTimeout(reconnectTO);
+  clearStallTimer();
   const badge = document.getElementById('status-badge');
   const text  = document.getElementById('status-text');
   const heroStatus = document.getElementById('hero-status');
@@ -1633,19 +1648,39 @@ function scheduleReconnect() {
   if (heroStatus) heroStatus.textContent = 'RECONNECTING';
   reconnectTO = setTimeout(() => {
     reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
-    if (isPlaying || audio.src) { audio.load(); audio.play().catch(() => scheduleReconnect()); }
+    if (isPlaying) {
+      // Always refresh src to force a fresh TCP connection to the server
+      audio.src = getStreamUrl();
+      audio.load();
+      audio.play().catch(() => scheduleReconnect());
+    }
   }, reconnectDelay);
 }
 
 function startStallTimer() {
   clearStallTimer();
   stallTimer = setTimeout(() => {
-    if (isPlaying) { audio.load(); audio.play().catch(() => {}); }
+    // If still buffering after 8 s, escalate to a full reconnect
+    if (isPlaying) {
+      audio.src = getStreamUrl();
+      audio.load();
+      audio.play().catch(() => scheduleReconnect());
+    }
   }, 8000);
 }
 function clearStallTimer() {
   if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
 }
+
+// Keepalive: every 10 s, check for the zombie state where isPlaying is true
+// but the audio element is actually paused (e.g., autoplay policy killed playback
+// or the element silently stopped without emitting an error event).
+setInterval(() => {
+  if (isPlaying && audio.paused && !reconnectTO) {
+    console.warn('[Keepalive] Audio paused while isPlaying=true — reconnecting');
+    scheduleReconnect();
+  }
+}, 10000);
 
 // ── Volume ────────────────────────────────────────────────────
 const volSlider = document.getElementById('vol-slider');
