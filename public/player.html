@@ -1625,6 +1625,59 @@
   </div>
 </div>
 
+<!-- Share Drawer -->
+<div id="share-drawer-backdrop" onclick="closeShareDrawer()" style="
+  display:none;position:fixed;inset:0;z-index:500;background:rgba(0,0,0,0.65);
+  backdrop-filter:blur(4px);transition:opacity 0.25s;"></div>
+<div id="share-drawer" style="
+  display:none;position:fixed;bottom:0;left:0;right:0;z-index:501;
+  background:linear-gradient(180deg,rgba(18,12,22,0.99),rgba(10,6,14,1));
+  border-top:1px solid rgba(212,168,67,0.25);border-radius:22px 22px 0 0;
+  padding:22px 20px 36px;box-shadow:0 -20px 60px rgba(0,0,0,0.7);
+  transform:translateY(100%);transition:transform 0.35s cubic-bezier(0.34,1.56,0.64,1);">
+  <div style="width:40px;height:4px;border-radius:2px;background:rgba(212,168,67,0.3);margin:0 auto 18px;"></div>
+  <div style="font-size:14px;font-weight:700;color:var(--gold);letter-spacing:1px;margin-bottom:6px;font-family:'Cinzel',serif;">Share LETW Radio</div>
+  <div id="share-now-playing" style="font-size:11px;color:var(--text-muted);margin-bottom:18px;"></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+    <button onclick="shareVia('whatsapp')" style="
+      display:flex;align-items:center;gap:10px;padding:13px 16px;
+      background:rgba(37,211,102,0.1);border:1px solid rgba(37,211,102,0.3);
+      border-radius:12px;color:#25d366;font-size:13px;font-weight:600;cursor:pointer;
+      transition:background 0.2s;font-family:inherit;"
+      onmouseover="this.style.background='rgba(37,211,102,0.2)'"
+      onmouseout="this.style.background='rgba(37,211,102,0.1)'">
+      <span style="font-size:20px;">💬</span> WhatsApp
+    </button>
+    <button onclick="shareVia('telegram')" style="
+      display:flex;align-items:center;gap:10px;padding:13px 16px;
+      background:rgba(39,174,239,0.1);border:1px solid rgba(39,174,239,0.3);
+      border-radius:12px;color:#27aeef;font-size:13px;font-weight:600;cursor:pointer;
+      transition:background 0.2s;font-family:inherit;"
+      onmouseover="this.style.background='rgba(39,174,239,0.2)'"
+      onmouseout="this.style.background='rgba(39,174,239,0.1)'">
+      <span style="font-size:20px;">✈️</span> Telegram
+    </button>
+    <button onclick="shareVia('facebook')" style="
+      display:flex;align-items:center;gap:10px;padding:13px 16px;
+      background:rgba(66,103,178,0.1);border:1px solid rgba(66,103,178,0.3);
+      border-radius:12px;color:#4267b2;font-size:13px;font-weight:600;cursor:pointer;
+      transition:background 0.2s;font-family:inherit;"
+      onmouseover="this.style.background='rgba(66,103,178,0.2)'"
+      onmouseout="this.style.background='rgba(66,103,178,0.1)'">
+      <span style="font-size:20px;">👥</span> Facebook
+    </button>
+    <button id="share-copy-btn" onclick="shareVia('copy')" style="
+      display:flex;align-items:center;gap:10px;padding:13px 16px;
+      background:rgba(212,168,67,0.08);border:1px solid rgba(212,168,67,0.25);
+      border-radius:12px;color:var(--gold);font-size:13px;font-weight:600;cursor:pointer;
+      transition:background 0.2s;font-family:inherit;"
+      onmouseover="this.style.background='rgba(212,168,67,0.18)'"
+      onmouseout="this.style.background='rgba(212,168,67,0.08)'">
+      <span style="font-size:20px;">🔗</span> Copy Link
+    </button>
+  </div>
+</div>
+
 <!-- Hidden audio element -->
 <audio id="audio-element" preload="none"></audio>
 
@@ -1640,8 +1693,8 @@ const STREAM_URL  = '/stream';
 const LIVE_URL    = '/live-stream';
 
 // ── State ─────────────────────────────────────────────────────
-let reconnectDelay = 2000;
-const MAX_RECONNECT_DELAY = 30000;
+let reconnectDelay = 500;          // start fast; doubles on each failure
+const MAX_RECONNECT_DELAY = 20000; // cap at 20 s
 let isPlaying     = false;
 let isLive        = false;
 let currentVolume = parseFloat(localStorage.getItem('letw_volume') || '0.85');
@@ -2010,13 +2063,13 @@ function scheduleReconnect() {
 function startStallTimer() {
   clearStallTimer();
   stallTimer = setTimeout(() => {
-    // If still buffering after 8 s, escalate to a full reconnect
+    // If still buffering after 4 s, escalate to a full reconnect
     if (isPlaying) {
       audio.src = getStreamUrl();
       audio.load();
       audio.play().catch(() => scheduleReconnect());
     }
-  }, 8000);
+  }, 4000);
 }
 function clearStallTimer() {
   if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
@@ -2070,10 +2123,48 @@ function startVisualizerFromAudio() {
     if (audioCtx.state === 'suspended') audioCtx.resume();
     if (sourceNode) { try { sourceNode.disconnect(); } catch(e) {} }
     sourceNode = audioCtx.createMediaElementSource(audio);
-    analyser   = audioCtx.createAnalyser();
+
+    // ── Radio Sound Enhancement Chain ─────────────────────────────────────
+    // Applies professional broadcast-style processing so the stream sounds
+    // loud, warm, and clear regardless of the original track's loudness.
+    //
+    //  source → compressor → bass → presence → analyser → speakers
+
+    // 1. Dynamics compressor: gentle 3:1 radio compression
+    //    Makes quiet tracks louder and prevents loud tracks from distorting.
+    //    Threshold -18 dBFS with a soft knee for transparent operation.
+    const comp = audioCtx.createDynamicsCompressor();
+    comp.threshold.value = -18;   // start compressing here
+    comp.knee.value      = 10;    // soft knee: gradual onset
+    comp.ratio.value     = 3;     // 3:1 — standard radio ratio
+    comp.attack.value    = 0.003; // 3 ms: fast enough to catch transients
+    comp.release.value   = 0.25;  // 250 ms release: sounds natural
+
+    // 2. Bass warmth — low-shelf +3 dB at 100 Hz
+    //    Adds body and weight, especially on small phone speakers.
+    const bassBoost = audioCtx.createBiquadFilter();
+    bassBoost.type            = 'lowshelf';
+    bassBoost.frequency.value = 100;
+    bassBoost.gain.value      = 3;
+
+    // 3. Voice presence — peaking +2.5 dB at 2.8 kHz
+    //    Lifts sermon/speech clarity without sibilance (the 3–4 kHz "bite"
+    //    of human voice that cuts through mix nicely on radio).
+    const presence = audioCtx.createBiquadFilter();
+    presence.type            = 'peaking';
+    presence.frequency.value = 2800;
+    presence.Q.value         = 0.9;
+    presence.gain.value      = 2.5;
+
+    analyser         = audioCtx.createAnalyser();
     analyser.fftSize = 128;
-    sourceNode.connect(analyser);
+
+    sourceNode.connect(comp);
+    comp.connect(bassBoost);
+    bassBoost.connect(presence);
+    presence.connect(analyser);
     analyser.connect(audioCtx.destination);
+
     drawAnalyserBars();
   } catch(e) {
     drawIdleVisualizer();
@@ -2277,17 +2368,64 @@ function copyListenLink() {
 }
 
 function shareStation() {
+  // Open the share drawer
   const url   = window.location.origin + '/listen';
   const track = document.getElementById('track-title').textContent;
-  const text  = `🎙 Listening to LETW Radio${track && track !== 'LETW Radio' ? ' — ' + track : ''}\nTune in live at ${url}`;
-  if (navigator.share) {
-    navigator.share({ title: 'LETW Radio — Listen Live', text, url }).catch(() => {});
-  } else {
-    navigator.clipboard.writeText(text).then(() => {
-      const b = document.getElementById('share-btn');
-      b.textContent = '✓'; setTimeout(() => { b.textContent = '🔗'; }, 2000);
-    });
+  const nowPlayingEl = document.getElementById('share-now-playing');
+  if (nowPlayingEl) {
+    nowPlayingEl.textContent = (track && track !== 'LETW Radio')
+      ? 'Now playing: ' + track
+      : 'Live Gospel & Christian radio';
   }
+  const backdrop = document.getElementById('share-drawer-backdrop');
+  const drawer   = document.getElementById('share-drawer');
+  if (!backdrop || !drawer) {
+    // Fallback if drawer HTML isn't present
+    if (navigator.share) navigator.share({ title: 'LETW Radio', url }).catch(() => {});
+    else navigator.clipboard.writeText(url).catch(() => {});
+    return;
+  }
+  backdrop.style.display = 'block';
+  drawer.style.display   = 'block';
+  requestAnimationFrame(() => {
+    backdrop.style.opacity  = '1';
+    drawer.style.transform  = 'translateY(0)';
+  });
+}
+
+function closeShareDrawer() {
+  const backdrop = document.getElementById('share-drawer-backdrop');
+  const drawer   = document.getElementById('share-drawer');
+  if (!drawer) return;
+  drawer.style.transform  = 'translateY(100%)';
+  backdrop.style.opacity  = '0';
+  setTimeout(() => {
+    drawer.style.display   = 'none';
+    backdrop.style.display = 'none';
+  }, 350);
+}
+
+function shareVia(platform) {
+  const url  = encodeURIComponent(window.location.origin + '/listen');
+  const raw  = window.location.origin + '/listen';
+  const track = document.getElementById('track-title').textContent;
+  const msg  = encodeURIComponent(
+    '🎙 ' + (track && track !== 'LETW Radio' ? 'Listening to ' + track + ' on ' : '') +
+    'LETW Radio — Tune in live: ' + raw
+  );
+  let target = '';
+  if (platform === 'whatsapp')  target = 'https://wa.me/?text=' + msg;
+  if (platform === 'telegram')  target = 'https://t.me/share/url?url=' + url + '&text=' + msg;
+  if (platform === 'facebook')  target = 'https://www.facebook.com/sharer/sharer.php?u=' + url;
+  if (platform === 'copy') {
+    navigator.clipboard.writeText(raw).then(() => {
+      const btn = document.getElementById('share-copy-btn');
+      if (btn) { const orig = btn.innerHTML; btn.innerHTML = '<span style="font-size:20px;">✅</span> Copied!'; setTimeout(() => { btn.innerHTML = orig; }, 2200); }
+    }).catch(() => {});
+    return;
+  }
+  if (target) window.open(target, '_blank', 'noopener,noreferrer,width=600,height=500');
+  closeShareDrawer();
 }
 
 // ── Push Notifications ────────────────────────────────────────
@@ -2737,6 +2875,45 @@ function dismissInstall() {
   document.getElementById('install-banner').classList.remove('visible');
   localStorage.setItem('letw_install_dismissed', '1');
 }
+
+// ── Keyboard Shortcuts ────────────────────────────────────────
+// Space  = play / pause
+// M      = mute toggle
+// ↑ / ↓  = volume up / down (5% steps)
+// Escape = close share drawer / flash alert
+document.addEventListener('keydown', e => {
+  // Don't steal keys while typing in inputs
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+
+  if (e.code === 'Space') {
+    e.preventDefault();
+    togglePlay();
+  } else if (e.code === 'KeyM') {
+    toggleMute();
+  } else if (e.code === 'ArrowUp') {
+    e.preventDefault();
+    const vol = Math.min(1, Math.round((currentVolume + 0.05) * 100) / 100);
+    const sld = document.getElementById('vol-slider');
+    if (sld) sld.value = vol;
+    currentVolume = vol;
+    audio.volume  = isMuted ? 0 : vol;
+    localStorage.setItem('letw_volume', vol);
+    updateVolIcon();
+  } else if (e.code === 'ArrowDown') {
+    e.preventDefault();
+    const vol = Math.max(0, Math.round((currentVolume - 0.05) * 100) / 100);
+    const sld = document.getElementById('vol-slider');
+    if (sld) sld.value = vol;
+    currentVolume = vol;
+    audio.volume  = isMuted ? 0 : vol;
+    localStorage.setItem('letw_volume', vol);
+    updateVolIcon();
+  } else if (e.code === 'Escape') {
+    closeShareDrawer();
+    dismissFlashAlert();
+  }
+});
 
 // ── Service Worker ────────────────────────────────────────────
 if ('serviceWorker' in navigator) {

@@ -39,6 +39,15 @@ class AudioEngine extends EventEmitter {
     this._watchdogTimer   = null;
     this._lastChunkTime   = Date.now(); // initialised to now so watchdog does not false-fire
     this._playGeneration  = 0;          // incremented on each new playTrack; guards stale closures
+    // Rolling buffer: keeps the last ROLLING_SECS seconds of audio so new/reconnecting
+    // clients can start playing immediately without a buffering delay.
+    this._rollingBuffer      = [];      // array of Buffer chunks
+    this._rollingBufferBytes = 0;
+  }
+
+  // Rolling buffer target size in seconds
+  get _rollingTargetBytes() {
+    return Math.floor(this.bytesPerSecond * 3); // 3 seconds
   }
 
   // ─── Scheduled-file clients (/stream) ──────────────────────────────────────
@@ -56,6 +65,8 @@ class AudioEngine extends EventEmitter {
       'Connection': 'keep-alive',
       'Transfer-Encoding': 'chunked',
       'Access-Control-Allow-Origin': '*',
+      'X-Accel-Buffering': 'no',  // nginx: don't buffer the stream
+      'X-Content-Type-Options': 'nosniff',
       'icy-name': name,
       'icy-genre': genre,
       'icy-url': url,
@@ -82,7 +93,15 @@ class AudioEngine extends EventEmitter {
     if (wantsIcy && this.currentTrackInfo) {
       try { res.write(buildIcyMeta(this.currentTrackInfo)); } catch (e) {}
     }
-    if (this.pauseBuffer) {
+    // Send rolling buffer for instant playback on join/reconnect.
+    // This gives the browser 3 s of audio immediately, eliminating the
+    // "buffering" spinner that was visible on every page load or reconnect.
+    if (this._rollingBuffer.length > 0) {
+      try {
+        const catchup = Buffer.concat(this._rollingBuffer);
+        this._writeToClient(id, catchup);
+      } catch (e) {}
+    } else if (this.pauseBuffer) {
       try { this._writeToClient(id, this.pauseBuffer); } catch (e) {}
     }
 
@@ -127,6 +146,14 @@ class AudioEngine extends EventEmitter {
 
   broadcast(chunk) {
     this._lastChunkTime = Date.now();
+
+    // Maintain rolling buffer (last ~3 s of audio)
+    this._rollingBuffer.push(Buffer.from(chunk));
+    this._rollingBufferBytes += chunk.length;
+    while (this._rollingBufferBytes > this._rollingTargetBytes && this._rollingBuffer.length > 1) {
+      this._rollingBufferBytes -= this._rollingBuffer.shift().length;
+    }
+
     const dead = [];
     for (const [id] of this.clients) {
       if (!this._writeToClient(id, chunk)) dead.push(id);
@@ -262,11 +289,16 @@ class AudioEngine extends EventEmitter {
       this.currentTrackInfo = track;
       this.startTime        = Date.now();
       this._lastChunkTime   = Date.now(); // reset so watchdog does not false-fire immediately
+      // Clear rolling buffer so reconnecting clients get fresh audio from this track, not the tail of the previous one
+      this._rollingBuffer      = [];
+      this._rollingBufferBytes = 0;
 
       // Guard against bitrate = 0 (would produce setTimeout(fn, Infinity) and freeze radio)
       const bitrate = (track.bitrate && track.bitrate > 0) ? track.bitrate : 128;
       this.bytesPerSecond = (bitrate * 1000) / 8;
-      const chunkInterval = Math.max(10, Math.floor((CHUNK_SIZE / this.bytesPerSecond) * 1000));
+      // Send 5% faster than real-time: builds a small buffer in the client,
+      // preventing stalls during network jitter without adding noticeable latency.
+      const chunkInterval = Math.max(10, Math.floor((CHUNK_SIZE / this.bytesPerSecond) * 950));
 
       this.emit('trackStart', track);
       this.broadcastMetaUpdate();
