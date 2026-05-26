@@ -1666,13 +1666,10 @@ let currentVolume = parseFloat(localStorage.getItem('letw_volume') || '0.85');
 let isMuted       = false;
 let sleepTick     = null;
 let sleepEndTime  = null;
-let audioCtx      = null;
-let analyser      = null;
-let sourceNode    = null;
-let audioComp     = null;  // persisted across stream switches
-let audioBass     = null;
-let audioPresence = null;
-let vizRaf        = null;
+let audioCtx         = null;
+let analyser         = null;
+let analyserSource   = null;  // MediaStreamSource from captureStream (visualizer tap only)
+let vizRaf           = null;
 let wakeLock      = null;
 let pushEnabled   = false;
 let pushSub       = null;
@@ -1974,6 +1971,9 @@ audio.addEventListener('pause', () => {
   document.getElementById('play-btn').classList.remove('playing');
   setStatusBadge(false);
   releaseWakeLock();
+  // Stop the visualizer animation when audio pauses
+  if (vizRaf) { cancelAnimationFrame(vizRaf); vizRaf = null; }
+  drawIdleVisualizer();
 });
 
 audio.addEventListener('waiting', () => {
@@ -2017,14 +2017,16 @@ function togglePlay() {
 }
 
 function startPlayback() {
-  // Create (and unlock) the AudioContext now, while we are inside a user-gesture
-  // handler.  If we wait until the async 'playing' event the browser will have
-  // left the gesture window and new AudioContexts start life as 'suspended' —
-  // audio flows through the Web Audio graph but audioCtx.destination is blocked.
-  if (!audioCtx) {
+  // The <audio> element plays directly through the system audio — no Web Audio
+  // routing.  We only use AudioContext for the visualiser analyser tap, which
+  // is set up in startVisualizerFromAudio() via captureStream().
+  // Pre-create the context here (user-gesture context) so it starts in 'running'
+  // state and the visualiser animates immediately without waiting for the
+  // 'playing' event to fire.
+  if (!audioCtx && (window.AudioContext || window.webkitAudioContext)) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
-  if (audioCtx.state === 'suspended') {
+  if (audioCtx && audioCtx.state === 'suspended') {
     audioCtx.resume().catch(() => {});
   }
 
@@ -2147,66 +2149,54 @@ const ctx2d  = canvas.getContext('2d');
 
 function startVisualizerFromAudio() {
   if (vizRaf) cancelAnimationFrame(vizRaf);
+
+  // ── Why captureStream() and NOT createMediaElementSource() ────────────────
+  // createMediaElementSource() permanently hijacks the <audio> element: from
+  // that moment the audio goes EXCLUSIVELY through the Web Audio graph and
+  // ONLY reaches speakers via audioCtx.destination.  If the AudioContext is
+  // suspended for ANY reason (browser policy, background tab, first load before
+  // user gesture, etc.) the destination is blocked and listeners hear SILENCE —
+  // even though the audio element shows "playing".
+  //
+  // captureStream() returns a read-only MediaStream copy of the element's output.
+  // The element CONTINUES to play directly through the system audio unchanged.
+  // We pipe the captured stream into an AnalyserNode just for the visualiser.
+  // Audio is NEVER at risk of being silenced by the Web Audio context state.
+
   try {
+    const captured = typeof audio.captureStream     === 'function' ? audio.captureStream()
+                   : typeof audio.mozCaptureStream  === 'function' ? audio.mozCaptureStream()
+                   : null;
+
+    if (!captured) {
+      // captureStream not supported (e.g. Safari/iOS) — animate without real data
+      drawFakeVisualizer();
+      return;
+    }
+
     if (!audioCtx) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
-    // resume() is a no-op if already running; fire-and-forget is fine here
-    // because startPlayback() already resumed the context during the user gesture.
     if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
 
-    if (!sourceNode) {
-      // ── Build the Web Audio chain ONCE ───────────────────────────────────
-      // createMediaElementSource() permanently captures the <audio> element.
-      // Calling it a second time throws InvalidStateError (Chrome/Firefox/Safari).
-      // All processing nodes are stored as module-level variables so they
-      // survive stream-source switches (regular → live → regular).
-      //
-      //  audio → compressor → bass-shelf → presence-peak → analyser → speakers
+    // Reconnect analyserSource each time — the underlying MediaStream changes
+    // every time audio.src is reassigned (stream switch, reconnect, etc.)
+    if (analyserSource) { try { analyserSource.disconnect(); } catch (_) {} }
+    analyserSource = audioCtx.createMediaStreamSource(captured);
 
-      sourceNode = audioCtx.createMediaElementSource(audio);
-
-      // 1. Dynamics compressor — gentle 3:1 radio compression.
-      //    Makes quiet tracks louder and prevents loud ones from distorting.
-      audioComp = audioCtx.createDynamicsCompressor();
-      audioComp.threshold.value = -18;   // start compressing here
-      audioComp.knee.value      = 10;    // soft knee: gradual onset
-      audioComp.ratio.value     = 3;     // 3:1 — standard radio ratio
-      audioComp.attack.value    = 0.003; // 3 ms: fast enough to catch transients
-      audioComp.release.value   = 0.25;  // 250 ms release: sounds natural
-
-      // 2. Bass warmth — low-shelf +3 dB at 100 Hz.
-      //    Adds body and weight, especially on small phone speakers.
-      audioBass = audioCtx.createBiquadFilter();
-      audioBass.type            = 'lowshelf';
-      audioBass.frequency.value = 100;
-      audioBass.gain.value      = 3;
-
-      // 3. Voice presence — peaking +2.5 dB at 2.8 kHz.
-      //    Lifts sermon/speech clarity without sibilance.
-      audioPresence = audioCtx.createBiquadFilter();
-      audioPresence.type            = 'peaking';
-      audioPresence.frequency.value = 2800;
-      audioPresence.Q.value         = 0.9;
-      audioPresence.gain.value      = 2.5;
-
+    if (!analyser) {
       analyser         = audioCtx.createAnalyser();
       analyser.fftSize = 128;
-
-      sourceNode.connect(audioComp);
-      audioComp.connect(audioBass);
-      audioBass.connect(audioPresence);
-      audioPresence.connect(analyser);
-      analyser.connect(audioCtx.destination);
     }
 
-    // Chain already exists — just restart the animation loop.
+    // Tap-only: analyserSource → analyser (read data for bars)
+    // analyser is intentionally NOT connected to audioCtx.destination —
+    // doing so would mix a second copy of the audio into the speakers.
+    analyserSource.connect(analyser);
+
     drawAnalyserBars();
   } catch(e) {
-    // Build failed (should only happen on the very first call if AudioContext
-    // is unavailable).  Fall back to the idle canvas animation so the
-    // visualizer at least looks alive.
-    drawIdleVisualizer();
+    drawFakeVisualizer();
   }
 }
 
@@ -2290,6 +2280,45 @@ function drawIdleVisualizer() {
     }
     ctx2d.fill();
   }
+}
+
+// Animated "active" visualizer for when captureStream() is unavailable (Safari/iOS).
+// Produces a sine-wave-driven bar animation that looks alive without real audio data.
+function drawFakeVisualizer() {
+  if (vizRaf) cancelAnimationFrame(vizRaf);
+  let phase = 0;
+  function frame() {
+    vizRaf = requestAnimationFrame(frame);
+    phase += 0.06;
+    const W = canvas.offsetWidth  || canvas.width;
+    const H = canvas.offsetHeight || canvas.height;
+    canvas.width  = W;
+    canvas.height = H;
+    ctx2d.clearRect(0, 0, W, H);
+    const barCount = 32;
+    const barW     = Math.max(2, (W - (barCount - 1) * 2) / barCount);
+    const radius   = Math.min(barW / 2, 3);
+    for (let i = 0; i < barCount; i++) {
+      const v    = 0.15 + 0.85 * Math.abs(
+                     Math.sin(phase * 2.7 + i * 0.55) *
+                     Math.cos(phase * 1.8 + i * 0.38)
+                   );
+      const barH = Math.max(2, v * H * 0.82);
+      const x    = i * (barW + 2);
+      const y    = H - barH;
+      const hue  = isLive ? 340 : (i < barCount * 0.25 ? 350 : i < barCount * 0.6 ? 42 : 270);
+      const grd  = ctx2d.createLinearGradient(x, y, x, H);
+      grd.addColorStop(0,   `hsla(${hue},80%,70%,0.9)`);
+      grd.addColorStop(0.5, `hsla(${hue},70%,55%,0.7)`);
+      grd.addColorStop(1,   `hsla(${hue},60%,35%,0.25)`);
+      ctx2d.fillStyle = grd;
+      ctx2d.beginPath();
+      if (ctx2d.roundRect) ctx2d.roundRect(x, y, barW, barH, [radius, radius, 0, 0]);
+      else                  ctx2d.rect(x, y, barW, barH);
+      ctx2d.fill();
+    }
+  }
+  frame();
 }
 
 // ── Sleep Timer ───────────────────────────────────────────────
