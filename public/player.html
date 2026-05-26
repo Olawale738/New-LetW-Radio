@@ -1837,9 +1837,9 @@ function applyStatus(data) {
   // listeners who (a) open the page while already live, or (b) reconnect
   // mid-broadcast will always use /stream instead of /live-stream.
   if (data.isLive && !isLive) {
-    // Server is live but we don't know it yet — enter live mode
+    // Server is live but we don't know it yet — enter live mode.
+    // switchToLiveMode checks isPlaying and only auto-reconnects active listeners.
     isLive = true;
-    // Switch the audio stream (switchToLiveMode handles both playing and idle state)
     switchToLiveMode({ title: data.liveTitle, artist: data.liveArtist });
   } else if (!data.isLive && isLive) {
     // Live broadcast ended while we were in live mode — return to normal stream
@@ -1918,12 +1918,22 @@ function switchToLiveMode(info) {
     updateTrackInfo(info.title || 'Live Broadcast', info.artist || 'LETW Radio');
   }
 
-  // If already playing the live stream, no need to reconnect again
+  // Only switch streams for listeners who are ALREADY playing.
+  // Visitors who haven't pressed Play yet just get the UI update; they will
+  // connect to /live-stream automatically when they press Play because
+  // getStreamUrl() returns LIVE_URL while isLive=true.
+  //
+  // Auto-connecting idle visitors creates real HTTP connections to /live-stream
+  // that are counted as listeners even though no audio is heard.  This inflates
+  // the listener count with "phantom" entries.
+  if (!isPlaying) return;
+
+  // Already on the live stream and playing — nothing to do.
   if (audio.src && audio.src.includes('/live-stream') && !audio.paused) return;
 
-  // Give the server 1200ms to buffer the first WebM chunks before listeners connect.
-  // (The admin's MediaRecorder sends the first chunk at ~250ms after start; we want
-  //  at least 3–4 chunks so the WebM init segment + first clusters are ready.)
+  // Give the server 1200ms to buffer the first WebM chunks before connecting.
+  // MediaRecorder emits its first chunk at ~250ms; we want 3–4 chunks in the
+  // init segment before a client joins so audio starts immediately.
   clearTimeout(window._liveConnectTO);
   window._liveConnectTO = setTimeout(() => {
     reconnectAudio(LIVE_URL);
@@ -2007,6 +2017,17 @@ function togglePlay() {
 }
 
 function startPlayback() {
+  // Create (and unlock) the AudioContext now, while we are inside a user-gesture
+  // handler.  If we wait until the async 'playing' event the browser will have
+  // left the gesture window and new AudioContexts start life as 'suspended' —
+  // audio flows through the Web Audio graph but audioCtx.destination is blocked.
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(() => {});
+  }
+
   if (!audio.src || audio.src === window.location.href) {
     audio.src = getStreamUrl();
   }
@@ -2130,7 +2151,9 @@ function startVisualizerFromAudio() {
     if (!audioCtx) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
-    if (audioCtx.state === 'suspended') audioCtx.resume();
+    // resume() is a no-op if already running; fire-and-forget is fine here
+    // because startPlayback() already resumed the context during the user gesture.
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
 
     if (!sourceNode) {
       // ── Build the Web Audio chain ONCE ───────────────────────────────────
