@@ -54,6 +54,11 @@ app.use((req, res, next) => {
   next();
 });
 
+// ── Trust Render / Heroku / Railway reverse proxy ─────────────────────────────
+// Without this, req.secure is always false behind an HTTPS-terminating proxy.
+// With it, Express reads X-Forwarded-Proto so we can set Secure cookies.
+app.set('trust proxy', 1);
+
 // ── Core middleware ───────────────────────────────────────────────────────────
 app.use(cors());
 app.use(express.json());
@@ -74,8 +79,13 @@ function getSettings() {
 
 // ── Admin check ───────────────────────────────────────────────────────────────
 function isAdmin(req) {
-  const token = req.cookies?.admin_token || req.headers['x-admin-token'];
-  return token === SESSION_TOKEN;
+  // Check cookie (standard login) or header (API/programmatic access)
+  const fromCookie = req.cookies?.admin_token || '';
+  const fromHeader = req.headers['x-admin-token'] || '';
+  const token = fromCookie || fromHeader;
+  if (!token) return false;
+  // Accept both the base64 token AND the raw password (handy for API clients)
+  return token === SESSION_TOKEN || token === ADMIN_PASSWORD;
 }
 
 // ── No-cache headers helper ───────────────────────────────────────────────────
@@ -198,8 +208,15 @@ function loginPage(error) {
       <div class="sub">Light Encounter Tabernacle Worldwide<br>Admin Access Portal</div>
       ${error ? `<div class="err">⚠ ${error}</div>` : ''}
       <form method="POST" action="/admin-login" autocomplete="off">
-        <label class="field-label">Admin Password</label>
-        <input class="field" type="password" name="password" placeholder="Enter your admin password" autofocus>
+        <label class="field-label" for="pw-field">Admin Password</label>
+        <div style="position:relative;">
+          <input class="field" type="password" id="pw-field" name="password"
+            placeholder="Enter your admin password" autofocus autocomplete="current-password"
+            style="padding-right:44px;">
+          <button type="button" id="eye-btn"
+            onclick="var f=document.getElementById('pw-field');f.type=f.type==='password'?'text':'password';this.textContent=f.type==='password'?'👁':'🙈';"
+            style="position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:16px;color:rgba(212,168,67,0.5);">👁</button>
+        </div>
         <button class="submit" type="submit">ENTER DASHBOARD →</button>
       </form>
       <a class="listen-link" href="/listen">🎧 Go to Listener Player</a>
@@ -243,7 +260,11 @@ app.post('/admin-login', (req, res) => {
   noCache(res);
   const submitted = (req.body.password || '').trim();
   if (submitted === ADMIN_PASSWORD) {
-    res.setHeader('Set-Cookie', `admin_token=${SESSION_TOKEN}; Path=/; HttpOnly; Max-Age=86400; SameSite=Lax`);
+    // Add Secure flag when served over HTTPS (Render / any SSL proxy).
+    // trust proxy (set above) makes req.secure = true when X-Forwarded-Proto: https.
+    const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+    const cookieStr = `admin_token=${SESSION_TOKEN}; Path=/; HttpOnly; Max-Age=604800; SameSite=Lax${secure ? '; Secure' : ''}`;
+    res.setHeader('Set-Cookie', cookieStr);
     res.redirect(302, '/');
   } else {
     res.send(loginPage('Incorrect password. Please try again.'));
@@ -253,7 +274,8 @@ app.post('/admin-login', (req, res) => {
 // GET /admin-logout — clear cookie and redirect to listener page
 app.get('/admin-logout', (req, res) => {
   noCache(res);
-  res.setHeader('Set-Cookie', 'admin_token=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax');
+  const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+  res.setHeader('Set-Cookie', `admin_token=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax${secure ? '; Secure' : ''}`);
   res.redirect(302, '/listen');
 });
 

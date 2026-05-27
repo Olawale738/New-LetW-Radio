@@ -11,6 +11,11 @@ services:
         value: production
       - key: PORT
         value: 10000
+      - key: ADMIN_PASSWORD
+        generateValue: false
+        # Set this to your admin password in the Render dashboard.
+        # If not set, the app falls back to the default password.
+        value: Segun123@
     disk:
       name: radio-data
       mountPath: /opt/render/project/src/uploads
