@@ -5410,6 +5410,23 @@ loadChannels();
       }
     }
   }
+
+  // ── Google Analytics (DCLM footer.php style) ────────────────────────────────
+  // Paste your GA4 measurement ID (G-XXXXXXXX) or UA-XXXXXXXX into admin settings.
+  if (settings.ga_enabled === '1' && settings.ga_id) {
+    const gaId = settings.ga_id.trim();
+    if (gaId && !document.getElementById('ga-script')) {
+      const gTag = document.createElement('script');
+      gTag.id    = 'ga-script';
+      gTag.async = true;
+      gTag.src   = 'https://www.googletagmanager.com/gtag/js?id=' + gaId;
+      document.head.appendChild(gTag);
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){ dataLayer.push(arguments); }
+      gtag('js', new Date());
+      gtag('config', gaId);
+    }
+  }
 })();
 
 function closeAnnounceModal() {

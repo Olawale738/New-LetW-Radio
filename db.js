@@ -183,6 +183,9 @@ function initSchema(sqlDb) {
     tawkto_enabled: '0',
     // YouTube channel/video link shown on listener player
     social_youtube: 'https://www.youtube.com/watch?v=8wTuN77RZJ4',
+    // Google Analytics (DCLM footer.php style — paste your GA4 measurement ID or UA-XXXXXX)
+    ga_id: '',
+    ga_enabled: '0',
   };
   for (const [k, v] of Object.entries(defaults)) {
     sqlDb.run(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`, [k, v]);

@@ -1739,6 +1739,23 @@
           <button class="btn btn-primary" onclick="saveSettings()">Save Changes</button>
         </div>
 
+        <!-- Google Analytics (DCLM footer.php style) -->
+        <div class="card">
+          <div class="card-header"><div class="card-title">📊 Google Analytics</div></div>
+          <p style="font-size:12px;color:var(--text3);margin-bottom:14px;">Track listener visits on the public player. Paste your GA4 Measurement ID (G-XXXXXXXX) from <a href="https://analytics.google.com" target="_blank" style="color:var(--gold);">Google Analytics</a>.</p>
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+            <label style="font-size:13px;color:var(--text2);display:flex;align-items:center;gap:8px;cursor:pointer;">
+              <input type="checkbox" id="set-ga-enabled" style="accent-color:var(--gold);width:15px;height:15px;">
+              Enable Google Analytics
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label">GA4 Measurement ID</label>
+            <input class="form-control" id="set-ga-id" placeholder="e.g. G-XXXXXXXXXX">
+          </div>
+          <button class="btn btn-primary" onclick="saveSettings()">Save Changes</button>
+        </div>
+
         <!-- YouTube Link -->
         <div class="card">
           <div class="card-header"><div class="card-title">▶ YouTube Link</div></div>
@@ -2971,6 +2988,11 @@ async function loadSettings() {
   const twkId = document.getElementById('set-tawkto-id');
   if (twkEn) twkEn.checked = s.tawkto_enabled === '1';
   if (twkId) twkId.value   = s.tawkto_id || '';
+  // Google Analytics
+  const gaEn = document.getElementById('set-ga-enabled');
+  const gaId = document.getElementById('set-ga-id');
+  if (gaEn) gaEn.checked = s.ga_enabled === '1';
+  if (gaId) gaId.value   = s.ga_id || '';
   // YouTube
   const ytEl = document.getElementById('set-social-youtube');
   if (ytEl) ytEl.value = s.social_youtube || 'https://www.youtube.com/watch?v=8wTuN77RZJ4';
@@ -3006,6 +3028,11 @@ async function saveSettings() {
   const twkId = document.getElementById('set-tawkto-id');
   if (twkEn) data.tawkto_enabled = twkEn.checked ? '1' : '0';
   if (twkId) data.tawkto_id      = twkId.value.trim();
+  // Google Analytics
+  const gaEn = document.getElementById('set-ga-enabled');
+  const gaId = document.getElementById('set-ga-id');
+  if (gaEn) data.ga_enabled = gaEn.checked ? '1' : '0';
+  if (gaId) data.ga_id      = gaId.value.trim();
   // YouTube
   const ytEl = document.getElementById('set-social-youtube');
   if (ytEl) data.social_youtube = ytEl.value.trim();
