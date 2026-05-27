@@ -536,11 +536,102 @@
     }
     .status-badge.reconnecting { background: rgba(212,168,67,0.12); border-color: rgba(212,168,67,0.4); color: var(--gold); }
     .status-badge.reconnecting .dot { background: var(--gold); animation: blink 0.7s infinite; }
+    .status-badge.sermon {
+      background: rgba(100,180,100,0.12);
+      border: 1px solid rgba(100,200,100,0.4);
+      color: #90e090;
+    }
+    .status-badge.sermon .dot { background: #4caf50; box-shadow: 0 0 6px #4caf50; animation: blink 2s ease-in-out infinite; }
     @keyframes blink {
       0%, 100% { opacity: 1; }
       50%       { opacity: 0.2; }
     }
 
+    /* ── Sermon Seek Bar ─────────────────────────────────────── */
+    #sermon-seek-wrap {
+      display: none;
+      flex-direction: column;
+      gap: 4px;
+      width: 100%;
+      margin-bottom: 10px;
+      padding: 0 2px;
+    }
+    #sermon-seek-wrap.visible { display: flex; }
+    #sermon-seek-bar {
+      -webkit-appearance: none; appearance: none;
+      width: 100%; height: 4px;
+      border-radius: 4px;
+      background: rgba(212,168,67,0.2);
+      outline: none; cursor: pointer;
+    }
+    #sermon-seek-bar::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none;
+      width: 14px; height: 14px; border-radius: 50%;
+      background: var(--gold); cursor: pointer;
+      box-shadow: 0 0 6px rgba(212,168,67,0.5);
+    }
+    #sermon-seek-bar::-moz-range-thumb {
+      width: 14px; height: 14px; border-radius: 50%;
+      background: var(--gold); cursor: pointer; border: none;
+    }
+    .sermon-time-row {
+      display: flex; justify-content: space-between;
+      font-size: 10px; color: var(--text-dim); letter-spacing: 0.5px;
+    }
+
+    /* ── Sermons Tab ─────────────────────────────────────────── */
+    #tab-sermons { display: none; flex-direction: column; gap: 0; padding: 0; overflow: hidden; }
+    #tab-sermons.active { display: flex; }
+    .sermon-search-wrap {
+      padding: 10px 14px 8px;
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 1;
+      background: var(--bg-panel);
+    }
+    .sermon-search-input {
+      width: 100%; padding: 8px 12px; border-radius: 8px;
+      background: rgba(255,255,255,0.04); border: 1px solid var(--border);
+      color: var(--text); font-size: 12px; outline: none;
+      transition: border-color 0.2s;
+    }
+    .sermon-search-input:focus { border-color: rgba(212,168,67,0.5); }
+    .sermon-search-input::placeholder { color: var(--text-dim); }
+    #sermon-list {
+      flex: 1; overflow-y: auto; padding: 6px 0;
+    }
+    .sermon-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 14px; cursor: pointer;
+      border-bottom: 1px solid rgba(212,168,67,0.05);
+      transition: background 0.15s;
+    }
+    .sermon-item:hover { background: rgba(212,168,67,0.04); }
+    .sermon-item.active { background: rgba(212,168,67,0.08); }
+    .sermon-thumb {
+      width: 36px; height: 36px; border-radius: 8px; flex-shrink: 0;
+      background: rgba(212,168,67,0.08); border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+    }
+    .sermon-item.active .sermon-thumb { background: rgba(212,168,67,0.15); border-color: rgba(212,168,67,0.5); }
+    .sermon-info { flex: 1; min-width: 0; }
+    .sermon-title {
+      font-size: 12px; font-weight: 700; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .sermon-item.active .sermon-title { color: var(--gold-light); }
+    .sermon-speaker { font-size: 10px; color: var(--text-muted); margin-top: 1px; }
+    .sermon-duration { font-size: 10px; color: var(--text-dim); flex-shrink: 0; }
+    .sermon-playing-icon { font-size: 10px; color: var(--gold); flex-shrink: 0; }
+    #sermon-back-btn {
+      display: none; align-items: center; gap: 8px;
+      padding: 10px 14px; border-top: 1px solid var(--border);
+      background: rgba(212,168,67,0.04); cursor: pointer;
+      font-size: 11px; color: var(--text-muted);
+      transition: color 0.15s;
+    }
+    #sermon-back-btn:hover { color: var(--gold); }
+    #sermon-back-btn.visible { display: flex; }
 
     /* ── Now Playing Progress ────────────────────────────────── */
     .now-playing-progress {
@@ -950,13 +1041,13 @@
     }
     .tab-btn {
       flex: 1;
-      padding: 13px 8px;
+      padding: 11px 4px;
       background: none;
       border: none;
       color: var(--text-dim);
-      font-size: 10px;
+      font-size: 9px;
       font-weight: 700;
-      letter-spacing: 1px;
+      letter-spacing: 0.8px;
       text-transform: uppercase;
       cursor: pointer;
       transition: color 0.25s;
@@ -966,8 +1057,9 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 3px;
+      gap: 2px;
       font-family: 'Lato', sans-serif;
+      white-space: nowrap;
     }
     .tab-btn:hover { color: var(--text-muted); }
     .tab-btn.active {
@@ -1503,6 +1595,16 @@
 
         <canvas id="visualizer" height="48"></canvas>
 
+        <!-- Sermon seek bar — only shown while a sermon/recording is playing -->
+        <div id="sermon-seek-wrap">
+          <input type="range" id="sermon-seek-bar" min="0" max="1000" value="0"
+            oninput="seekSermon(this.value)" step="1" aria-label="Seek">
+          <div class="sermon-time-row">
+            <span id="sermon-current-time">0:00</span>
+            <span id="sermon-total-time">0:00</span>
+          </div>
+        </div>
+
         <div class="controls-wrap">
           <!-- Volume row — full width, no crowding -->
           <div class="vol-row">
@@ -1580,8 +1682,9 @@
       <div class="panel-header">
         <div class="shimmer-bar" id="panel-shimmer"></div>
         <div class="tabs-row">
-          <button class="tab-btn active" data-tab="chat" onclick="switchTab('chat')">💬 Live Chat</button>
+          <button class="tab-btn active" data-tab="chat" onclick="switchTab('chat')">💬 Chat</button>
           <button class="tab-btn" data-tab="onair" onclick="switchTab('onair')">📋 On Air</button>
+          <button class="tab-btn" data-tab="sermons" onclick="switchTab('sermons')">📚 Sermons</button>
           <button class="tab-btn" data-tab="request" onclick="switchTab('request')">🙏 Request</button>
           <!-- Close button visible only on mobile — keeps it away from the chat send button -->
           <button id="panel-close-btn" onclick="toggleMobilePanel()" aria-label="Close panel">✕</button>
@@ -1660,6 +1763,23 @@
 
         <button class="req-submit-btn" onclick="submitRequest()">Send Request</button>
         <div class="req-toast" id="req-toast">Request submitted! God bless you. 🙏</div>
+      </div>
+
+      <!-- Sermons / Archive Panel -->
+      <div class="tab-panel" id="tab-sermons">
+        <div class="sermon-search-wrap">
+          <input type="text" class="sermon-search-input" id="sermon-search"
+            placeholder="🔍 Search sermons, speakers…" maxlength="80"
+            oninput="filterSermons(this.value)">
+        </div>
+        <div id="sermon-list">
+          <div style="font-size:12px;color:var(--text-dim);text-align:center;padding:28px 14px;">
+            Loading sermons…
+          </div>
+        </div>
+        <div id="sermon-back-btn" onclick="stopSermon()">
+          ← Back to Radio Stream
+        </div>
       </div>
     </div>
 
@@ -1805,6 +1925,13 @@ let _liveSB       = null;     // SourceBuffer
 let _livePending  = [];       // chunks queued before SourceBuffer is ready
 let _liveUseMS    = false;    // true = using MediaSource; false = HTTP /live-stream fallback
 let _liveMSObjUrl = null;     // ObjectURL to revoke on cleanup
+
+// ── Sermon / On-Demand state ──────────────────────────────────
+let _sermonTracks      = [];      // full list fetched from API
+let _sermonActive      = false;   // true while a sermon is playing in main audio
+let _currentSermonId   = null;    // id of the currently-active sermon track
+let _sermonSeekDragging = false;  // true while user is dragging the seek bar
+let _sermonLoaded      = false;   // tracks list loaded at least once
 
 // ── Username ──────────────────────────────────────────────────
 function getUsername() {
@@ -2422,6 +2549,15 @@ function stopPlayback() {
   reconnectDelay = 2000; // reset backoff for next play session
   document.getElementById('play-icon').textContent = '▶';
   document.getElementById('play-btn').classList.remove('playing');
+  // Clear sermon mode UI if active
+  if (_sermonActive) {
+    _sermonActive    = false;
+    _currentSermonId = null;
+    document.getElementById('sermon-seek-wrap').classList.remove('visible');
+    const backBtn = document.getElementById('sermon-back-btn');
+    if (backBtn) backBtn.classList.remove('visible');
+    filterSermons((document.getElementById('sermon-search') || {}).value || '');
+  }
   setStatusBadge(false);
   cancelSleepTimer();
   releaseWakeLock();
@@ -3303,7 +3439,8 @@ async function loadRecentlyPlayed() {
 function switchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + tab));
-  if (tab === 'onair') { loadSchedule(); loadRecentlyPlayed(); }
+  if (tab === 'onair')    { loadSchedule(); loadRecentlyPlayed(); }
+  if (tab === 'sermons')  { loadSermons(); }
 }
 
 // ── Request ───────────────────────────────────────────────────
@@ -3512,6 +3649,213 @@ function esc(s) {
   // Media session
   setupMediaSession();
 })();
+
+// ══════════════════════════════════════════════════════════════
+// Sermon / On-Demand playback
+// ══════════════════════════════════════════════════════════════
+
+/** Format seconds → M:SS or H:MM:SS */
+function _fmtDur(secs) {
+  if (!secs || secs <= 0) return '';
+  secs = Math.floor(secs);
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  return `${m}:${String(s).padStart(2,'0')}`;
+}
+
+/** Fetch sermon tracks from API and cache them. */
+async function loadSermons() {
+  if (_sermonLoaded) { renderSermons(_sermonTracks); return; }
+  const listEl = document.getElementById('sermon-list');
+  listEl.innerHTML = '<div style="font-size:12px;color:var(--text-dim);text-align:center;padding:28px 14px;">Loading sermons…</div>';
+  try {
+    // Try tray=sermon first, then tray=sermons, then all tracks
+    let tracks = [];
+    for (const tray of ['sermon', 'sermons', '']) {
+      const url = tray ? `/api/tracks?tray=${tray}` : '/api/tracks';
+      const r   = await fetch(url);
+      if (r.ok) {
+        const data = await r.json();
+        if (Array.isArray(data) && data.length) { tracks = data; break; }
+      }
+    }
+    _sermonTracks = tracks;
+    _sermonLoaded = true;
+    renderSermons(tracks);
+  } catch (e) {
+    listEl.innerHTML = '<div style="font-size:12px;color:var(--text-dim);text-align:center;padding:28px 14px;">Could not load sermons.</div>';
+  }
+}
+
+/** Render the sermon list (optionally filtered). */
+function renderSermons(tracks) {
+  const listEl = document.getElementById('sermon-list');
+  if (!tracks || !tracks.length) {
+    listEl.innerHTML = `
+      <div style="text-align:center;padding:28px 14px;">
+        <div style="font-size:28px;margin-bottom:8px;">🎙️</div>
+        <div style="font-size:12px;color:var(--text-dim);">No sermons available yet.</div>
+        <div style="font-size:11px;color:var(--text-dim);margin-top:4px;">The admin can upload messages in the dashboard.</div>
+      </div>`;
+    return;
+  }
+  listEl.innerHTML = tracks.map(t => {
+    const active = t.id === _currentSermonId;
+    return `<div class="sermon-item${active ? ' active' : ''}" onclick="playSermon('${t.id}')" data-id="${t.id}">
+      <div class="sermon-thumb">${active ? '▶' : '🎙️'}</div>
+      <div class="sermon-info">
+        <div class="sermon-title">${esc(t.title)}</div>
+        <div class="sermon-speaker">${esc(t.artist || 'LETW Ministry')}</div>
+      </div>
+      <span class="sermon-duration">${_fmtDur(t.duration)}</span>
+    </div>`;
+  }).join('');
+}
+
+/** Client-side filter of the already-loaded list. */
+function filterSermons(term) {
+  const q = term.toLowerCase().trim();
+  if (!q) { renderSermons(_sermonTracks); return; }
+  renderSermons(_sermonTracks.filter(t =>
+    (t.title || '').toLowerCase().includes(q) ||
+    (t.artist || '').toLowerCase().includes(q) ||
+    (t.album || '').toLowerCase().includes(q)
+  ));
+}
+
+/** Start playing a sermon in the main audio element. */
+async function playSermon(id) {
+  const track = _sermonTracks.find(t => t.id === id);
+  if (!track) return;
+
+  // Stop live / regular stream cleanly
+  if (isLive) exitLiveMode();
+  clearTimeout(reconnectTO); reconnectTO = null;
+  clearStallTimer();
+  audio.pause();
+  isPlaying = false;
+
+  _sermonActive    = true;
+  _currentSermonId = id;
+
+  // Show seek bar
+  document.getElementById('sermon-seek-wrap').classList.add('visible');
+  document.getElementById('sermon-seek-bar').value = 0;
+  document.getElementById('sermon-current-time').textContent = '0:00';
+  document.getElementById('sermon-total-time').textContent   = _fmtDur(track.duration) || '0:00';
+
+  // Show "Back to Radio" button in sermons tab
+  const backBtn = document.getElementById('sermon-back-btn');
+  if (backBtn) backBtn.classList.add('visible');
+
+  // Update track info in player card
+  updateTrackInfo(track.title, track.artist || 'LETW Ministry');
+  const badge = document.getElementById('status-badge');
+  const text  = document.getElementById('status-text');
+  if (badge) badge.className = 'status-badge sermon';
+  if (text)  text.textContent = 'SERMON';
+  const heroStatus = document.getElementById('hero-status');
+  if (heroStatus) heroStatus.textContent = 'SERMON';
+  const heroDot = document.getElementById('hero-dot');
+  if (heroDot) heroDot.style.background = '#4caf50';
+
+  // Re-render list to highlight active item
+  const searchVal = (document.getElementById('sermon-search') || {}).value || '';
+  filterSermons(searchVal);
+
+  // Load and play
+  audio.src = `/api/tracks/${id}/preview`;
+  audio.load();
+  try {
+    await audio.play();
+    isPlaying = true;
+    document.getElementById('play-icon').textContent = '⏸';
+    document.getElementById('play-btn').classList.add('playing');
+    document.getElementById('now-playing-progress').classList.add('active');
+    setVinylPlaying(true);
+    startVisualizerFromAudio();
+    requestWakeLock();
+  } catch(e) {
+    // Autoplay blocked — user will press play
+    document.getElementById('play-icon').textContent = '▶';
+  }
+}
+
+/** Handle main audio's timeupdate for seek bar during sermon playback. */
+audio.addEventListener('timeupdate', () => {
+  if (!_sermonActive || _sermonSeekDragging || !audio.duration) return;
+  const pct = audio.currentTime / audio.duration;
+  document.getElementById('sermon-seek-bar').value = Math.round(pct * 1000);
+  document.getElementById('sermon-current-time').textContent = _fmtDur(audio.currentTime);
+  document.getElementById('sermon-total-time').textContent   = _fmtDur(audio.duration);
+});
+
+/** User drags the seek bar. */
+function seekSermon(val) {
+  if (!_sermonActive || !audio.duration) return;
+  _sermonSeekDragging = true;
+  const t = (val / 1000) * audio.duration;
+  document.getElementById('sermon-current-time').textContent = _fmtDur(t);
+}
+
+audio.addEventListener('mouseup',   () => { if (_sermonSeekDragging) { _sermonSeekDragging = false; audio.currentTime = (document.getElementById('sermon-seek-bar').value / 1000) * audio.duration; } });
+audio.addEventListener('touchend',  () => { if (_sermonSeekDragging) { _sermonSeekDragging = false; audio.currentTime = (document.getElementById('sermon-seek-bar').value / 1000) * audio.duration; } });
+
+document.getElementById('sermon-seek-bar').addEventListener('pointerup', (e) => {
+  if (!_sermonActive || !audio.duration) return;
+  _sermonSeekDragging = false;
+  audio.currentTime = (e.target.value / 1000) * audio.duration;
+});
+document.getElementById('sermon-seek-bar').addEventListener('pointerdown', () => {
+  _sermonSeekDragging = true;
+});
+
+/** Auto-advance to next sermon when current one ends. */
+audio.addEventListener('ended', () => {
+  if (!_sermonActive) return;
+  const idx = _sermonTracks.findIndex(t => t.id === _currentSermonId);
+  if (idx >= 0 && idx < _sermonTracks.length - 1) {
+    // Play the next sermon
+    playSermon(_sermonTracks[idx + 1].id);
+  } else {
+    // End of list — return to stream
+    stopSermon();
+  }
+});
+
+/** Stop sermon and return to the live/regular radio stream. */
+function stopSermon() {
+  if (!_sermonActive) return;
+  _sermonActive    = false;
+  _currentSermonId = null;
+
+  audio.pause();
+  audio.src = '';
+  isPlaying = false;
+  clearStallTimer();
+
+  // Hide seek bar
+  document.getElementById('sermon-seek-wrap').classList.remove('visible');
+  const backBtn = document.getElementById('sermon-back-btn');
+  if (backBtn) backBtn.classList.remove('visible');
+
+  // Re-render list to un-highlight
+  const searchVal = (document.getElementById('sermon-search') || {}).value || '';
+  filterSermons(searchVal);
+
+  // Reset player UI
+  document.getElementById('play-icon').textContent = '▶';
+  document.getElementById('play-btn').classList.remove('playing');
+  updateTrackInfo('LETW Radio', 'Light Encounter Tabernacle Worldwide');
+  setStatusBadge(false);
+  cancelSleepTimer();
+  releaseWakeLock();
+
+  // Reconnect to stream
+  reconnectAudio(STREAM_URL);
+}
 </script>
 </body>
 </html>
