@@ -1170,11 +1170,10 @@ io.on('connection', (socket) => {
     _liveAdminLastPing  = Date.now(); // each chunk counts as an implicit heartbeat
 
     audioEngine.broadcastLive(buf);                 // HTTP /live-stream clients
-    socket.broadcast.emit('live:audio', buf);       // Socket.IO listener clients (legacy path)
 
     // ── Binary WebSocket fast path ────────────────────────────────────────────
-    // Inject into liveWs so all /live-ws listeners receive the chunk with
-    // minimal overhead.  isInit = true only for chunk 1 (EBML header).
+    // Primary audio delivery path — do NOT also emit via Socket.IO live:audio
+    // or every chunk will be appended twice to the listener's SourceBuffer.
     const isInit = audioEngine._liveChunkCount === 1;
     liveWs.injectChunk(buf, isInit);
 

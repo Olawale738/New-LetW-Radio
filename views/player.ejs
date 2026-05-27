@@ -2795,7 +2795,9 @@ socket.on('live:ended', () => {
 // Chunks are appended to the MediaSource SourceBuffer; if the SourceBuffer
 // isn't ready yet they're queued in _livePending and flushed on sourceopen.
 socket.on('live:audio', (data) => {
-  if (!isLive || !_liveMS) return; // not in live mode or MS not set up
+  // Binary WS is primary; only process Socket.IO audio as fallback when WS is down
+  if (_lws && _lws.readyState === WebSocket.OPEN) return;
+  if (!isLive || !_liveMS) return;
   const buf = _toAB(data);
   if (!buf) return;
   _livePending.push(buf);
@@ -2991,14 +2993,13 @@ function cleanupLiveMS() {
 function _liveFlush() {
   if (!_liveSB || _liveSB.updating || _livePending.length === 0) return;
   try {
-    // Keep buffer lean: max 8 s ahead, remove all but last 3 s.
-    // A smaller buffer means audio.currentTime stays closer to the live edge,
-    // reducing end-to-end latency for the listener.
+    // Keep buffer lean: max 3 s total, keep only last 1 s.
+    // Tighter limits = less latency between admin voice and listener ear.
     if (_liveSB.buffered.length > 0) {
       const end   = _liveSB.buffered.end(_liveSB.buffered.length - 1);
       const start = _liveSB.buffered.start(0);
-      if (end - start > 8) {
-        _liveSB.remove(start, Math.max(start + 0.5, end - 3));
+      if (end - start > 3) {
+        _liveSB.remove(start, Math.max(start + 0.1, end - 1));
         return; // updateend will re-call _liveFlush
       }
     }
@@ -3839,15 +3840,14 @@ function startLiveEdgeMonitor() {
       const bufEnd = audio.buffered.end(audio.buffered.length - 1);
       const ahead  = bufEnd - audio.currentTime;
 
-      if (ahead > 4.0) {
-        // We are >4 s behind the live edge — hard-snap to 1 s behind edge
-        // (seamless: SourceBuffer mode='sequence' lets us jump without gaps)
-        audio.currentTime = Math.max(audio.currentTime, bufEnd - 1.0);
+      if (ahead > 2.5) {
+        // We are >2.5 s behind the live edge — hard-snap to 0.5 s behind edge
+        audio.currentTime = Math.max(audio.currentTime, bufEnd - 0.5);
         audio.playbackRate = 1.0;
-      } else if (ahead > 1.8) {
+      } else if (ahead > 1.0) {
         // Moderately behind — speed up gradually (max +8%)
-        audio.playbackRate = Math.min(1.08, 1 + (ahead - 1.0) * 0.04);
-      } else if (ahead < 0.4 && !audio.paused) {
+        audio.playbackRate = Math.min(1.08, 1 + (ahead - 0.8) * 0.05);
+      } else if (ahead < 0.3 && !audio.paused) {
         // Buffer running thin — slow down slightly to avoid stutter
         audio.playbackRate = 0.97;
       } else {
