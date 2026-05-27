@@ -780,6 +780,20 @@
       to { transform: translateX(0); opacity: 1; }
     }
 
+    /* Live broadcast — pulsing dot for the stats panel */
+    @keyframes live-dot-pulse {
+      0%, 100% { opacity: 1;    transform: scale(1);    box-shadow: 0 0 0 0 rgba(255,32,80,0.7); }
+      50%       { opacity: 0.7; transform: scale(1.15); box-shadow: 0 0 0 5px rgba(255,32,80,0); }
+    }
+    /* ON AIR chip pulse when broadcasting */
+    @keyframes onair-chip-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(224,80,112,0.55); }
+      50%       { box-shadow: 0 0 0 6px rgba(224,80,112,0); }
+    }
+    .live-status-chip-on {
+      animation: onair-chip-pulse 1.6s ease-in-out infinite;
+    }
+
     .toast-success { background: rgba(76,175,130,0.1); border-color: rgba(76,175,130,0.3); color: var(--green); }
     .toast-error { background: rgba(224,80,112,0.1); border-color: rgba(224,80,112,0.3); color: var(--red); }
     .toast-info { background: rgba(74,127,212,0.1); border-color: rgba(74,127,212,0.3); color: #a0c0f0; }
@@ -1407,20 +1421,46 @@
             <button class="btn btn-secondary" onclick="refreshMics()">🔄 Refresh Mics</button>
           </div>
 
-          <!-- Live duration counter -->
-          <div id="live-timer-wrap" style="display:none;margin-top:14px;padding:10px 14px;background:rgba(224,80,112,0.08);border:1px solid rgba(224,80,112,0.25);border-radius:8px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-              <div style="font-size:10px;color:#e05070;letter-spacing:2px;text-transform:uppercase;">● BROADCASTING LIVE</div>
-              <div id="live-chunk-rate" style="font-size:10px;color:rgba(224,80,112,0.55);font-family:var(--mono);letter-spacing:1px;">— chunks/s</div>
+          <!-- Live duration counter + quality stats -->
+          <div id="live-timer-wrap" style="display:none;margin-top:14px;padding:12px 14px;background:rgba(224,80,112,0.08);border:1px solid rgba(224,80,112,0.25);border-radius:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <div style="display:flex;align-items:center;gap:7px;">
+                <span id="live-onair-dot" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ff2050;animation:live-dot-pulse 1.1s ease-in-out infinite;"></span>
+                <span style="font-size:10px;color:#e05070;letter-spacing:2px;text-transform:uppercase;font-weight:700;">BROADCASTING LIVE</span>
+              </div>
+              <span id="live-quality-badge" style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(76,175,130,0.12);border:1px solid rgba(76,175,130,0.35);color:#4caf82;font-weight:700;letter-spacing:0.5px;">● GOOD</span>
             </div>
-            <div id="live-timer" style="font-family:var(--mono);font-size:22px;color:#ff6b8a;font-weight:700;">00:00:00</div>
+            <div id="live-timer" style="font-family:var(--mono);font-size:24px;color:#ff6b8a;font-weight:700;letter-spacing:2px;margin-bottom:8px;">00:00:00</div>
+            <!-- Stats row -->
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;margin-top:2px;">
+              <div style="text-align:center;padding:6px 4px;background:rgba(0,0,0,0.25);border-radius:6px;">
+                <div id="live-chunk-rate" style="font-size:12px;color:#d4a843;font-family:var(--mono);font-weight:700;">—</div>
+                <div style="font-size:8px;color:rgba(255,255,255,0.3);letter-spacing:1px;margin-top:2px;">CHUNKS/S</div>
+              </div>
+              <div style="text-align:center;padding:6px 4px;background:rgba(0,0,0,0.25);border-radius:6px;">
+                <div id="live-rtt-display" style="font-size:12px;color:#d4a843;font-family:var(--mono);font-weight:700;">—</div>
+                <div style="font-size:8px;color:rgba(255,255,255,0.3);letter-spacing:1px;margin-top:2px;">LATENCY</div>
+              </div>
+              <div style="text-align:center;padding:6px 4px;background:rgba(0,0,0,0.25);border-radius:6px;">
+                <div id="live-bytes-display" style="font-size:12px;color:#d4a843;font-family:var(--mono);font-weight:700;">0B</div>
+                <div style="font-size:8px;color:rgba(255,255,255,0.3);letter-spacing:1px;margin-top:2px;">SENT</div>
+              </div>
+              <div style="text-align:center;padding:6px 4px;background:rgba(0,0,0,0.25);border-radius:6px;">
+                <div id="live-ws-listeners" style="font-size:12px;color:#d4a843;font-family:var(--mono);font-weight:700;">0</div>
+                <div style="font-size:8px;color:rgba(255,255,255,0.3);letter-spacing:1px;margin-top:2px;">LISTENERS</div>
+              </div>
+            </div>
+            <!-- Connection warning bar (shown on socket disconnect) -->
+            <div id="live-conn-warning" style="display:none;margin-top:8px;padding:6px 10px;background:rgba(212,168,67,0.12);border:1px solid rgba(212,168,67,0.4);border-radius:6px;font-size:11px;color:#d4a843;font-weight:700;text-align:center;">
+              ⚠ Connection interrupted — attempting to reconnect…
+            </div>
           </div>
         </div>
 
-        <!-- INFO / INSTRUCTIONS CARD -->
+        <!-- INFO / INSTRUCTIONS + LIVE STATS CARD -->
         <div class="card">
           <div class="card-header"><div class="card-title">📡 How Live Streaming Works</div></div>
-          <div style="display:flex;flex-direction:column;gap:14px;font-size:13px;color:var(--text2);line-height:1.7;">
+          <div style="display:flex;flex-direction:column;gap:12px;font-size:13px;color:var(--text2);line-height:1.7;">
             <div style="display:flex;gap:12px;align-items:flex-start;">
               <span style="font-size:20px;flex-shrink:0;">1️⃣</span>
               <div><strong style="color:var(--text);">Select your microphone</strong> from the dropdown. Click "Refresh Mics" if your device isn't listed. Grant browser permission when prompted.</div>
@@ -1431,22 +1471,44 @@
             </div>
             <div style="display:flex;gap:12px;align-items:flex-start;">
               <span style="font-size:20px;flex-shrink:0;">3️⃣</span>
-              <div><strong style="color:var(--text);">Click GO LIVE.</strong> Your microphone audio streams instantly to all listeners at <code style="background:rgba(255,255,255,0.06);padding:2px 6px;border-radius:4px;">/live-stream</code> — no external app needed.</div>
+              <div><strong style="color:var(--text);">Click GO LIVE.</strong> Your microphone audio streams instantly to all listeners — no external app needed.</div>
             </div>
             <div style="display:flex;gap:12px;align-items:flex-start;">
               <span style="font-size:20px;flex-shrink:0;">4️⃣</span>
               <div><strong style="color:var(--text);">Stop to return to scheduled playback.</strong> The listener player switches sources automatically.</div>
             </div>
             <div style="padding:12px;background:rgba(212,168,67,0.06);border:1px solid rgba(212,168,67,0.2);border-radius:8px;font-size:12px;">
-              <strong style="color:var(--gold);">💡 Tip:</strong> Use a headset or external microphone for best audio quality. The mic level meter shows you before going live.
+              <strong style="color:var(--gold);">💡 Tip:</strong> Use a headset or external microphone for best quality. Use <strong>Monitor</strong> to hear yourself before going live.
             </div>
           </div>
 
-          <!-- Current listeners during live -->
-          <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border);">
-            <div style="font-size:10px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;">Live Listeners</div>
-            <div style="font-family:'Cinzel',serif;font-size:28px;color:var(--gold);" id="live-listener-count">0</div>
-            <div style="font-size:11px;color:var(--text3);margin-top:2px;">people tuned in right now</div>
+          <!-- Sound-check panel (pre-broadcast mic test) -->
+          <div style="margin-top:14px;padding:12px 14px;background:rgba(74,127,212,0.06);border:1px solid rgba(74,127,212,0.2);border-radius:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <div style="font-size:11px;font-weight:700;color:var(--text);letter-spacing:0.5px;">🔊 Pre-Broadcast Sound Check</div>
+              <button id="btn-soundcheck" onclick="runSoundCheck()"
+                style="font-size:11px;padding:4px 12px;border-radius:8px;border:1px solid rgba(74,127,212,0.4);background:rgba(74,127,212,0.1);color:#a0c0f0;cursor:pointer;font-family:inherit;font-weight:700;transition:all 0.2s;">
+                ▶ Test Mic (5s)
+              </button>
+            </div>
+            <div style="height:8px;background:rgba(255,255,255,0.05);border-radius:4px;overflow:hidden;border:1px solid rgba(255,255,255,0.05);">
+              <div id="soundcheck-bar" style="height:100%;width:0%;border-radius:4px;background:linear-gradient(90deg,#4a7fd4,#6ea0e8);transition:width 0.05s;"></div>
+            </div>
+            <div id="soundcheck-status" style="font-size:10px;color:var(--text3);margin-top:5px;text-align:center;">Select a microphone, then click Test Mic to verify audio input.</div>
+          </div>
+
+          <!-- Live-specific listener count (updated via live:listener-count) -->
+          <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:100px;">
+              <div style="font-size:10px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;margin-bottom:4px;">Live Listeners</div>
+              <div style="font-family:'Cinzel',serif;font-size:32px;color:var(--gold);line-height:1;" id="live-listener-count">0</div>
+              <div style="font-size:10px;color:var(--text3);margin-top:3px;">tuned in via WebSocket</div>
+            </div>
+            <div style="flex:1;min-width:100px;">
+              <div style="font-size:10px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;margin-bottom:4px;">Total Listeners</div>
+              <div style="font-family:'Cinzel',serif;font-size:32px;color:var(--text2);line-height:1;" id="live-total-listener-count">0</div>
+              <div style="font-size:10px;color:var(--text3);margin-top:3px;">including HTTP stream</div>
+            </div>
           </div>
         </div>
 
@@ -2027,8 +2089,17 @@ socket.on('trackEnd', () => {});
 socket.on('listenerChange', (count) => {
   document.getElementById('listener-count').textContent = count;
   document.getElementById('stat-listeners').textContent = count;
-  const live = document.getElementById('live-listener-count');
-  if (live) live.textContent = count;
+  // Update the total-listener counter on the Go Live page
+  const totEl = document.getElementById('live-total-listener-count');
+  if (totEl) totEl.textContent = count;
+});
+
+// Live-listener WebSocket count (from live:listener-count server event)
+socket.on('live:listener-count', (count) => {
+  const el = document.getElementById('live-ws-listeners');
+  if (el) el.textContent = count;
+  const liveEl = document.getElementById('live-listener-count');
+  if (liveEl) liveEl.textContent = count;
 });
 
 // =================== NAVIGATION ===================
@@ -2967,6 +3038,31 @@ let monitorCtx        = null;
 let liveStartTime     = null;
 let livePageInited    = false;
 
+// ── Live quality / health tracking ────────────────────────────────────────────
+let _livePingTimer        = null;  // setInterval for live:ping heartbeat
+let _liveRtt              = null;  // last measured round-trip time (ms)
+let _liveBytesFromServer  = 0;     // bytes sent, as reported back by server via live:pong
+let _liveWasReconnecting  = false; // true while socket is disconnected during a live broadcast
+let _liveReconnectMimeType = '';   // mimeType stored for socket reconnect
+
+// Format byte count to a human-readable string (B / KB / MB)
+function _fmtBytes(b) {
+  if (b < 1024)            return b + 'B';
+  if (b < 1024 * 1024)     return (b / 1024).toFixed(1) + 'KB';
+  return (b / (1024 * 1024)).toFixed(2) + 'MB';
+}
+
+// Update the quality badge colour & text based on chunk rate and RTT
+function _updateLiveQuality(chunkRate, rtt) {
+  const badge = document.getElementById('live-quality-badge');
+  if (!badge) return;
+  const bad = chunkRate < 4 || (rtt !== null && rtt > 600);
+  const warn = chunkRate < 8 || (rtt !== null && rtt > 250);
+  if (bad)  { badge.textContent = '● POOR';   badge.style.background = 'rgba(224,80,112,0.12)'; badge.style.borderColor = 'rgba(224,80,112,0.4)'; badge.style.color = '#e05070'; }
+  else if (warn) { badge.textContent = '● FAIR'; badge.style.background = 'rgba(212,168,67,0.12)'; badge.style.borderColor = 'rgba(212,168,67,0.4)'; badge.style.color = '#d4a843'; }
+  else           { badge.textContent = '● GOOD'; badge.style.background = 'rgba(76,175,130,0.12)'; badge.style.borderColor = 'rgba(76,175,130,0.35)'; badge.style.color = '#4caf82'; }
+}
+
 // Get admin session token from cookie (needed to auth socket live events)
 function getAdminToken() {
   const match = document.cookie.match(/admin_token=([^;]+)/);
@@ -2979,9 +3075,89 @@ function initGoLivePage() {
     livePageInited = true;
     restoreLiveSettings();
   }
-  // Update listener count display
+  // Update total listener count display
   const lc = document.getElementById('listener-count');
-  if (lc) document.getElementById('live-listener-count').textContent = lc.textContent;
+  if (lc) {
+    const totEl = document.getElementById('live-total-listener-count');
+    if (totEl) totEl.textContent = lc.textContent;
+  }
+}
+
+// ── Pre-broadcast sound check ─────────────────────────────────────────────────
+let _scRaf       = null;
+let _scStream    = null;
+let _scCtx       = null;
+let _scAnalyser  = null;
+
+async function runSoundCheck() {
+  const btn    = document.getElementById('btn-soundcheck');
+  const bar    = document.getElementById('soundcheck-bar');
+  const status = document.getElementById('soundcheck-status');
+  const micId  = document.getElementById('live-mic-select').value;
+
+  if (!micId) { if (status) status.textContent = '⚠ Select a microphone first.'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Testing…'; }
+
+  // Cleanup any previous check
+  if (_scRaf)    { cancelAnimationFrame(_scRaf); _scRaf = null; }
+  if (_scStream) { _scStream.getTracks().forEach(t => t.stop()); _scStream = null; }
+  if (_scCtx)    { _scCtx.close(); _scCtx = null; }
+
+  try {
+    _scStream = await navigator.mediaDevices.getUserMedia({
+      audio: { deviceId: { exact: micId }, echoCancellation: true, noiseSuppression: true }
+    });
+    _scCtx      = new (window.AudioContext || window.webkitAudioContext)();
+    _scAnalyser = _scCtx.createAnalyser();
+    _scAnalyser.fftSize = 256;
+    const src   = _scCtx.createMediaStreamSource(_scStream);
+    src.connect(_scAnalyser);
+
+    const timeData = new Uint8Array(_scAnalyser.fftSize);
+    const startTs  = Date.now();
+    const duration = 5000;
+    let   maxPeak  = 0;
+
+    function tick() {
+      const elapsed = Date.now() - startTs;
+      if (elapsed >= duration) {
+        // Done
+        cancelAnimationFrame(_scRaf); _scRaf = null;
+        _scStream.getTracks().forEach(t => t.stop()); _scStream = null;
+        _scCtx.close(); _scCtx = null;
+        if (bar)  { bar.style.width = '0%'; bar.style.background = 'linear-gradient(90deg,#4a7fd4,#6ea0e8)'; }
+        if (btn)  { btn.disabled = false; btn.textContent = '▶ Test Mic (5s)'; }
+        const grade = maxPeak > 60 ? '✅ Good — audio detected clearly!' : maxPeak > 20 ? '⚠ Low signal — try raising Mic Boost.' : '❌ No signal — check microphone selection.';
+        const col   = maxPeak > 60 ? '#4caf82' : maxPeak > 20 ? '#d4a843' : '#e05070';
+        if (status) { status.textContent = grade; status.style.color = col; }
+        return;
+      }
+
+      _scAnalyser.getByteTimeDomainData(timeData);
+      let sq = 0, pk = 0;
+      for (let i = 0; i < timeData.length; i++) {
+        const s = (timeData[i] - 128) / 128;
+        sq += s * s;
+        if (Math.abs(s) > pk) pk = Math.abs(s);
+      }
+      const rms  = Math.sqrt(sq / timeData.length);
+      const pct  = Math.min(100, rms * 300);
+      const pkPct = Math.min(100, pk * 100);
+      if (pkPct > maxPeak) maxPeak = pkPct;
+
+      if (bar) {
+        bar.style.width = pct + '%';
+        bar.style.background = pkPct > 90 ? 'linear-gradient(90deg,#ff2050,#ff0030)' : pkPct > 65 ? 'linear-gradient(90deg,#4a7fd4,#d4a843)' : 'linear-gradient(90deg,#4a7fd4,#6ea0e8)';
+      }
+      const remaining = Math.ceil((duration - elapsed) / 1000);
+      if (status) { status.textContent = `Testing… ${remaining}s remaining  (peak: ${Math.round(pkPct)}%)`; status.style.color = 'var(--text3)'; }
+      _scRaf = requestAnimationFrame(tick);
+    }
+    _scRaf = requestAnimationFrame(tick);
+  } catch(e) {
+    if (btn)    { btn.disabled = false; btn.textContent = '▶ Test Mic (5s)'; }
+    if (status) { status.textContent = '❌ Could not access mic: ' + e.message; status.style.color = '#e05070'; }
+  }
 }
 
 // Restore EQ/gain/noise/title settings from localStorage
@@ -3297,19 +3473,18 @@ registerProcessor('letw-noise-gate', NoiseGateProcessor);
     }
   });
 
+  // Store mimeType for potential socket-reconnect re-announce
+  _liveReconnectMimeType = mimeType;
+  _liveWasReconnecting   = false;
+  _liveRtt               = null;
+  _liveBytesFromServer   = 0;
+
   // Send the admin token so server accepts live events
   socket.auth = { token: getAdminToken() };
   const recordCheck = document.getElementById('live-record-check');
-  // Include the actual mimeType used by MediaRecorder so the server can
-  // set the correct Content-Type for HTTP clients and relay it to Socket.IO
-  // MediaSource clients.  Without this, browsers (especially Safari) that
-  // receive audio/mp4 data but see Content-Type: audio/webm will error.
   socket.emit('live:start', { title, artist, record: recordCheck ? recordCheck.checked : false, mimeType });
 
-  liveMediaRecorder.start(100); // 100 ms timeslice — smallest WebM cluster size Chrome
-                                // reliably produces.  Halves the per-chunk latency vs 250 ms
-                                // without fragmenting the stream so finely that the overhead
-                                // outweighs the benefit.
+  liveMediaRecorder.start(100); // 100 ms timeslice — smallest WebM cluster size Chrome reliably produces
 
   // UI: on-air state
   setLiveUIState(true);
@@ -3341,7 +3516,12 @@ function stopLiveBroadcast() {
 
   document.getElementById('mic-level-bar').style.width = '0%';
   document.getElementById('mic-peak-label').textContent = '—';
-  _liveChunksSent = 0;
+  _liveChunksSent      = 0;
+  _liveRtt             = null;
+  _liveBytesFromServer = 0;
+  _liveWasReconnecting = false;
+
+  if (_livePingTimer) { clearInterval(_livePingTimer); _livePingTimer = null; }
 
   socket.auth = { token: getAdminToken() };
   socket.emit('live:stop');
@@ -3535,14 +3715,29 @@ function updateLiveTimer() {
   const s = String(elapsed % 60).padStart(2,'0');
   document.getElementById('live-timer').textContent = `${h}:${m}:${s}`;
 
-  // Show chunks-per-second (how many MediaRecorder slices were emitted last second)
+  // Chunks-per-second (how many MediaRecorder slices were emitted last second)
+  const rate = _liveChunksSent;
+  _liveChunksSent = 0;   // reset for next second
+
   const rateEl = document.getElementById('live-chunk-rate');
   if (rateEl) {
-    const rate = _liveChunksSent;
-    _liveChunksSent = 0;   // reset for next second
     const color = rate >= 8 ? '#4caf82' : rate >= 4 ? '#d4a843' : '#e05070';
     rateEl.style.color = color;
-    rateEl.textContent = rate + ' chunks/s';
+    rateEl.textContent = rate + '/s';
+  }
+
+  // Bytes sent — updated live via live:pong; fall back to local estimate
+  const bytesEl = document.getElementById('live-bytes-display');
+  if (bytesEl && _liveBytesFromServer > 0) {
+    bytesEl.textContent = _fmtBytes(_liveBytesFromServer);
+  }
+
+  // Update quality badge every second
+  _updateLiveQuality(rate, _liveRtt);
+
+  // Send heartbeat ping to server every 5th tick
+  if (elapsed % 5 === 0 && liveMediaRecorder) {
+    socket.emit('live:ping', Date.now());
   }
 }
 
@@ -3558,6 +3753,7 @@ function setLiveUIState(on) {
     chip.style.background = 'rgba(224,80,112,0.18)';
     chip.style.borderColor = 'rgba(224,80,112,0.55)';
     chip.style.color = '#ff6b8a';
+    chip.classList.add('live-status-chip-on');
     btnGo.disabled  = true;
     btnGo.style.opacity = '0.4';
     btnStop.disabled = false;
@@ -3569,6 +3765,7 @@ function setLiveUIState(on) {
     chip.style.background = 'rgba(90,90,90,0.15)';
     chip.style.borderColor = 'rgba(90,90,90,0.3)';
     chip.style.color = '#888';
+    chip.classList.remove('live-status-chip-on');
     btnGo.disabled  = false;
     btnGo.style.opacity = '1';
     btnStop.disabled = true;
@@ -3576,6 +3773,17 @@ function setLiveUIState(on) {
     timerWrap.style.display = 'none';
     navDot.style.display = 'none';
     if (document.getElementById('live-timer')) document.getElementById('live-timer').textContent = '00:00:00';
+    // Reset stats
+    const rttEl   = document.getElementById('live-rtt-display');
+    const bytesEl = document.getElementById('live-bytes-display');
+    const wsEl    = document.getElementById('live-ws-listeners');
+    const qEl     = document.getElementById('live-quality-badge');
+    const warnEl  = document.getElementById('live-conn-warning');
+    if (rttEl)   rttEl.textContent   = '—';
+    if (bytesEl) bytesEl.textContent = '0B';
+    if (wsEl)    wsEl.textContent    = '0';
+    if (qEl)     { qEl.textContent = '● GOOD'; qEl.style.background = 'rgba(76,175,130,0.12)'; qEl.style.borderColor = 'rgba(76,175,130,0.35)'; qEl.style.color = '#4caf82'; }
+    if (warnEl)  warnEl.style.display = 'none';
   }
 }
 
@@ -3586,6 +3794,68 @@ socket.on('request:new', () => {
 
 socket.on('live:ended', () => {
   logActivity('⏹ Live broadcast ended');
+});
+
+// ── Live quality / health socket events ──────────────────────────────────────
+
+// Server replies to live:ping with round-trip measurement
+socket.on('live:pong', ({ clientTs, bytesSent }) => {
+  _liveRtt = Date.now() - clientTs;
+  _liveBytesFromServer = bytesSent || _liveBytesFromServer;
+
+  const rttEl = document.getElementById('live-rtt-display');
+  if (rttEl) {
+    rttEl.textContent = _liveRtt + 'ms';
+    rttEl.style.color = _liveRtt < 100 ? '#4caf82' : _liveRtt < 300 ? '#d4a843' : '#e05070';
+  }
+});
+
+// Server auto-stopped the broadcast (heartbeat timeout)
+socket.on('live:admin-timeout', () => {
+  logActivity('⚠ Live broadcast auto-stopped: admin connection timed out.');
+  // Clean up local state as if admin had clicked Stop
+  if (liveMediaRecorder && liveMediaRecorder.state !== 'inactive') {
+    liveMediaRecorder.stop();
+    liveMediaRecorder = null;
+  }
+  if (liveMicStream) { liveMicStream.getTracks().forEach(t => t.stop()); liveMicStream = null; }
+  if (liveMicCtx) { liveMicCtx.close(); liveMicCtx = null; }
+  liveGainNode = liveBassNode = livePresenceNode = liveTrebleNode = liveNoiseGateNode = liveDestStream = null;
+  _ngUsingWorklet = false;
+  if (liveMicRAF) { cancelAnimationFrame(liveMicRAF); liveMicRAF = null; }
+  if (liveTimerInterval) { clearInterval(liveTimerInterval); liveTimerInterval = null; }
+  if (_livePingTimer)    { clearInterval(_livePingTimer);    _livePingTimer = null; }
+  _liveRtt = null; _liveBytesFromServer = 0;
+  setLiveUIState(false);
+  if (monitorActive) stopMonitor();
+  alert('⚠ Live broadcast was auto-stopped because the server lost contact with your browser for more than 20 seconds.');
+});
+
+// Socket disconnects while admin is live — show warning, allow auto-reconnect
+socket.on('disconnect', () => {
+  if (liveMediaRecorder && liveMediaRecorder.state !== 'inactive') {
+    _liveWasReconnecting = true;
+    const w = document.getElementById('live-conn-warning');
+    if (w) w.style.display = 'block';
+  }
+});
+
+// Socket reconnected — if we were live, re-signal the server
+socket.on('connect', () => {
+  if (_liveWasReconnecting && liveMediaRecorder && liveMediaRecorder.state !== 'inactive') {
+    _liveWasReconnecting = false;
+    const w = document.getElementById('live-conn-warning');
+    if (w) w.style.display = 'none';
+    // Re-authenticate and re-announce to the server
+    socket.auth = { token: getAdminToken() };
+    socket.emit('live:start', {
+      title:    document.getElementById('live-title').value.trim()  || 'Live Broadcast',
+      artist:   document.getElementById('live-artist').value.trim() || 'LETW Radio',
+      record:   false, // don't re-create a recording file — recording was for the original session
+      mimeType: _liveReconnectMimeType
+    });
+    logActivity('🔄 Socket reconnected — live broadcast resumed');
+  }
 });
 
 // ── Activity Log ──────────────────────────────────────────────────────────────

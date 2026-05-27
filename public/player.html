@@ -2768,6 +2768,19 @@ socket.on('live:init', (data) => {
   _liveFlush();
 });
 
+// Catchup buffer: a burst of the last ~3 s of audio sent to late-joining listeners
+// so MediaSource has enough data to begin decoding without waiting for the next keyframe.
+socket.on('live:catchup', (chunks) => {
+  if (!isLive || !_liveUseMS) return;
+  if (!Array.isArray(chunks)) return;
+  let added = 0;
+  for (const chunk of chunks) {
+    const buf = _toAB(chunk);
+    if (buf) { _livePending.push(buf); added++; }
+  }
+  if (added > 0) _liveFlush();
+});
+
 socket.on('chat:message', msg => appendChatMessage(msg, true));
 
 socket.on('chat:deleted', ({ id }) => {
@@ -3109,6 +3122,8 @@ function switchToLiveMode(info) {
   startLiveJoinTimeout();       // retry if stream doesn't start within 10 s
   startLiveViaMS();             // try MediaSource first; falls back to HTTP inside
   audio.play().catch(err => { if (err.name !== 'AbortError') scheduleLiveReconnect(800); });
+  // Tell server this listener has joined live — used for live-listener count display in admin
+  socket.emit('live:join');
 }
 
 function exitLiveMode() {
@@ -3133,6 +3148,8 @@ function exitLiveMode() {
     audio.src = '';
   }
   stopLiveTimer();
+  // Tell server this listener is no longer in live mode
+  socket.emit('live:leave');
   // Use setStatusBadge so hero-dot, hero-status, and progress bar are all
   // updated correctly.  Show ON AIR if already playing, OFFLINE if not.
   setStatusBadge(isPlaying);
@@ -3336,6 +3353,8 @@ function startPlayback() {
       if (err.name === 'AbortError') return;
       scheduleLiveReconnect(1500);
     });
+    // Tell server this listener has joined live
+    socket.emit('live:join');
     return;
   }
 

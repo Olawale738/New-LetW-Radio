@@ -1065,14 +1065,28 @@ function _broadcastListenerCount() {
   io.emit('listenerChange', total);
 }
 
+// ── Live-stream quality & reliability state ───────────────────────────────────
+// Ring buffer: keep last 30 chunks (~3 s at 100 ms timeslice) so late-joining
+// listeners receive a small catchup payload and MediaSource can decode immediately
+// instead of waiting for the next keyframe.
+const LIVE_RING_SIZE      = 30;
+let   _liveRingBuffer     = [];   // Array<Buffer>
+let   _liveBytesSent      = 0;    // total bytes transmitted in current broadcast
+let   _liveListeners      = 0;    // WS clients that have signalled live:join
+let   _liveAdminLastPing  = 0;    // epoch ms of last live:ping (or live:chunk as implicit ping)
+let   _liveHeartbeatTimer = null; // setInterval handle for heartbeat watchdog
+
 io.on('connection', (socket) => {
   _webListeners++;
   _broadcastListenerCount();
   socket.emit('status', audioEngine.getStatus());
-  // If a live broadcast is already in progress and we have the WebM init chunk,
-  // send it immediately so a new MediaSource client can start decoding.
+  // If a live broadcast is already in progress, send the WebM init chunk and
+  // the last ~3 s of audio from the ring buffer so the client can join smoothly.
   if (audioEngine.isLive && audioEngine.liveInitChunk) {
     socket.emit('live:init', audioEngine.liveInitChunk);
+    if (_liveRingBuffer.length > 0) {
+      socket.emit('live:catchup', _liveRingBuffer.slice()); // clone so future mutations don't affect it
+    }
   }
 
   // ── Admin live-broadcast events ──────────────────────────────────────────
@@ -1124,6 +1138,13 @@ io.on('connection', (socket) => {
     if (!isAdminSocket()) return;
     if (!audioEngine.isLive) return;
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+
+    // ── Ring buffer: keep last ~3 s for late-joining listeners ──────────────
+    _liveRingBuffer.push(buf);
+    if (_liveRingBuffer.length > LIVE_RING_SIZE) _liveRingBuffer.shift();
+    _liveBytesSent        += buf.length;
+    _liveAdminLastPing     = Date.now(); // each chunk counts as an implicit heartbeat
+
     audioEngine.broadcastLive(buf);                 // HTTP /live-stream clients
     socket.broadcast.emit('live:audio', buf);       // Socket.IO listener clients
     // Write to recording file if recording is active
@@ -1132,10 +1153,38 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Public client requests the stored WebM init chunk for MediaSource playback
+  // Admin heartbeat — reply with server timestamp so admin can measure RTT
+  socket.on('live:ping', (clientTs) => {
+    if (!isAdminSocket()) return;
+    _liveAdminLastPing = Date.now();
+    socket.emit('live:pong', { clientTs, serverTs: Date.now(), bytesSent: _liveBytesSent });
+  });
+
+  // Public client tracks whether it is actively receiving live audio
+  // (used for the live-listener count shown in the admin On-Air panel)
+  socket.on('live:join', () => {
+    if (!socket._joinedLive) {
+      socket._joinedLive = true;
+      _liveListeners++;
+      io.emit('live:listener-count', _liveListeners);
+    }
+  });
+  socket.on('live:leave', () => {
+    if (socket._joinedLive) {
+      socket._joinedLive = false;
+      _liveListeners = Math.max(0, _liveListeners - 1);
+      io.emit('live:listener-count', _liveListeners);
+    }
+  });
+
+  // Public client requests the stored WebM init chunk for MediaSource playback;
+  // also sends the ring buffer for a smooth mid-broadcast join.
   socket.on('live:request-init', () => {
     if (audioEngine.isLive && audioEngine.liveInitChunk) {
       socket.emit('live:init', audioEngine.liveInitChunk);
+      if (_liveRingBuffer.length > 0) {
+        socket.emit('live:catchup', _liveRingBuffer.slice());
+      }
     }
   });
 
@@ -1146,6 +1195,12 @@ io.on('connection', (socket) => {
     audioEngine.stopLive();
     io.emit('live:ended');
     io.emit('status', audioEngine.getStatus());
+    // Clear live-quality state
+    _liveRingBuffer     = [];
+    _liveBytesSent      = 0;
+    _liveListeners      = 0;
+    _liveAdminLastPing  = 0;
+    if (_liveHeartbeatTimer) { clearInterval(_liveHeartbeatTimer); _liveHeartbeatTimer = null; }
 
     // Finalise recording if active
     if (liveRecordingEnabled && liveRecordingStream) {
@@ -1180,6 +1235,11 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     _webListeners = Math.max(0, _webListeners - 1);
     _broadcastListenerCount();
+    // If this client had joined the live stream, decrement that counter too
+    if (socket._joinedLive) {
+      _liveListeners = Math.max(0, _liveListeners - 1);
+      io.emit('live:listener-count', _liveListeners);
+    }
   });
 
   socket.on('chat:reaction', (emoji) => {
@@ -1196,6 +1256,51 @@ audioEngine.on('listenerChange', () => { _broadcastListenerCount(); });
 audioEngine.on('liveStart', async (info) => {
   io.emit('live:started', info);
   io.emit('status', audioEngine.getStatus());
+
+  // ── Heartbeat watchdog ─────────────────────────────────────────────────────
+  // If the admin browser disconnects without sending live:stop (e.g. tab crash,
+  // network drop), auto-stop the broadcast after 20 s of silence so listeners
+  // don't hear dead air.  Each live:chunk also updates _liveAdminLastPing so
+  // a healthy broadcast never triggers this.
+  _liveAdminLastPing  = Date.now();
+  if (_liveHeartbeatTimer) clearInterval(_liveHeartbeatTimer);
+  _liveHeartbeatTimer = setInterval(() => {
+    if (!audioEngine.isLive) { clearInterval(_liveHeartbeatTimer); _liveHeartbeatTimer = null; return; }
+    if (Date.now() - _liveAdminLastPing > 20000) {
+      console.log('[Live] Admin heartbeat timeout — auto-stopping broadcast');
+      audioEngine.stopLive();
+      io.emit('live:ended');
+      io.emit('live:admin-timeout'); // special event so admin UI can show a warning
+      io.emit('status', audioEngine.getStatus());
+      clearInterval(_liveHeartbeatTimer);
+      _liveHeartbeatTimer = null;
+      _liveRingBuffer     = [];
+      _liveBytesSent      = 0;
+      _liveListeners      = 0;
+      // Finalise any active recording
+      if (liveRecordingEnabled && liveRecordingStream) {
+        liveRecordingEnabled = false;
+        const stream  = liveRecordingStream;
+        const file    = liveRecordingFile;
+        const rtitle  = liveRecordingTitle;
+        const rartist = liveRecordingArtist;
+        liveRecordingStream = null;
+        liveRecordingFile   = '';
+        stream.end(() => {
+          try {
+            const stat = fs.statSync(file);
+            if (stat.size > 50000) {
+              const id = uuidv4();
+              const duration = Math.floor(stat.size / 16000);
+              db.prepare(`INSERT INTO tracks (id,title,artist,duration,file_path,file_size,bitrate,tray) VALUES (?,?,?,?,?,?,?,?)`)
+                .run(id, rtitle, rartist, duration, file, stat.size, 128, 'recordings');
+            } else { try { fs.unlinkSync(file); } catch(_) {} }
+          } catch(e) { console.error('[Live] Recording save error (timeout):', e.message); }
+        });
+      }
+    }
+  }, 5000);
+
   const subs = db.prepare('SELECT * FROM push_subscriptions').all();
   const payload = JSON.stringify({ title: 'LETW Radio — LIVE', body: info.title || 'Live broadcast started', icon: '/logo.png', url: '/listen' });
   for (const sub of subs) {
