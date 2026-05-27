@@ -1684,8 +1684,8 @@
         </div>
 
         <div class="card">
-          <div class="card-header"><div class="card-title">📱 App Downloads (DCLM-style)</div></div>
-          <p style="font-size:12px;color:var(--text3);margin-bottom:14px;">Add your Google Play and iOS App Store links to display download buttons in the public player.</p>
+          <div class="card-header"><div class="card-title">📱 App Downloads</div></div>
+          <p style="font-size:12px;color:var(--text3);margin-bottom:14px;">Add your app store links to display download buttons in the public player.</p>
           <div class="form-group">
             <label class="form-label">Google Play Store URL</label>
             <input class="form-control" id="set-android-url" placeholder="https://play.google.com/store/apps/details?id=...">
@@ -1697,6 +1697,63 @@
           <div class="form-group">
             <label class="form-label">Broadcast WhatsApp Number (optional)</label>
             <input class="form-control" id="set-whatsapp" placeholder="e.g. 2348012345678 (with country code, no +)">
+          </div>
+          <button class="btn btn-primary" onclick="saveSettings()">Save Changes</button>
+        </div>
+
+        <!-- App Announcement Modal (DCLM-style) -->
+        <div class="card">
+          <div class="card-header"><div class="card-title">🎉 App Announcement Modal</div></div>
+          <p style="font-size:12px;color:var(--text3);margin-bottom:14px;">Shows a pop-up modal to listeners on first visit. Use it to announce your new app or a special message.</p>
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+            <label style="font-size:13px;color:var(--text2);display:flex;align-items:center;gap:8px;cursor:pointer;">
+              <input type="checkbox" id="set-announce-enabled" style="accent-color:var(--gold);width:15px;height:15px;">
+              Enable announcement modal
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Modal Title</label>
+            <input class="form-control" id="set-announce-title" placeholder="Hello Beloved" value="Hello Beloved">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Modal Message</label>
+            <textarea class="form-control" id="set-announce-body" rows="3" placeholder="The LETW Radio app is now available…" style="resize:vertical;"></textarea>
+          </div>
+          <button class="btn btn-primary" onclick="saveSettings()">Save Changes</button>
+        </div>
+
+        <!-- Tawk.to Live Chat (DCLM-style) -->
+        <div class="card">
+          <div class="card-header"><div class="card-title">💬 Tawk.to Live Chat</div></div>
+          <p style="font-size:12px;color:var(--text3);margin-bottom:14px;">Embed a live chat widget in the public player so listeners can message you directly. Get your Property ID from <a href="https://tawk.to" target="_blank" style="color:var(--gold);">tawk.to</a>.</p>
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+            <label style="font-size:13px;color:var(--text2);display:flex;align-items:center;gap:8px;cursor:pointer;">
+              <input type="checkbox" id="set-tawkto-enabled" style="accent-color:var(--gold);width:15px;height:15px;">
+              Enable Tawk.to widget
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Tawk.to Property ID</label>
+            <input class="form-control" id="set-tawkto-id" placeholder="e.g. 5eb6e5fc967ae56c521848cd/default">
+          </div>
+          <button class="btn btn-primary" onclick="saveSettings()">Save Changes</button>
+        </div>
+
+        <!-- Social Media Links -->
+        <div class="card">
+          <div class="card-header"><div class="card-title">🌐 Social Media Links</div></div>
+          <p style="font-size:12px;color:var(--text3);margin-bottom:14px;">These links appear as share/follow buttons in the public player footer.</p>
+          <div class="form-group">
+            <label class="form-label">Facebook Page URL</label>
+            <input class="form-control" id="set-social-facebook" placeholder="https://facebook.com/letw">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Twitter / X URL</label>
+            <input class="form-control" id="set-social-twitter" placeholder="https://twitter.com/letw">
+          </div>
+          <div class="form-group">
+            <label class="form-label">YouTube Channel URL</label>
+            <input class="form-control" id="set-social-youtube" placeholder="https://youtube.com/@letw">
           </div>
           <button class="btn btn-primary" onclick="saveSettings()">Save Changes</button>
         </div>
@@ -2910,6 +2967,25 @@ async function loadSettings() {
   if (anEl) anEl.value = s.app_store_android || '';
   if (ioEl) ioEl.value = s.app_store_ios || '';
   if (waEl) waEl.value = s.app_store_whatsapp || '';
+  // Announcement modal
+  const annEn   = document.getElementById('set-announce-enabled');
+  const annTitle = document.getElementById('set-announce-title');
+  const annBody  = document.getElementById('set-announce-body');
+  if (annEn)    annEn.checked      = s.announce_modal_enabled === '1';
+  if (annTitle) annTitle.value     = s.announce_modal_title || 'Hello Beloved';
+  if (annBody)  annBody.value      = s.announce_modal_body  || '';
+  // Tawk.to
+  const twkEn = document.getElementById('set-tawkto-enabled');
+  const twkId = document.getElementById('set-tawkto-id');
+  if (twkEn) twkEn.checked = s.tawkto_enabled === '1';
+  if (twkId) twkId.value   = s.tawkto_id || '';
+  // Social
+  const fbEl  = document.getElementById('set-social-facebook');
+  const twEl  = document.getElementById('set-social-twitter');
+  const ytEl  = document.getElementById('set-social-youtube');
+  if (fbEl) fbEl.value = s.social_facebook || '';
+  if (twEl) twEl.value = s.social_twitter  || '';
+  if (ytEl) ytEl.value = s.social_youtube  || '';
 }
 
 async function saveSettings() {
@@ -2930,6 +3006,25 @@ async function saveSettings() {
   if (anEl) data.app_store_android = anEl.value.trim();
   if (ioEl) data.app_store_ios = ioEl.value.trim();
   if (waEl) data.app_store_whatsapp = waEl.value.trim();
+  // Announcement modal
+  const annEn   = document.getElementById('set-announce-enabled');
+  const annTitle = document.getElementById('set-announce-title');
+  const annBody  = document.getElementById('set-announce-body');
+  if (annEn)    data.announce_modal_enabled = annEn.checked ? '1' : '0';
+  if (annTitle) data.announce_modal_title   = annTitle.value.trim();
+  if (annBody)  data.announce_modal_body    = annBody.value.trim();
+  // Tawk.to
+  const twkEn = document.getElementById('set-tawkto-enabled');
+  const twkId = document.getElementById('set-tawkto-id');
+  if (twkEn) data.tawkto_enabled = twkEn.checked ? '1' : '0';
+  if (twkId) data.tawkto_id      = twkId.value.trim();
+  // Social
+  const fbEl  = document.getElementById('set-social-facebook');
+  const twEl  = document.getElementById('set-social-twitter');
+  const ytEl  = document.getElementById('set-social-youtube');
+  if (fbEl) data.social_facebook = fbEl.value.trim();
+  if (twEl) data.social_twitter  = twEl.value.trim();
+  if (ytEl) data.social_youtube  = ytEl.value.trim();
   await api('PUT', '/settings', data);
   toast('Settings saved', 'success');
   document.getElementById('sidebar-radio-name').textContent = data.radio_name;
