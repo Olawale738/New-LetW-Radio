@@ -1869,7 +1869,7 @@ function applyStatus(data) {
       data.liveArtist || 'Light Encounter Tabernacle Worldwide'
     );
   }
-  if (typeof data.listenerCount === 'number') updateListeners(data.listenerCount);
+  if (typeof data.listeners === 'number') updateListeners(data.listeners);
   if (data.bitrate) document.getElementById('meta-bitrate').textContent = data.bitrate + ' kbps';
 }
 
@@ -1942,9 +1942,9 @@ function exitLiveMode() {
   document.getElementById('play-btn').classList.remove('live-mode');
   document.getElementById('player-shimmer').classList.remove('live');
   document.getElementById('panel-shimmer').classList.remove('live');
-  const badge = document.getElementById('status-badge');
-  badge.className = 'status-badge on-air';
-  document.getElementById('status-text').textContent = 'ON AIR';
+  // Use setStatusBadge so hero-dot, hero-status, and progress bar are all
+  // updated correctly.  Show ON AIR if already playing, OFFLINE if not.
+  setStatusBadge(isPlaying);
   if (isPlaying) reconnectAudio(STREAM_URL);
 }
 

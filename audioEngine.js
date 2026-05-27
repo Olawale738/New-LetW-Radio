@@ -238,6 +238,8 @@ class AudioEngine extends EventEmitter {
     // Pause file playback so the scheduled stream goes silent
     if (this.playbackTimer) { clearTimeout(this.playbackTimer); this.playbackTimer = null; }
     if (this._watchdogTimer) { clearInterval(this._watchdogTimer); this._watchdogTimer = null; }
+    // Broadcast fresh count — scheduled-stream clients stay connected during live
+    this._updateListeners();
     this.emit('liveStart', { title: this.liveTitle, artist: this.liveArtist });
   }
 
