@@ -11,13 +11,17 @@ const audioEngine = require('./audioEngine');
 const { startScheduler, getDateString } = require('./scheduler');
 const apiRoutes = require('./routes/api');
 const webpush = require('web-push');
+const { liveWs } = require('./liveWs');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*', methods: ['GET', 'POST'] },
-  pingTimeout: 20000,
-  pingInterval: 10000,
+  // Tighter timeouts: detect dead connections 4× faster than the default
+  pingTimeout: 10000,
+  pingInterval: 5000,
+  // Prefer WebSocket transport — skip the long-polling handshake round-trip
+  transports: ['websocket', 'polling'],
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1069,7 +1073,7 @@ function _broadcastListenerCount() {
 // Ring buffer: keep last 30 chunks (~3 s at 100 ms timeslice) so late-joining
 // listeners receive a small catchup payload and MediaSource can decode immediately
 // instead of waiting for the next keyframe.
-const LIVE_RING_SIZE      = 30;
+const LIVE_RING_SIZE      = 60; // ~6 s at 100 ms timeslice (binary WS has its own 120-chunk ring)
 let   _liveRingBuffer     = [];   // Array<Buffer>
 let   _liveBytesSent      = 0;    // total bytes transmitted in current broadcast
 let   _liveListeners      = 0;    // WS clients that have signalled live:join
@@ -1143,14 +1147,19 @@ io.on('connection', (socket) => {
     _liveAdminLastPing  = Date.now(); // each chunk counts as an implicit heartbeat
 
     audioEngine.broadcastLive(buf);                 // HTTP /live-stream clients
-    socket.broadcast.emit('live:audio', buf);       // Socket.IO listener clients
+    socket.broadcast.emit('live:audio', buf);       // Socket.IO listener clients (legacy path)
 
-    // ── Ring buffer: keep last ~3 s for late-joining listeners ──────────────
+    // ── Binary WebSocket fast path ────────────────────────────────────────────
+    // Inject into liveWs so all /live-ws listeners receive the chunk with
+    // minimal overhead.  isInit = true only for chunk 1 (EBML header).
+    const isInit = audioEngine._liveChunkCount === 1;
+    liveWs.injectChunk(buf, isInit);
+
+    // ── Socket.IO ring buffer: keep last ~3 s for late Socket.IO joiners ──
     // IMPORTANT: skip chunk 1 (the WebM EBML header / init segment).
-    // Chunk 1 is already stored in audioEngine.liveInitChunk and sent separately
-    // via the 'live:init' event.  If we also put it in the ring buffer, new
-    // listeners receive the header TWICE → SourceBuffer sees it as duplicate
-    // init data → InvalidStateError → stream silently falls back to HTTP.
+    // Chunk 1 is stored in audioEngine.liveInitChunk and sent separately via
+    // 'live:init'.  Putting it in the ring buffer would send it TWICE to new
+    // listeners → SourceBuffer InvalidStateError → silent stream fallback.
     if (audioEngine._liveChunkCount > 1) {
       _liveRingBuffer.push(buf);
       if (_liveRingBuffer.length > LIVE_RING_SIZE) _liveRingBuffer.shift();
@@ -1209,6 +1218,8 @@ io.on('connection', (socket) => {
     _liveListeners      = 0;
     _liveAdminLastPing  = 0;
     if (_liveHeartbeatTimer) { clearInterval(_liveHeartbeatTimer); _liveHeartbeatTimer = null; }
+    // Notify binary-WS listeners
+    liveWs.injectEnded();
 
     // Finalise recording if active
     if (liveRecordingEnabled && liveRecordingStream) {
@@ -1280,6 +1291,7 @@ audioEngine.on('liveStart', async (info) => {
       io.emit('live:ended');
       io.emit('live:admin-timeout'); // special event so admin UI can show a warning
       io.emit('status', audioEngine.getStatus());
+      liveWs.injectEnded();
       clearInterval(_liveHeartbeatTimer);
       _liveHeartbeatTimer = null;
       _liveRingBuffer     = [];
@@ -1333,6 +1345,18 @@ process.on('unhandledRejection', (reason) => {
 });
 
 db.init().then(() => {
+  // ── Attach high-performance binary WebSocket server ────────────────────────
+  // Must be done BEFORE server.listen() so the 'upgrade' event handler is
+  // registered before any connections arrive.
+  liveWs._audioEngine = audioEngine;
+  liveWs._onAdminChunk = (buf) => {
+    // Called when admin uploads via binary WS fast path (in addition to Socket.IO)
+    if (liveRecordingEnabled && liveRecordingStream) {
+      try { liveRecordingStream.write(buf); } catch(e) {}
+    }
+  };
+  liveWs.attach(server, SESSION_TOKEN);
+
   server.listen(PORT, () => {
     console.log(`\n🎙️  LETW Radio is running!\n`);
     console.log(`📻  Stream URL  : http://localhost:${PORT}/stream`);
@@ -1340,7 +1364,8 @@ db.init().then(() => {
     console.log(`📡  Tune In     : http://localhost:${PORT}/tune-in`);
     console.log(`📋  PLS playlist: http://localhost:${PORT}/stream.pls`);
     console.log(`📋  M3U playlist: http://localhost:${PORT}/stream.m3u`);
-    console.log(`📊  Admin panel : http://localhost:${PORT}\n`);
+    console.log(`📊  Admin panel : http://localhost:${PORT}`);
+    console.log(`⚡  Binary WS   : ws://localhost:${PORT}/live-ws\n`);
   });
   startScheduler(io);
 

@@ -691,6 +691,7 @@
       text-align: center;
     }
     #live-timer.visible { display: block; }
+    #live-rtt-wrap.visible { display: flex !important; }
 
     /* ── Stream Error / Retry Banner ────────────────────────────── */
     #stream-error-banner {
@@ -2177,6 +2178,12 @@
 
         <!-- Live broadcast timer — shown while broadcasting -->
         <div id="live-timer" aria-live="off"></div>
+        <!-- Binary WS RTT indicator (visible in live mode only) -->
+        <div id="live-rtt-wrap" style="display:none;align-items:center;gap:6px;font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px;">
+          <span>⚡</span>
+          <span id="live-rtt-display" style="font-variant-numeric:tabular-nums;">– ms</span>
+          <span style="opacity:0.5">latency</span>
+        </div>
 
         <!-- Stream error / retry banner -->
         <div id="stream-error-banner" role="alert">
@@ -2591,19 +2598,40 @@ let _wasEverPlaying = false;  // true after first successful audio.play() — us
                                // distinguish "Connecting" from "Buffering" in waiting state
 let _streamErrorCount = 0;    // counts consecutive stream errors for error banner
 
-// ── Live MediaSource streaming (primary path) ─────────────────
-// Chunks are delivered via Socket.IO and appended to a SourceBuffer.
-// This is more reliable than the HTTP /live-stream approach on mobile because:
-//  - reuses the existing WebSocket connection (no extra TCP handshake)
-//  - correct MIME type/codec is negotiated up-front
-//  - browser doesn't impose streaming-HTTP quirks on mobile networks
-// Falls back to HTTP reconnectAudio(LIVE_URL) if MediaSource is unavailable.
+// ── Live MediaSource streaming ────────────────────────────────
+// PRIMARY:  Binary WebSocket /live-ws (raw ws frames, no Socket.IO overhead,
+//           TCP_NODELAY, per-connection backpressure, 120-chunk ring buffer,
+//           AudioWorklet jitter buffer for gapless playback)
+// FALLBACK: Socket.IO live:audio events (legacy path, still supported)
+// LAST:     HTTP /live-stream if MediaSource is unavailable (old mobile)
 let liveMimeType  = 'audio/webm;codecs=opus'; // actual mimeType from admin's MediaRecorder
 let _liveMS       = null;     // MediaSource instance
 let _liveSB       = null;     // SourceBuffer
 let _livePending  = [];       // chunks queued before SourceBuffer is ready
 let _liveUseMS    = false;    // true = using MediaSource; false = HTTP /live-stream fallback
 let _liveMSObjUrl = null;     // ObjectURL to revoke on cleanup
+
+// ── Binary WebSocket live transport ──────────────────────────
+// Frame protocol: [type:1][seq:4 LE][ts:8 LE][payload...]
+// Types: 0x01=HELLO, 0x02=INIT, 0x03=AUDIO, 0x04=ENDED, 0x05=PING, 0x06=PONG
+const LWS_HELLO = 0x01, LWS_INIT = 0x02, LWS_AUDIO = 0x03,
+      LWS_ENDED = 0x04, LWS_PING  = 0x05, LWS_PONG  = 0x06;
+const LWS_HDR   = 13; // header size in bytes
+let   _lws      = null;  // WebSocket to /live-ws
+let   _lwsTimer = null;  // reconnect timer
+let   _lwsSeq   = 0;     // last received sequence number
+let   _lwsRtt   = null;  // latest RTT measurement (ms)
+let   _lwsPingTs = 0;    // client timestamp when last ping was sent
+
+// ── AudioWorklet (live-stream-processor) ─────────────────────
+// Runs in the audio rendering thread — immune to GC pauses and tab throttling.
+// Sits between createMediaElementSource() and AudioContext.destination.
+// Applies fade-in/fade-out on dropout boundaries so network glitches don't
+// produce hard clicks.
+let _liveAudioCtx  = null;  // AudioContext (created on first user gesture)
+let _liveSrcNode   = null;  // MediaElementSourceNode
+let _liveWorklet   = null;  // AudioWorkletNode
+let _liveWorkletOk = false; // true once the worklet has been loaded
 
 // ── Sermon / On-Demand state ──────────────────────────────────
 let _sermonTracks      = [];      // full list fetched from API
@@ -2940,12 +2968,14 @@ function cleanupLiveMS() {
 function _liveFlush() {
   if (!_liveSB || _liveSB.updating || _livePending.length === 0) return;
   try {
-    // Keep buffer under 30 s to prevent memory growth on long broadcasts
+    // Keep buffer lean: max 8 s ahead, remove all but last 3 s.
+    // A smaller buffer means audio.currentTime stays closer to the live edge,
+    // reducing end-to-end latency for the listener.
     if (_liveSB.buffered.length > 0) {
       const end   = _liveSB.buffered.end(_liveSB.buffered.length - 1);
       const start = _liveSB.buffered.start(0);
-      if (end - start > 30) {
-        _liveSB.remove(start, Math.max(start + 1, end - 25));
+      if (end - start > 8) {
+        _liveSB.remove(start, Math.max(start + 0.5, end - 3));
         return; // updateend will re-call _liveFlush
       }
     }
@@ -2970,6 +3000,163 @@ function _toAB(data) {
     return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
   }
   return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AudioWorklet — live-stream-processor
+// Installed once on first user gesture.  Handles smooth fade on dropout edges.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function _ensureAudioWorklet() {
+  if (_liveWorkletOk) return true;
+  try {
+    if (!_liveAudioCtx) {
+      _liveAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (_liveAudioCtx.state === 'suspended') await _liveAudioCtx.resume();
+    await _liveAudioCtx.audioWorklet.addModule('/live-worklet.js');
+    _liveWorkletOk = true;
+    console.log('[LiveWS] AudioWorklet loaded ✓');
+    return true;
+  } catch (e) {
+    console.warn('[LiveWS] AudioWorklet unavailable:', e.message);
+    return false;
+  }
+}
+
+function _connectWorkletToAudio() {
+  if (!_liveWorkletOk || !_liveAudioCtx || _liveSrcNode) return;
+  try {
+    _liveSrcNode = _liveAudioCtx.createMediaElementSource(audio);
+    _liveWorklet = new AudioWorkletNode(_liveAudioCtx, 'live-stream-processor');
+
+    _liveWorklet.port.onmessage = ({ data }) => {
+      if (!data) return;
+      if (data.type === 'dropout-end') {
+        console.debug(`[LiveWorklet] dropout ${Math.round(data.durationMs)} ms`);
+      } else if (data.type === 'stats') {
+        const el = document.getElementById('live-rtt-display');
+        if (el && _lwsRtt !== null) el.textContent = `${Math.round(_lwsRtt)} ms`;
+      }
+    };
+
+    _liveSrcNode.connect(_liveWorklet);
+    _liveWorklet.connect(_liveAudioCtx.destination);
+    console.log('[LiveWS] AudioWorklet graph connected ✓');
+  } catch (e) {
+    console.warn('[LiveWS] AudioWorklet graph error:', e.message);
+    if (_liveSrcNode) {
+      try { _liveSrcNode.connect(_liveAudioCtx.destination); } catch (_) {}
+    }
+  }
+}
+
+function _disconnectWorklet() {
+  try { if (_liveWorklet) { _liveWorklet.disconnect(); _liveWorklet.port.postMessage({ type: 'reset' }); } } catch (_) {}
+  try { if (_liveSrcNode) _liveSrcNode.disconnect(); } catch (_) {}
+  _liveWorklet = null;
+  _liveSrcNode = null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Binary WebSocket /live-ws — high-performance audio transport
+// ─────────────────────────────────────────────────────────────────────────────
+
+function _lwsUrl() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  return `${proto}://${location.host}/live-ws`;
+}
+
+function _lwsMakePing() {
+  const buf = new ArrayBuffer(1 + 8);
+  const dv  = new DataView(buf);
+  dv.setUint8(0, LWS_PING);
+  const now = Date.now();
+  dv.setUint32(1, Math.floor(now / 0x100000000) >>> 0, false);
+  dv.setUint32(5, now >>> 0, false);
+  return buf;
+}
+
+function _lwsConnect() {
+  if (_lws && (_lws.readyState === WebSocket.OPEN || _lws.readyState === WebSocket.CONNECTING)) return;
+  if (_lwsTimer) { clearTimeout(_lwsTimer); _lwsTimer = null; }
+  try {
+    _lws = new WebSocket(_lwsUrl());
+    _lws.binaryType = 'arraybuffer';
+  } catch (e) {
+    console.warn('[LiveWS] Could not open binary WS:', e.message);
+    return;
+  }
+
+  _lws.onopen = () => {
+    console.log('[LiveWS] Binary WebSocket connected ✓');
+    _lwsSeq = 0;
+    _lwsPingLoop();
+  };
+
+  _lws.onmessage = ({ data }) => {
+    if (!(data instanceof ArrayBuffer) || data.byteLength < 1) return;
+    const dv   = new DataView(data);
+    const type = dv.getUint8(0);
+
+    if (type === LWS_HELLO) {
+      try {
+        const json = JSON.parse(new TextDecoder().decode(new Uint8Array(data, LWS_HDR)));
+        if (json.mimeType) liveMimeType = json.mimeType;
+      } catch (_) {}
+      return;
+    }
+    if (type === LWS_PONG && data.byteLength >= 9) {
+      const hi = dv.getUint32(1, false);
+      const lo = dv.getUint32(5, false);
+      _lwsRtt  = Date.now() - (hi * 0x100000000 + lo);
+      const el = document.getElementById('live-rtt-display');
+      if (el) el.textContent = `${Math.round(_lwsRtt)} ms`;
+      return;
+    }
+    if (type === LWS_ENDED) {
+      if (isLive) exitLiveMode();
+      return;
+    }
+    // INIT or AUDIO chunk → MediaSource pipeline
+    if ((type === LWS_INIT || type === LWS_AUDIO) && isLive && _liveUseMS) {
+      if (data.byteLength > LWS_HDR) {
+        const payload = data.slice(LWS_HDR);
+        if (type === LWS_INIT) {
+          _livePending.unshift(payload);
+        } else {
+          const seq = dv.getUint32(1, true);
+          if (seq > _lwsSeq) { _lwsSeq = seq; _livePending.push(payload); }
+        }
+        _liveFlush();
+      }
+    }
+  };
+
+  _lws.onclose = (ev) => {
+    console.log(`[LiveWS] Binary WS closed (${ev.code})`);
+    _lws = null;
+    if (isLive) _lwsTimer = setTimeout(_lwsConnect, 1000);
+  };
+  _lws.onerror = () => {};
+}
+
+function _lwsDisconnect() {
+  if (_lwsPingInterval) { clearInterval(_lwsPingInterval); _lwsPingInterval = null; }
+  if (_lwsTimer) { clearTimeout(_lwsTimer); _lwsTimer = null; }
+  if (_lws) { try { _lws.close(1000); } catch (_) {} _lws = null; }
+  _lwsSeq = 0;
+}
+
+let _lwsPingInterval = null;
+function _lwsPingLoop() {
+  if (_lwsPingInterval) clearInterval(_lwsPingInterval);
+  _lwsPingInterval = setInterval(() => {
+    if (!_lws || _lws.readyState !== WebSocket.OPEN) {
+      clearInterval(_lwsPingInterval); _lwsPingInterval = null; return;
+    }
+    _lws.send(_lwsMakePing());
+  }, 4000);
 }
 
 /**
@@ -3011,10 +3198,14 @@ function startLiveViaMS() {
       _liveSB.mode = 'sequence'; // browser handles timestamps automatically
       _liveSB.addEventListener('updateend', _liveFlush);
       _liveUseMS   = true;
-      // Request the stored WebM init chunk (EBML header) from the server.
-      // For a new broadcast the client will receive chunk 1 via live:audio.
-      // For a mid-broadcast join the server replies immediately with live:init.
+
+      // Request WebM init chunk (EBML header) via Socket.IO (legacy path).
+      // The binary WS server already delivers INIT on connect if live.
       socket.emit('live:request-init');
+
+      // Connect AudioWorklet graph (fade-on-dropout concealment)
+      _connectWorkletToAudio();
+
       _liveFlush(); // drain any chunks that arrived before sourceopen
     } catch(e) {
       clearTimeout(failTO);
@@ -3093,11 +3284,18 @@ function startLiveTimer() {
   _liveTimerInterval = setInterval(tick, 1000);
   const el = document.getElementById('live-timer');
   if (el) el.classList.add('visible');
+  const rttWrap = document.getElementById('live-rtt-wrap');
+  if (rttWrap) rttWrap.classList.add('visible');
 }
 function stopLiveTimer() {
   if (_liveTimerInterval) { clearInterval(_liveTimerInterval); _liveTimerInterval = null; }
   const el = document.getElementById('live-timer');
   if (el) { el.classList.remove('visible'); el.textContent = ''; }
+  const rttWrap = document.getElementById('live-rtt-wrap');
+  if (rttWrap) { rttWrap.classList.remove('visible'); }
+  const rttEl = document.getElementById('live-rtt-display');
+  if (rttEl) rttEl.textContent = '– ms';
+  _lwsRtt = null;
   _liveStartedAt = null;
 }
 
@@ -3139,6 +3337,13 @@ function switchToLiveMode(info) {
   setJoiningBadge();            // show "JOINING LIVE…" while connecting
   startLiveEdgeMonitor();       // begin buffer watch immediately
   startLiveJoinTimeout();       // retry if stream doesn't start within 10 s
+
+  // ── Connect binary WebSocket (primary fast path) ──────────────
+  _lwsConnect();
+
+  // ── Load AudioWorklet async (no await — user gesture is over) ──
+  _ensureAudioWorklet();
+
   startLiveViaMS();             // try MediaSource first; falls back to HTTP inside
   audio.play().catch(err => { if (err.name !== 'AbortError') scheduleLiveReconnect(800); });
   // Tell server this listener has joined live — used for live-listener count display in admin
@@ -3169,6 +3374,9 @@ function exitLiveMode() {
   stopLiveTimer();
   // Tell server this listener is no longer in live mode
   socket.emit('live:leave');
+  // Disconnect binary WebSocket and AudioWorklet
+  _lwsDisconnect();
+  _disconnectWorklet();
   // Use setStatusBadge so hero-dot, hero-status, and progress bar are all
   // updated correctly.  Show ON AIR if already playing, OFFLINE if not.
   setStatusBadge(isPlaying);
@@ -3361,6 +3569,9 @@ function startPlayback() {
     requestWakeLock();
     startLiveEdgeMonitor();
     startLiveJoinTimeout();
+    // Connect binary WebSocket and pre-load AudioWorklet
+    _lwsConnect();
+    _ensureAudioWorklet();
     // startLiveViaMS() sets audio.src synchronously; play() is called here
     // inside the onclick user-gesture context — required by iOS Safari.
     startLiveViaMS();
@@ -3471,24 +3682,30 @@ function startLiveEdgeMonitor() {
     try {
       const bufEnd = audio.buffered.end(audio.buffered.length - 1);
       const ahead  = bufEnd - audio.currentTime;
-      if (ahead > 2.5) {
-        // Behind the live edge — speed up to catch up (max +6%)
-        audio.playbackRate = Math.min(1.06, 1 + (ahead - 1.5) * 0.025);
-      } else if (ahead < 0.6) {
-        // Buffer running thin — ease back to prevent stutter
-        audio.playbackRate = 0.99;
+
+      if (ahead > 4.0) {
+        // We are >4 s behind the live edge — hard-snap to 1 s behind edge
+        // (seamless: SourceBuffer mode='sequence' lets us jump without gaps)
+        audio.currentTime = Math.max(audio.currentTime, bufEnd - 1.0);
+        audio.playbackRate = 1.0;
+      } else if (ahead > 1.8) {
+        // Moderately behind — speed up gradually (max +8%)
+        audio.playbackRate = Math.min(1.08, 1 + (ahead - 1.0) * 0.04);
+      } else if (ahead < 0.4 && !audio.paused) {
+        // Buffer running thin — slow down slightly to avoid stutter
+        audio.playbackRate = 0.97;
       } else {
         audio.playbackRate = 1.0;
       }
+
       // Update the live delay indicator
       const delayEl = document.getElementById('live-delay-label');
       if (delayEl) {
-        const secs = Math.round(ahead);
         delayEl.style.display = 'block';
-        delayEl.textContent   = `~${secs}s live delay`;
+        delayEl.textContent   = ahead < 0.5 ? 'live edge' : `~${Math.round(ahead)}s delay`;
       }
     } catch(_) {}
-  }, 1000);
+  }, 500); // check twice per second for tighter latency control
 }
 
 function stopLiveEdgeMonitor() {
