@@ -13,7 +13,13 @@ let _io = null;
 function setIo(ioInstance) { _io = ioInstance; }
 
 // ── Chat rate-limit: IP -> last message timestamp ────────────────────────────
+// Periodically prune stale entries so the Map doesn't grow unbounded on
+// long-running servers with many unique IPs.
 const chatRateMap = new Map();
+setInterval(() => {
+  const cutoff = Date.now() - 60_000; // drop entries older than 60 s
+  for (const [ip, ts] of chatRateMap) if (ts < cutoff) chatRateMap.delete(ip);
+}, 60_000);
 
 // --- MULTER SETUP ---
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
@@ -297,9 +303,13 @@ router.get('/planning', (req, res) => {
 router.post('/planning', (req, res) => {
   const { day_of_week, start_time, end_time, content_type, content_id, content_name, color, play_order, play_at_fixed_time, repeat_weekly } = req.body;
   
-  // Validate no overlap
+  // Validate no overlap.
+  // Logic: two intervals [A.start, A.end) and [B.start, B.end) overlap when
+  //   NOT (A.end <= B.start OR A.start >= B.end)
+  // Using <= / >= here correctly allows back-to-back slots (e.g. 08:00–10:00
+  // followed by 10:00–12:00) to coexist without being flagged as overlapping.
   const overlap = db.prepare(`
-    SELECT id FROM planning 
+    SELECT id FROM planning
     WHERE day_of_week = ? AND NOT (end_time <= ? OR start_time >= ?)
   `).get(day_of_week, start_time, end_time);
   

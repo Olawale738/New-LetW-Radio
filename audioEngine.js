@@ -8,9 +8,12 @@ const ICY_METAINT = 8192;
 
 function buildIcyMeta(track) {
   if (!track) return Buffer.alloc(1);
-  // Truncate title to ICY spec maximum (255 × 16 = 4080 bytes) to prevent RangeError
-  const title = [track.artist, track.title].filter(Boolean).join(' - ').slice(0, 3900);
-  const raw = `StreamTitle='${title.replace(/'/g, '')}';`;
+  // Truncate to ICY spec maximum (255 × 16 = 4080 bytes) to prevent RangeError.
+  // Replace non-latin1 characters (emoji, CJK, etc.) with '?' so the metadata
+  // string encodes correctly in latin1 without corruption.
+  const rawTitle = [track.artist, track.title].filter(Boolean).join(' - ').slice(0, 3900);
+  const title = rawTitle.replace(/[^\x00-\xFF]/g, '?').replace(/'/g, '');
+  const raw = `StreamTitle='${title}';`;
   const padded = raw.padEnd(Math.ceil(raw.length / 16) * 16, '\0');
   const lenByte = padded.length / 16;
   const buf = Buffer.alloc(1 + padded.length);
@@ -331,15 +334,18 @@ class AudioEngine extends EventEmitter {
       const myGeneration = this._playGeneration; // capture for closure guard
       let   offset       = 0;
 
+      let fdClosed = false;
+      const closeFd = () => { if (!fdClosed) { fdClosed = true; try { fs.closeSync(fd); } catch (e) {} } };
+
       const readAndBroadcast = () => {
         // Guard: if a newer track has started, close our fd and stop
         if (!this.isPlaying || this.isLive || this._playGeneration !== myGeneration) {
-          try { fs.closeSync(fd); } catch (e) {}
+          closeFd();
           return;
         }
         const remaining = totalBytes - offset;
         if (remaining <= 0) {
-          try { fs.closeSync(fd); } catch (e) {}
+          closeFd();
           this.emit('trackEnd', track);
           this.emit('historyAdd', track.id);
           this.playNext();
@@ -351,7 +357,7 @@ class AudioEngine extends EventEmitter {
           const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
           if (bytesRead === 0) {
             // End of file reached unexpectedly
-            try { fs.closeSync(fd); } catch (e) {}
+            closeFd();
             this.emit('trackEnd', track);
             this.emit('historyAdd', track.id);
             this.playNext();
@@ -363,7 +369,7 @@ class AudioEngine extends EventEmitter {
           this.broadcast(chunk);
         } catch (e) {
           console.error('[AudioEngine] Read error:', e.message);
-          try { fs.closeSync(fd); } catch {}
+          closeFd();
           this.isPlaying = false;
           this.playNext();
           return;

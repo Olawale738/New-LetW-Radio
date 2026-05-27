@@ -1256,17 +1256,20 @@
           <div class="form-row">
             <div class="form-group">
               <label class="form-label">Broadcast Title</label>
-              <input class="form-control" id="live-title" placeholder="e.g. Sunday Service" value="Live Service">
+              <input class="form-control" id="live-title" placeholder="e.g. Sunday Service" value="Live Service"
+                oninput="localStorage.setItem('letw_live_title',this.value)">
             </div>
             <div class="form-group">
               <label class="form-label">Speaker / Artist</label>
-              <input class="form-control" id="live-artist" placeholder="e.g. Pastor Name" value="Light Encounter Tabernacle Worldwide">
+              <input class="form-control" id="live-artist" placeholder="e.g. Pastor Name" value="Light Encounter Tabernacle Worldwide"
+                oninput="localStorage.setItem('letw_live_artist',this.value)">
             </div>
           </div>
 
           <!-- Record toggle (opt-in: must check to save broadcast) -->
           <div style="margin-bottom:14px;padding:10px 14px;background:rgba(76,175,130,0.05);border:1px solid rgba(76,175,130,0.2);border-radius:10px;display:flex;align-items:center;gap:10px;">
-            <input type="checkbox" id="live-record-check" style="accent-color:#4caf82;width:16px;height:16px;cursor:pointer;flex-shrink:0;">
+            <input type="checkbox" id="live-record-check" style="accent-color:#4caf82;width:16px;height:16px;cursor:pointer;flex-shrink:0;"
+              onchange="localStorage.setItem('letw_live_record',this.checked?'1':'0')">
             <div>
               <div style="font-size:12px;font-weight:700;color:var(--text);letter-spacing:0.3px;">🔴 Save recording to Library</div>
               <div style="font-size:10px;color:var(--text3);margin-top:2px;">When checked, the broadcast is automatically saved to the Recordings tray after you stop.</div>
@@ -1300,20 +1303,30 @@
               <span id="live-gain-display" style="font-size:11px;color:var(--gold);font-family:var(--mono);font-weight:700;">400%</span>
             </div>
             <input type="range" id="live-gain-slider" min="1" max="15" step="0.1" value="4"
-              oninput="updateLiveGain(this.value)"
+              oninput="updateLiveGain(this.value);localStorage.setItem('letw_live_gain',this.value)"
               style="width:100%;accent-color:var(--gold);cursor:pointer;">
             <div style="font-size:10px;color:rgba(212,168,67,0.45);margin-top:4px;">Raise until voice is clearly loud. Lower only if it sounds distorted.</div>
           </div>
 
           <!-- Voice EQ (Bass / Presence / Soprano) -->
           <div style="margin-bottom:16px;padding:12px 14px;background:rgba(212,168,67,0.04);border:1px solid rgba(212,168,67,0.18);border-radius:10px;">
-            <div style="font-size:11px;font-weight:700;color:var(--text);letter-spacing:0.5px;margin-bottom:12px;">🎚 Voice EQ</div>
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
+              <div style="font-size:11px;font-weight:700;color:var(--text);letter-spacing:0.5px;">🎚 Voice EQ</div>
+              <div style="display:flex;gap:5px;flex-wrap:wrap;">
+                <button onclick="applyEqPreset('sermon')"
+                  style="font-size:9px;padding:3px 8px;border-radius:10px;border:1px solid rgba(212,168,67,0.35);background:rgba(212,168,67,0.07);color:var(--text2);cursor:pointer;letter-spacing:0.5px;font-family:inherit;" title="Warm, intimate tone for preaching">⛪ Sermon</button>
+                <button onclick="applyEqPreset('standard')"
+                  style="font-size:9px;padding:3px 8px;border-radius:10px;border:1px solid rgba(212,168,67,0.35);background:rgba(212,168,67,0.07);color:var(--text2);cursor:pointer;letter-spacing:0.5px;font-family:inherit;" title="Balanced radio voice">📻 Standard</button>
+                <button onclick="applyEqPreset('announce')"
+                  style="font-size:9px;padding:3px 8px;border-radius:10px;border:1px solid rgba(212,168,67,0.35);background:rgba(212,168,67,0.07);color:var(--text2);cursor:pointer;letter-spacing:0.5px;font-family:inherit;" title="Crisp, cut-through clarity for announcements">📣 Announce</button>
+              </div>
+            </div>
 
             <!-- Bass -->
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
               <span style="font-size:10px;color:var(--text3);width:64px;letter-spacing:1px;text-transform:uppercase;flex-shrink:0;">🔉 Bass</span>
               <input type="range" id="live-bass-slider" min="-6" max="12" step="0.5" value="4"
-                oninput="updateLiveBass(this.value)"
+                oninput="updateLiveBass(this.value);localStorage.setItem('letw_live_bass',this.value)"
                 style="flex:1;accent-color:#4a9fd4;cursor:pointer;">
               <span id="live-bass-display" style="font-size:11px;color:#4a9fd4;width:36px;text-align:right;font-family:var(--mono);font-weight:700;">+4dB</span>
             </div>
@@ -1322,7 +1335,7 @@
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
               <span style="font-size:10px;color:var(--text3);width:64px;letter-spacing:1px;text-transform:uppercase;flex-shrink:0;">✨ Clarity</span>
               <input type="range" id="live-presence-slider" min="-6" max="12" step="0.5" value="5"
-                oninput="updateLivePresence(this.value)"
+                oninput="updateLivePresence(this.value);localStorage.setItem('letw_live_presence',this.value)"
                 style="flex:1;accent-color:#d4a843;cursor:pointer;">
               <span id="live-presence-display" style="font-size:11px;color:var(--gold);width:36px;text-align:right;font-family:var(--mono);font-weight:700;">+5dB</span>
             </div>
@@ -1331,7 +1344,7 @@
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
               <span style="font-size:10px;color:var(--text3);width:64px;letter-spacing:1px;text-transform:uppercase;flex-shrink:0;">🎵 Treble</span>
               <input type="range" id="live-treble-slider" min="-6" max="12" step="0.5" value="3"
-                oninput="updateLiveTreble(this.value)"
+                oninput="updateLiveTreble(this.value);localStorage.setItem('letw_live_treble',this.value)"
                 style="flex:1;accent-color:#9b6fd4;cursor:pointer;">
               <span id="live-treble-display" style="font-size:11px;color:#9b6fd4;width:36px;text-align:right;font-family:var(--mono);font-weight:700;">+3dB</span>
             </div>
@@ -1343,7 +1356,8 @@
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
               <div style="font-size:11px;font-weight:700;color:var(--text);letter-spacing:0.5px;">🔕 Noise Filter</div>
               <label style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">
-                <input type="checkbox" id="live-noise-toggle" checked onchange="toggleNoiseFilter(this.checked)"
+                <input type="checkbox" id="live-noise-toggle" checked
+                  onchange="toggleNoiseFilter(this.checked);localStorage.setItem('letw_live_noise_on',this.checked?'1':'0')"
                   style="accent-color:#4caf82;width:15px;height:15px;cursor:pointer;">
                 <span id="live-noise-label" style="font-size:11px;color:#4caf82;font-weight:700;min-width:24px;">ON</span>
               </label>
@@ -1351,7 +1365,7 @@
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
               <span style="font-size:10px;color:var(--text3);white-space:nowrap;letter-spacing:1px;text-transform:uppercase;">Strength</span>
               <input type="range" id="live-noise-threshold" min="1" max="100" value="30"
-                oninput="updateNoiseThreshold(this.value)"
+                oninput="updateNoiseThreshold(this.value);localStorage.setItem('letw_live_noise_thresh',this.value)"
                 style="flex:1;accent-color:#4caf82;cursor:pointer;">
               <span id="live-noise-level" style="font-size:11px;color:var(--text3);min-width:30px;text-align:right;font-family:var(--mono);">30%</span>
             </div>
@@ -2854,10 +2868,69 @@ function initGoLivePage() {
   if (!livePageInited) {
     refreshMics();
     livePageInited = true;
+    restoreLiveSettings();
   }
   // Update listener count display
   const lc = document.getElementById('listener-count');
   if (lc) document.getElementById('live-listener-count').textContent = lc.textContent;
+}
+
+// Restore EQ/gain/noise/title settings from localStorage
+function restoreLiveSettings() {
+  const set = (id, key, fallback) => {
+    const v = localStorage.getItem(key);
+    const el = document.getElementById(id);
+    if (el && v !== null) el.value = v;
+    return v !== null ? v : fallback;
+  };
+  // Broadcast info
+  const title  = localStorage.getItem('letw_live_title');
+  const artist = localStorage.getItem('letw_live_artist');
+  if (title)  document.getElementById('live-title').value  = title;
+  if (artist) document.getElementById('live-artist').value = artist;
+  // Recording checkbox
+  const rec = localStorage.getItem('letw_live_record');
+  if (rec !== null) document.getElementById('live-record-check').checked = rec === '1';
+  // Gain
+  const gain = set('live-gain-slider', 'letw_live_gain', '4');
+  document.getElementById('live-gain-display').textContent = Math.round(parseFloat(gain) * 100) + '%';
+  // EQ
+  const bass = set('live-bass-slider', 'letw_live_bass', '4');
+  document.getElementById('live-bass-display').textContent     = (parseFloat(bass) >= 0 ? '+' : '') + parseFloat(bass) + 'dB';
+  const pres = set('live-presence-slider', 'letw_live_presence', '5');
+  document.getElementById('live-presence-display').textContent = (parseFloat(pres) >= 0 ? '+' : '') + parseFloat(pres) + 'dB';
+  const treb = set('live-treble-slider', 'letw_live_treble', '3');
+  document.getElementById('live-treble-display').textContent   = (parseFloat(treb) >= 0 ? '+' : '') + parseFloat(treb) + 'dB';
+  // Noise filter
+  const noiseOn = localStorage.getItem('letw_live_noise_on');
+  if (noiseOn !== null) {
+    document.getElementById('live-noise-toggle').checked = noiseOn !== '0';
+    const label = document.getElementById('live-noise-label');
+    if (label) { label.textContent = noiseOn !== '0' ? 'ON' : 'OFF'; label.style.color = noiseOn !== '0' ? '#4caf82' : 'var(--text3)'; }
+  }
+  const noiseThresh = set('live-noise-threshold', 'letw_live_noise_thresh', '30');
+  document.getElementById('live-noise-level').textContent = noiseThresh + '%';
+}
+
+// EQ quick presets
+const EQ_PRESETS = {
+  standard: { gain: 8,  bass: 4, presence: 5, treble: 3, noise: 30 },  // balanced radio voice
+  sermon:   { gain: 10, bass: 6, presence: 4, treble: 1, noise: 25 },  // warm, intimate preaching
+  announce: { gain: 8,  bass: 2, presence: 8, treble: 5, noise: 35 },  // crisp announcement
+};
+
+function applyEqPreset(name) {
+  const p = EQ_PRESETS[name];
+  if (!p) return;
+  const snap = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) { el.value = val; el.dispatchEvent(new Event('input')); }
+  };
+  snap('live-gain-slider',      p.gain);
+  snap('live-bass-slider',      p.bass);
+  snap('live-presence-slider',  p.presence);
+  snap('live-treble-slider',    p.treble);
+  snap('live-noise-threshold',  p.noise);
 }
 
 async function refreshMics() {

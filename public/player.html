@@ -1766,6 +1766,7 @@ let likeDebounce    = false;  // prevent double-tap likes
 let crossfadeRAF    = null;   // animation frame for volume crossfade
 let crossfadeSecs   = 3;      // default; updated from trackWillEnd event
 let flashAlertTimer = null;   // auto-dismiss timer for flash alerts
+let _liveJoinTO     = null;   // timeout: if live audio doesn't start in 10 s, retry
 
 // ── Username ──────────────────────────────────────────────────
 function getUsername() {
@@ -2019,8 +2020,9 @@ function switchToLiveMode(info) {
   //  store only 1 chunk as the init segment.)
   clearTimeout(window._liveConnectTO);
   window._liveConnectTO = setTimeout(() => {
-    setJoiningBadge();       // show "JOINING LIVE…" while connecting
-    startLiveEdgeMonitor();  // begin buffer watch immediately
+    setJoiningBadge();           // show "JOINING LIVE…" while connecting
+    startLiveEdgeMonitor();      // begin buffer watch immediately
+    startLiveJoinTimeout();      // retry if stream doesn't start within 10 s
     reconnectAudio(LIVE_URL);
   }, 400);
 }
@@ -2032,6 +2034,7 @@ function exitLiveMode() {
   document.getElementById('panel-shimmer').classList.remove('live');
   hideLiveJoinBanner();
   stopLiveEdgeMonitor();
+  clearLiveJoinTimeout();
   // Use setStatusBadge so hero-dot, hero-status, and progress bar are all
   // updated correctly.  Show ON AIR if already playing, OFFLINE if not.
   setStatusBadge(isPlaying);
@@ -2050,8 +2053,9 @@ audio.addEventListener('playing', () => {
   document.getElementById('play-icon').textContent = '⏸';
   document.getElementById('play-btn').classList.add('playing');
   if (isLive) {
-    // Transition from "JOINING LIVE…" / "live-reconnecting" to "LIVE BROADCAST"
-    // setStatusBadge() returns early during live mode, so we set it directly.
+    // Audio connected — cancel join timeout and set the LIVE badge.
+    // setStatusBadge() returns early in live mode, so set directly.
+    clearLiveJoinTimeout();
     const badge = document.getElementById('status-badge');
     const text  = document.getElementById('status-text');
     if (badge) badge.className = 'status-badge live';
@@ -2095,7 +2099,21 @@ audio.addEventListener('waiting', () => {
 
 // stalled = browser stopped fetching data even though more is expected
 audio.addEventListener('stalled', () => {
-  if (isPlaying || isLive) scheduleReconnect();
+  if (isLive) {
+    // Same fast-reconnect path as 'error' — live streams can't afford
+    // the exponential back-off of the regular scheduleReconnect().
+    clearTimeout(reconnectTO);
+    clearStallTimer();
+    const badge = document.getElementById('status-badge');
+    const text  = document.getElementById('status-text');
+    if (badge) badge.className = 'status-badge live-reconnecting';
+    if (text)  text.textContent = 'RECONNECTING';
+    reconnectTO = setTimeout(() => {
+      if (isLive) { audio.src = LIVE_URL; audio.load(); audio.play().catch(() => scheduleReconnect()); }
+    }, 800);
+  } else if (isPlaying) {
+    scheduleReconnect();
+  }
 });
 
 // ended = stream closed by the server (admin stopped OR network hiccup).
@@ -2174,6 +2192,7 @@ function startPlayback() {
     hideLiveJoinBanner();
     setJoiningBadge();
     startLiveEdgeMonitor();
+    startLiveJoinTimeout();
   }
 
   if (!audio.src || audio.src === window.location.href) {
@@ -2289,6 +2308,29 @@ function stopLiveEdgeMonitor() {
   try { audio.playbackRate = 1.0; } catch(_) {}
   const delayEl = document.getElementById('live-delay-label');
   if (delayEl) { delayEl.style.display = 'none'; delayEl.textContent = ''; }
+}
+
+// ── Live join timeout ─────────────────────────────────────────
+// If the live stream hasn't fired 'playing' within 10 s of the user tapping
+// "Join Live" / Play, the connection may be hanging.  Automatically retry once
+// and show a feedback badge so the user knows what's happening.
+function startLiveJoinTimeout() {
+  clearLiveJoinTimeout();
+  _liveJoinTO = setTimeout(() => {
+    if (isLive && !isPlaying) {
+      const badge = document.getElementById('status-badge');
+      const text  = document.getElementById('status-text');
+      if (badge) badge.className = 'status-badge live-reconnecting';
+      if (text)  text.textContent = 'RETRYING…';
+      // Auto-retry — if it succeeds, 'playing' will clear the badge
+      audio.src = LIVE_URL;
+      audio.load();
+      audio.play().catch(() => scheduleReconnect());
+    }
+  }, 10000);
+}
+function clearLiveJoinTimeout() {
+  if (_liveJoinTO) { clearTimeout(_liveJoinTO); _liveJoinTO = null; }
 }
 
 // ── Join-live banner ──────────────────────────────────────────
@@ -2915,16 +2957,23 @@ function appendChatMessage(msg, scroll) {
     el.classList.add('system');
     el.innerHTML = '<div class="chat-text">' + esc(msg.message) + '</div>';
   } else {
-    const color = msg.color || userColor(msg.username || '');
+    const rawColor = msg.color || userColor(msg.username || '');
+    // Validate: accept only #rrggbb / #rgb hex — never inject raw strings into style
+    const color = /^#[0-9a-fA-F]{3,6}$/.test(rawColor) ? rawColor : '#d4a843';
     const d     = msg.created_at ? new Date(msg.created_at) : new Date();
     const time  = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     el.innerHTML =
       '<div class="chat-msg-header">' +
-        '<span class="chat-user-dot" style="background:' + color + '"></span>' +
-        '<span class="chat-username" style="color:' + color + '">' + esc(msg.username) + '</span>' +
+        '<span class="chat-user-dot"></span>' +
+        '<span class="chat-username">' + esc(msg.username) + '</span>' +
         '<span class="chat-time">' + time + '</span>' +
       '</div>' +
       '<div class="chat-text">' + esc(msg.message) + '</div>';
+    // Apply colour via DOM property — never via inline style string injection
+    const dot  = el.querySelector('.chat-user-dot');
+    const name = el.querySelector('.chat-username');
+    if (dot)  dot.style.background = color;
+    if (name) name.style.color     = color;
   }
 
   list.appendChild(el);
@@ -3116,7 +3165,14 @@ async function releaseWakeLock() {
   if (wakeLock) { try { await wakeLock.release(); } catch(e) {} wakeLock = null; }
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && isPlaying) requestWakeLock();
+  if (document.visibilityState === 'visible') {
+    if (isPlaying) requestWakeLock();
+    // Resume the visualizer that was paused to save battery
+    if ((isPlaying || isLive) && !vizRaf && analyser) drawAnalyserBars();
+  } else {
+    // Tab hidden — pause canvas animation to reduce CPU/battery drain
+    if (vizRaf) { cancelAnimationFrame(vizRaf); vizRaf = null; }
+  }
 });
 
 // ── Media Session ─────────────────────────────────────────────
@@ -3127,26 +3183,7 @@ function setupMediaSession() {
   navigator.mediaSession.setActionHandler('stop',  () => stopPlayback());
 }
 
-// ── Keyboard Shortcuts ────────────────────────────────────────
-document.addEventListener('keydown', e => {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-  if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
-  if (e.code === 'KeyM')  { toggleMute(); }
-  if (e.code === 'ArrowUp') {
-    currentVolume = Math.min(1, currentVolume + 0.05);
-    volSlider.value = currentVolume;
-    audio.volume = isMuted ? 0 : currentVolume;
-    localStorage.setItem('letw_volume', currentVolume);
-    updateVolIcon();
-  }
-  if (e.code === 'ArrowDown') {
-    currentVolume = Math.max(0, currentVolume - 0.05);
-    volSlider.value = currentVolume;
-    audio.volume = isMuted ? 0 : currentVolume;
-    localStorage.setItem('letw_volume', currentVolume);
-    updateVolIcon();
-  }
-});
+// (Keyboard shortcuts defined further below — Space/M/↑/↓/Escape)
 
 document.addEventListener('click', e => {
   if (!e.target.closest('.sleep-wrap')) {

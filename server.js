@@ -23,6 +23,13 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Segun123@';
 
+// Warn operators who haven't set a custom password via environment variable.
+// The hardcoded fallback is only acceptable in local-dev; production deployments
+// must set ADMIN_PASSWORD so the admin dashboard isn't publicly accessible.
+if (!process.env.ADMIN_PASSWORD) {
+  console.warn('\x1b[33m[Security] ADMIN_PASSWORD env var is not set — using insecure default. Set it in your environment before deploying!\x1b[0m');
+}
+
 // ── Live recording state (opt-in; only active when admin checks "Record") ──────
 let liveRecordingEnabled = false;
 let liveRecordingStream  = null;
@@ -934,11 +941,11 @@ io.on('connection', (socket) => {
       stream.end(() => {
         try {
           const stat = fs.statSync(file);
-          if (stat.size > 10000) { // must be at least 10 KB to be valid
+          if (stat.size > 50000) { // must be at least 50 KB (~3 s at 128 kbps) to be worth keeping
             const id       = uuidv4();
-            const duration = Math.floor(stat.size / 12000); // ~12 KB/s at 96 kbps Opus
+            const duration = Math.floor(stat.size / 16000); // ~16 KB/s at 128 kbps Opus
             db.prepare(`INSERT INTO tracks (id, title, artist, duration, file_path, file_size, bitrate, tray) VALUES (?,?,?,?,?,?,?,?)`)
-              .run(id, rtitle, rartist, duration, file, stat.size, 96, 'recordings');
+              .run(id, rtitle, rartist, duration, file, stat.size, 128, 'recordings');
             console.log(`[Live] Recording saved to library: "${rtitle}" (${duration}s)`);
           } else {
             try { fs.unlinkSync(file); } catch(e) {}
