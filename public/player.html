@@ -1920,8 +1920,12 @@ socket.on('live:audio', (data) => {
   if (!buf) return;
   _livePending.push(buf);
   _liveFlush();
-  // Resume if paused (e.g. after a brief stall once we have data again)
-  if (_liveUseMS && audio.paused && !reconnectTO) {
+  // If the audio element is paused but we have a SourceBuffer ready,
+  // nudge play() — handles the case where the initial play() call was
+  // rejected before data arrived, or after a silent resume from stall.
+  // Guard with !reconnectTO so we don't interfere while a reconnect
+  // timer is pending (it will call audio.play() itself when it fires).
+  if (_liveUseMS && !_liveSB?.updating && audio.paused && !reconnectTO) {
     audio.play().catch(() => {});
   }
 });
@@ -2053,20 +2057,19 @@ function setSignal(val) {
 
 /** Release all MediaSource resources for the live stream. */
 function cleanupLiveMS() {
-  _liveUseMS    = false;
-  _livePending  = [];
+  _liveUseMS   = false;
+  _livePending = [];
   if (_liveSB) {
     try { _liveSB.abort(); } catch(_) {}
     _liveSB = null;
   }
-  if (_liveMS) {
-    try { if (_liveMS.readyState === 'open') _liveMS.endOfStream(); } catch(_) {}
-    _liveMS = null;
-  }
-  if (_liveMSObjUrl) {
-    try { URL.revokeObjectURL(_liveMSObjUrl); } catch(_) {}
-    _liveMSObjUrl = null;
-  }
+  // Do NOT call endOfStream() — it would fire 'ended' on the audio element
+  // and kick off a second competing reconnect loop.  Just orphan the object
+  // and let GC collect it.
+  _liveMS = null;
+  // ObjectURL is revoked by startLiveViaMS() when it creates a replacement,
+  // or by the final call in exitLiveMode().  Don't revoke here to avoid
+  // the audio element briefly pointing to a dead blob URL.
 }
 
 /** Drain one pending chunk into the SourceBuffer (called after each updateend). */
@@ -2121,7 +2124,14 @@ function startLiveViaMS() {
 
   cleanupLiveMS();
 
-  _liveMS       = new MediaSource();
+  _liveMS = new MediaSource();
+
+  // Revoke the OLD ObjectURL now that audio.src is about to change.
+  // Revoking before setting audio.src to the new URL ensures the element
+  // never points to the dead blob for even one tick.
+  if (_liveMSObjUrl) {
+    try { URL.revokeObjectURL(_liveMSObjUrl); } catch(_) {}
+  }
   _liveMSObjUrl = URL.createObjectURL(_liveMS);
 
   // Fall back to HTTP if sourceopen doesn't fire within 5 s
@@ -2159,16 +2169,32 @@ function startLiveViaMS() {
  * Schedule a live-stream reconnect with the live-red "RECONNECTING" badge.
  * Unlike scheduleReconnect() there is no exponential back-off — live streams
  * recover as fast as possible.
+ *
+ * Resets the play-button state immediately so the UI never shows ⏸ while
+ * audio is actually disconnected.
  */
 function scheduleLiveReconnect(delayMs) {
   clearTimeout(reconnectTO);
   clearStallTimer();
-  reconnectTO = null;
+
+  // Immediately reflect the disconnected state in the UI.
+  // (The 'pause' event will also fire later but we want instant feedback.)
+  isPlaying = false;
+  const playIcon = document.getElementById('play-icon');
+  const playBtn  = document.getElementById('play-btn');
+  if (playIcon) playIcon.textContent = '▶';
+  if (playBtn)  playBtn.classList.remove('playing');
+  releaseWakeLock();
+  if (vizRaf) { cancelAnimationFrame(vizRaf); vizRaf = null; }
+  drawIdleVisualizer();
+
   const badge = document.getElementById('status-badge');
   const text  = document.getElementById('status-text');
   if (badge) badge.className = 'status-badge live-reconnecting';
   if (text)  text.textContent = 'RECONNECTING';
+
   reconnectTO = setTimeout(() => {
+    reconnectTO = null;          // ← clear so keepalive / live:audio resume work
     if (!isLive) return;
     setJoiningBadge();
     cleanupLiveMS();
@@ -2227,7 +2253,19 @@ function exitLiveMode() {
   hideLiveJoinBanner();
   stopLiveEdgeMonitor();
   clearLiveJoinTimeout();
-  cleanupLiveMS();   // release MediaSource + SourceBuffer
+  clearTimeout(reconnectTO); reconnectTO = null;
+  clearStallTimer();
+  // cleanupLiveMS clears the state; we also need to revoke the ObjectURL
+  // and clear audio.src when leaving live mode permanently.
+  cleanupLiveMS();
+  if (_liveMSObjUrl) {
+    try { URL.revokeObjectURL(_liveMSObjUrl); } catch(_) {}
+    _liveMSObjUrl = null;
+  }
+  if (audio.src && audio.src.startsWith('blob:')) {
+    audio.pause();
+    audio.src = '';
+  }
   // Use setStatusBadge so hero-dot, hero-status, and progress bar are all
   // updated correctly.  Show ON AIR if already playing, OFFLINE if not.
   setStatusBadge(isPlaying);
