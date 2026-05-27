@@ -861,7 +861,19 @@ app.get('/tune-in', (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // SOCKET.IO — real-time track, listener, and live-broadcast events
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Track connected web-player clients (Socket.IO) separately from HTTP stream
+// clients (audioEngine._listenerCount).  The combined number is what we show
+// in the listener pill on the public player.
+let _webListeners = 0;
+function _broadcastListenerCount() {
+  const total = (audioEngine._listenerCount || 0) + _webListeners;
+  io.emit('listenerChange', total);
+}
+
 io.on('connection', (socket) => {
+  _webListeners++;
+  _broadcastListenerCount();
   socket.emit('status', audioEngine.getStatus());
   // If a live broadcast is already in progress and we have the WebM init chunk,
   // send it immediately so a new MediaSource client can start decoding.
@@ -971,7 +983,10 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('disconnect', () => {});
+  socket.on('disconnect', () => {
+    _webListeners = Math.max(0, _webListeners - 1);
+    _broadcastListenerCount();
+  });
 
   socket.on('chat:reaction', (emoji) => {
     io.emit('chat:reaction', { emoji, ts: Date.now() });
@@ -983,7 +998,7 @@ audioEngine.on('trackStart', (track) => {
   io.emit('status', audioEngine.getStatus());
 });
 audioEngine.on('trackEnd',       (track) => { io.emit('trackEnd', track); });
-audioEngine.on('listenerChange', (count) => { io.emit('listenerChange', count); });
+audioEngine.on('listenerChange', () => { _broadcastListenerCount(); });
 audioEngine.on('liveStart', async (info) => {
   io.emit('live:started', info);
   io.emit('status', audioEngine.getStatus());

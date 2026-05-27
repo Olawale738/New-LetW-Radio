@@ -536,12 +536,137 @@
     }
     .status-badge.reconnecting { background: rgba(212,168,67,0.12); border-color: rgba(212,168,67,0.4); color: var(--gold); }
     .status-badge.reconnecting .dot { background: var(--gold); animation: blink 0.7s infinite; }
+    .status-badge.connecting {
+      background: rgba(120,100,220,0.1);
+      border: 1px solid rgba(120,100,220,0.35);
+      color: #c0a8ff;
+    }
+    .status-badge.connecting .dot { background: #c0a8ff; animation: blink 0.6s ease-in-out infinite; }
+    .status-badge.error {
+      background: rgba(220,80,60,0.1);
+      border: 1px solid rgba(220,80,60,0.4);
+      color: #ff9080;
+    }
+    .status-badge.error .dot { background: #ff6050; }
     .status-badge.sermon {
       background: rgba(100,180,100,0.12);
       border: 1px solid rgba(100,200,100,0.4);
       color: #90e090;
     }
     .status-badge.sermon .dot { background: #4caf50; box-shadow: 0 0 6px #4caf50; animation: blink 2s ease-in-out infinite; }
+
+    /* ── Live Timer ─────────────────────────────────────────────── */
+    #live-timer {
+      display: none;
+      font-size: 11px;
+      font-family: 'Cinzel', serif;
+      font-weight: 700;
+      color: var(--live-red);
+      letter-spacing: 1.5px;
+      margin-top: 4px;
+      text-align: center;
+    }
+    #live-timer.visible { display: block; }
+
+    /* ── Stream Error / Retry Banner ────────────────────────────── */
+    #stream-error-banner {
+      display: none;
+      margin: 8px 16px 0;
+      padding: 10px 14px;
+      border-radius: 10px;
+      background: rgba(220,80,60,0.08);
+      border: 1px solid rgba(220,80,60,0.3);
+      text-align: center;
+      font-size: 11px;
+      color: #ff9080;
+      line-height: 1.5;
+    }
+    #stream-error-banner.visible { display: block; }
+    #stream-retry-btn {
+      display: inline-block;
+      margin-top: 6px;
+      padding: 5px 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(220,80,60,0.5);
+      background: rgba(220,80,60,0.12);
+      color: #ff9080;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.5px;
+    }
+    #stream-retry-btn:hover { background: rgba(220,80,60,0.22); }
+
+    /* ── Listener pill — never show "0 listening" coldly ───────── */
+    .listener-pill .lnum-wrap { display: inline; }
+
+    /* ── Reaction bar with labels ───────────────────────────────── */
+    .react-btn {
+      position: relative;
+    }
+    .react-btn::after {
+      content: attr(data-label);
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(14,8,18,0.95);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      padding: 3px 7px;
+      border-radius: 6px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.15s;
+      z-index: 10;
+    }
+    .react-btn:hover::after,
+    .react-btn:focus::after { opacity: 1; }
+
+    /* ── Chat identity bar — more prominent ─────────────────────── */
+    .chat-as-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      padding: 6px 14px 2px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .chat-as-name {
+      color: var(--gold);
+      font-weight: 700;
+      cursor: pointer;
+      border-bottom: 1px dashed rgba(212,168,67,0.4);
+      padding-bottom: 1px;
+    }
+    .chat-as-name:hover { color: var(--gold-light); border-bottom-color: var(--gold); }
+    .chat-edit-hint {
+      font-size: 9px;
+      color: var(--text-dim);
+      margin-left: 2px;
+    }
+
+    /* ── Online presence dot ────────────────────────────────────── */
+    .chat-online-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 14px;
+      font-size: 10px;
+      color: var(--text-dim);
+      border-bottom: 1px solid rgba(212,168,67,0.06);
+    }
+    .chat-online-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: #4caf50;
+      box-shadow: 0 0 4px #4caf50;
+      flex-shrink: 0;
+    }
     @keyframes blink {
       0%, 100% { opacity: 1; }
       50%       { opacity: 0.2; }
@@ -1652,21 +1777,30 @@
         <div class="radio-label">Online Radio</div>
 
         <div class="status-row">
-          <div class="status-badge offline" id="status-badge">
+          <div class="status-badge offline" id="status-badge" role="status" aria-live="polite">
             <span class="dot"></span>
             <span id="status-text">OFFLINE</span>
           </div>
-          <div class="listener-pill">
-            <span>👥</span>
-            <span class="lnum" id="listener-count">0</span>
-            <span>listening</span>
+          <div class="listener-pill" title="Active listeners">
+            <span aria-hidden="true">👥</span>
+            <span class="lnum" id="listener-count" aria-label="listeners">–</span>
+            <span id="listener-label">listening</span>
           </div>
+        </div>
+
+        <!-- Live broadcast timer — shown while broadcasting -->
+        <div id="live-timer" aria-live="off"></div>
+
+        <!-- Stream error / retry banner -->
+        <div id="stream-error-banner" role="alert">
+          <div>Stream unavailable — check your connection.</div>
+          <button id="stream-retry-btn" onclick="retryStream()" aria-label="Retry stream connection">↺ Retry</button>
         </div>
 
         <!-- Shown when the admin is live but this visitor hasn't pressed Play -->
         <div id="live-join-banner">
           <span class="live-banner-label">🔴 Live Broadcast in Progress</span>
-          <button onclick="startPlayback()">▶ Join Live</button>
+          <button onclick="startPlayback()" aria-label="Join live broadcast">▶ Join Live</button>
         </div>
 
         <!-- Live latency display: shown only while live & playing -->
@@ -1692,30 +1826,30 @@
         <div class="controls-wrap">
           <!-- Volume row — full width, no crowding -->
           <div class="vol-row">
-            <span class="vol-icon" id="vol-icon" onclick="toggleMute()">🔊</span>
+            <span class="vol-icon" id="vol-icon" onclick="toggleMute()" role="button" title="Mute / Unmute" aria-label="Toggle mute" tabindex="0">🔊</span>
             <div class="vol-group">
-              <input type="range" class="vol-slider" id="vol-slider" min="0" max="1" step="0.02" value="0.85">
+              <input type="range" class="vol-slider" id="vol-slider" min="0" max="1" step="0.02" value="0.85" aria-label="Volume">
             </div>
           </div>
 
           <!-- Buttons row — play centred, icons flanking -->
           <div class="controls-row">
-            <button class="icon-btn fav-btn" id="fav-btn" onclick="toggleFavourite()" title="Save to favourites">🤍</button>
-            <button class="icon-btn like-btn" id="like-btn" onclick="likeCurrentTrack()" title="Like this track">
+            <button class="icon-btn fav-btn" id="fav-btn" onclick="toggleFavourite()" title="Save to favourites" aria-label="Save to favourites">🤍</button>
+            <button class="icon-btn like-btn" id="like-btn" onclick="likeCurrentTrack()" title="Like this track" aria-label="Like this track">
               ❤
               <span class="like-count" id="like-count"></span>
             </button>
 
-            <button id="play-btn" onclick="togglePlay()" title="Play / Pause (Space)">
-              <span id="play-icon">▶</span>
+            <button id="play-btn" onclick="togglePlay()" title="Play / Pause (Space)" aria-label="Play or pause">
+              <span id="play-icon" aria-hidden="true">▶</span>
             </button>
 
             <div class="sleep-wrap">
-              <div class="sleep-ring-wrap" id="sleep-btn" onclick="toggleSleepMenu()" title="Sleep Timer">
-                <svg viewBox="0 0 36 36"><circle class="sleep-ring-track" cx="18" cy="18" r="16"/><circle class="sleep-ring-fill" id="sleep-ring" cx="18" cy="18" r="16"/></svg>
-                <span class="sleep-ring-label" id="sleep-icon">💤</span>
+              <div class="sleep-ring-wrap" id="sleep-btn" onclick="toggleSleepMenu()" title="Sleep Timer" role="button" aria-label="Sleep timer" tabindex="0">
+                <svg viewBox="0 0 36 36" aria-hidden="true"><circle class="sleep-ring-track" cx="18" cy="18" r="16"/><circle class="sleep-ring-fill" id="sleep-ring" cx="18" cy="18" r="16"/></svg>
+                <span class="sleep-ring-label" id="sleep-icon" aria-hidden="true">💤</span>
               </div>
-              <div class="sleep-menu" id="sleep-menu">
+              <div class="sleep-menu" id="sleep-menu" role="menu">
                 <button onclick="setSleepTimer(15)">⏱ 15 minutes</button>
                 <button onclick="setSleepTimer(30)">⏱ 30 minutes</button>
                 <button onclick="setSleepTimer(60)">⏱ 1 hour</button>
@@ -1724,9 +1858,9 @@
               </div>
             </div>
 
-            <button class="icon-btn" id="channel-btn" onclick="openChannelDrawer()" title="Switch Channel">📡</button>
-            <button class="icon-btn" id="share-btn" onclick="shareStation()" title="Share">🔗</button>
-            <button class="icon-btn" id="push-btn" onclick="togglePush()" title="Notifications">🔔</button>
+            <button class="icon-btn" id="channel-btn" onclick="openChannelDrawer()" title="Switch Channel" aria-label="Switch radio channel">📡</button>
+            <button class="icon-btn" id="share-btn" onclick="shareStation()" title="Share this station" aria-label="Share this station">🔗</button>
+            <button class="icon-btn" id="push-btn" onclick="togglePush()" title="Enable notifications" aria-label="Toggle notifications">🔔</button>
           </div>
         </div>
 
@@ -1783,23 +1917,30 @@
             <div class="chat-text">Welcome to LETW Radio! Connect with believers around the world. 🙏</div>
           </div>
         </div>
-        <div class="reactions-bar">
-          <button class="react-btn" onclick="sendReaction('🙏')">🙏</button>
-          <button class="react-btn" onclick="sendReaction('❤️')">❤️</button>
-          <button class="react-btn" onclick="sendReaction('🎵')">🎵</button>
-          <button class="react-btn" onclick="sendReaction('✨')">✨</button>
-          <button class="react-btn" onclick="sendReaction('🔥')">🔥</button>
-          <button class="react-btn" onclick="sendReaction('🎉')">🎉</button>
+        <div class="chat-online-row">
+          <span class="chat-online-dot" aria-hidden="true"></span>
+          <span id="chat-online-count">You are connected</span>
+        </div>
+        <div class="reactions-bar" role="group" aria-label="Quick reactions">
+          <button class="react-btn" data-label="Amen" onclick="sendReaction('🙏')" title="Amen" aria-label="Send Amen reaction">🙏</button>
+          <button class="react-btn" data-label="Love" onclick="sendReaction('❤️')" title="Love" aria-label="Send Love reaction">❤️</button>
+          <button class="react-btn" data-label="Music" onclick="sendReaction('🎵')" title="Music" aria-label="Send Music reaction">🎵</button>
+          <button class="react-btn" data-label="Praise" onclick="sendReaction('✨')" title="Praise" aria-label="Send Praise reaction">✨</button>
+          <button class="react-btn" data-label="Fire" onclick="sendReaction('🔥')" title="Fire" aria-label="Send Fire reaction">🔥</button>
+          <button class="react-btn" data-label="Celebrate" onclick="sendReaction('🎉')" title="Celebrate" aria-label="Send Celebrate reaction">🎉</button>
         </div>
         <div class="chat-input-area">
           <div class="chat-as-label">
-            Chat as: <span class="chat-as-name" id="chat-username-display" onclick="changeUsername()">–</span>
+            <span aria-hidden="true">✏️</span>
+            Chatting as: <span class="chat-as-name" id="chat-username-display" onclick="changeUsername()" title="Click to change your name" aria-label="Your chat name — click to change">–</span>
+            <span class="chat-edit-hint">(tap to change)</span>
           </div>
           <div class="chat-send-row">
             <input type="text" class="chat-input" id="chat-input"
-              placeholder="Say something..." maxlength="500"
+              placeholder="Say something to the congregation..." maxlength="500"
+              aria-label="Chat message"
               onkeydown="if(event.key==='Enter')sendChat()">
-            <button class="send-btn" onclick="sendChat()">➤</button>
+            <button class="send-btn" onclick="sendChat()" aria-label="Send message" title="Send message">➤</button>
           </div>
         </div>
       </div>
@@ -2008,6 +2149,11 @@ let crossfadeRAF    = null;   // animation frame for volume crossfade
 let crossfadeSecs   = 3;      // default; updated from trackWillEnd event
 let flashAlertTimer = null;   // auto-dismiss timer for flash alerts
 let _liveJoinTO     = null;   // timeout: if live audio doesn't start in 10 s, retry
+let _liveTimerInterval = null; // interval for live broadcast duration display
+let _liveStartedAt  = null;   // Date when the live broadcast began (for timer)
+let _wasEverPlaying = false;  // true after first successful audio.play() — used to
+                               // distinguish "Connecting" from "Buffering" in waiting state
+let _streamErrorCount = 0;    // counts consecutive stream errors for error banner
 
 // ── Live MediaSource streaming (primary path) ─────────────────
 // Chunks are delivered via Socket.IO and appended to a SourceBuffer.
@@ -2274,10 +2420,15 @@ function updateTrackInfo(title, artist) {
 }
 
 function updateListeners(count) {
-  document.getElementById('listener-count').textContent = count;
-  // meta-listeners removed from DOM; listener count shown in hero bar only
+  const el    = document.getElementById('listener-count');
+  const label = document.getElementById('listener-label');
   const heroCount = document.getElementById('hero-listener-count');
-  if (heroCount) heroCount.textContent = count;
+  // Show "–" until we get an actual update from the server so we never
+  // show a misleading "0 listening" when the data hasn't arrived yet.
+  const display = (count === null || count === undefined) ? '–' : count;
+  if (el)    el.textContent = display;
+  if (label) label.textContent = (count === 1) ? 'listening' : 'listening';
+  if (heroCount) heroCount.textContent = display;
 }
 
 function setSignal(val) {
@@ -2444,6 +2595,30 @@ function scheduleLiveReconnect(delayMs) {
 }
 
 // ── Live mode ─────────────────────────────────────────────────
+function startLiveTimer() {
+  stopLiveTimer();
+  _liveStartedAt = _liveStartedAt || Date.now();
+  function tick() {
+    const elapsed = Date.now() - _liveStartedAt;
+    const h  = Math.floor(elapsed / 3600000);
+    const m  = Math.floor((elapsed % 3600000) / 60000);
+    const s  = Math.floor((elapsed % 60000) / 1000);
+    const ts = (h ? h + ':' : '') + String(m).padStart(h ? 2 : 1,'0') + ':' + String(s).padStart(2,'0');
+    const el = document.getElementById('live-timer');
+    if (el) el.textContent = '🔴 LIVE  ' + ts;
+  }
+  tick();
+  _liveTimerInterval = setInterval(tick, 1000);
+  const el = document.getElementById('live-timer');
+  if (el) el.classList.add('visible');
+}
+function stopLiveTimer() {
+  if (_liveTimerInterval) { clearInterval(_liveTimerInterval); _liveTimerInterval = null; }
+  const el = document.getElementById('live-timer');
+  if (el) { el.classList.remove('visible'); el.textContent = ''; }
+  _liveStartedAt = null;
+}
+
 function switchToLiveMode(info) {
   document.getElementById('player-card').classList.add('live-mode');
   document.getElementById('play-btn').classList.add('live-mode');
@@ -2451,7 +2626,7 @@ function switchToLiveMode(info) {
   document.getElementById('panel-shimmer').classList.add('live');
   const badge = document.getElementById('status-badge');
   badge.className = 'status-badge live';
-  document.getElementById('status-text').textContent = 'LIVE BROADCAST';
+  document.getElementById('status-text').textContent = 'LIVE';
   const heroStatus = document.getElementById('hero-status');
   if (heroStatus) heroStatus.textContent = 'LIVE';
   const heroDot = document.getElementById('hero-dot');
@@ -2459,6 +2634,7 @@ function switchToLiveMode(info) {
   if (info && (info.title || info.artist)) {
     updateTrackInfo(info.title || 'Live Broadcast', info.artist || 'LETW Radio');
   }
+  startLiveTimer();
 
   // Only switch streams for listeners who are ALREADY playing.
   // Visitors who haven't pressed Play yet just get the UI update plus the
@@ -2506,6 +2682,7 @@ function exitLiveMode() {
     audio.pause();
     audio.src = '';
   }
+  stopLiveTimer();
   // Use setStatusBadge so hero-dot, hero-status, and progress bar are all
   // updated correctly.  Show ON AIR if already playing, OFFLINE if not.
   setStatusBadge(isPlaying);
@@ -2523,6 +2700,9 @@ audio.volume = currentVolume;
 
 audio.addEventListener('playing', () => {
   isPlaying = true;
+  _wasEverPlaying = true;
+  _streamErrorCount = 0;
+  hideStreamErrorBanner();
   reconnectDelay = 2000;
   document.getElementById('play-icon').textContent = '⏸';
   document.getElementById('play-btn').classList.add('playing');
@@ -2555,8 +2735,17 @@ audio.addEventListener('pause', () => {
 
 audio.addEventListener('waiting', () => {
   if (!isLive) {
-    document.getElementById('status-badge').className = 'status-badge buffering';
-    document.getElementById('status-text').textContent = 'BUFFERING';
+    const badge = document.getElementById('status-badge');
+    const text  = document.getElementById('status-text');
+    // Show "Connecting" when the user just pressed Play and hasn't heard audio yet.
+    // Show "Buffering" for a mid-play network hiccup.
+    if (!_wasEverPlaying) {
+      if (badge) badge.className = 'status-badge connecting';
+      if (text)  text.textContent = 'CONNECTING…';
+    } else {
+      if (badge) badge.className = 'status-badge buffering';
+      if (text)  text.textContent = 'BUFFERING…';
+    }
     startStallTimer();
   } else {
     // Live mode: keep the live-tinted badge style so "JOINING LIVE…" or
@@ -2567,7 +2756,7 @@ audio.addEventListener('waiting', () => {
     const cls   = badge ? badge.className : '';
     if (!cls.includes('joining') && !cls.includes('live-reconnecting')) {
       if (badge) badge.className = 'status-badge joining';
-      if (text)  text.textContent = 'BUFFERING…';
+      if (text)  text.textContent = _wasEverPlaying ? 'BUFFERING…' : 'CONNECTING…';
     }
     // 'waiting' fires naturally on the normal decoder-init gap between the
     // WebM header chunk and the first audio cluster.  Use a longer grace
@@ -2612,13 +2801,36 @@ audio.addEventListener('ended', () => {
 });
 
 audio.addEventListener('error', () => {
+  _streamErrorCount++;
   if (isLive) {
     scheduleLiveReconnect(800);
   } else {
-    setStatusBadge(false);
-    if (isPlaying) scheduleReconnect();
+    const badge = document.getElementById('status-badge');
+    const text  = document.getElementById('status-text');
+    if (badge) badge.className = 'status-badge error';
+    if (text)  text.textContent = 'ERROR';
+    isPlaying = false;
+    document.getElementById('play-icon').textContent = '▶';
+    document.getElementById('play-btn').classList.remove('playing');
+    // After 2 consecutive errors show the manual retry banner
+    if (_streamErrorCount >= 2) showStreamErrorBanner();
+    else scheduleReconnect();
   }
 });
+
+function showStreamErrorBanner() {
+  const el = document.getElementById('stream-error-banner');
+  if (el) el.classList.add('visible');
+}
+function hideStreamErrorBanner() {
+  const el = document.getElementById('stream-error-banner');
+  if (el) el.classList.remove('visible');
+}
+function retryStream() {
+  _streamErrorCount = 0;
+  hideStreamErrorBanner();
+  startPlayback();
+}
 
 function setStatusBadge(playing) {
   if (isLive) return;
@@ -2685,6 +2897,9 @@ function stopPlayback() {
   audio.pause();
   audio.src = '';
   isPlaying = false;
+  _wasEverPlaying = false;  // reset so next Play shows "Connecting" not "Buffering"
+  _streamErrorCount = 0;
+  hideStreamErrorBanner();
   // Cancel any pending reconnect so the user's stop action is respected
   clearTimeout(reconnectTO);
   reconnectTO = null;
