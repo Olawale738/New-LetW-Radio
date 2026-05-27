@@ -565,5 +565,37 @@ router.get('/push/subscribers/count', (req, res) => {
   res.json({ count: row ? row.count : 0 });
 });
 
+// ==================== STREAMS ====================
+router.get('/streams', (req, res) => {
+  res.json(db.prepare(`SELECT * FROM streams WHERE active = 1 ORDER BY sort_order, created_at`).all());
+});
+
+router.get('/streams/all', (req, res) => {
+  res.json(db.prepare(`SELECT * FROM streams ORDER BY sort_order, created_at`).all());
+});
+
+router.post('/streams', (req, res) => {
+  const { name, url, description, is_default, sort_order } = req.body;
+  if (!name || !url) return res.status(400).json({ error: 'name and url are required' });
+  const id = uuidv4();
+  db.prepare(`INSERT INTO streams (id, name, url, description, is_default, sort_order, active) VALUES (?, ?, ?, ?, ?, ?, 1)`)
+    .run(id, name.slice(0, 80), url.slice(0, 300), (description || '').slice(0, 200),
+         is_default ? 1 : 0, sort_order || 0);
+  res.json({ id, name, url, description, is_default: !!is_default, sort_order: sort_order || 0, active: 1 });
+});
+
+router.put('/streams/:id', (req, res) => {
+  const { name, url, description, is_default, sort_order, active } = req.body;
+  db.prepare(`UPDATE streams SET name=?, url=?, description=?, is_default=?, sort_order=?, active=? WHERE id=?`)
+    .run((name || '').slice(0,80), (url || '').slice(0,300), (description||'').slice(0,200),
+         is_default ? 1 : 0, sort_order || 0, active !== false ? 1 : 0, req.params.id);
+  res.json({ success: true });
+});
+
+router.delete('/streams/:id', (req, res) => {
+  db.prepare(`DELETE FROM streams WHERE id = ?`).run(req.params.id);
+  res.json({ success: true });
+});
+
 module.exports = router;
 module.exports.setIo = setIo;

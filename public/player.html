@@ -547,6 +547,87 @@
       50%       { opacity: 0.2; }
     }
 
+    /* ── Channel Switcher Drawer ─────────────────────────────── */
+    #channel-drawer {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      z-index: 500;
+      background: var(--bg-panel);
+      border-top: 1px solid var(--border);
+      border-radius: 20px 20px 0 0;
+      padding: 0 0 env(safe-area-inset-bottom,0);
+      transform: translateY(100%);
+      transition: transform 0.38s cubic-bezier(0.34,1.2,0.64,1);
+      box-shadow: 0 -12px 60px rgba(0,0,0,0.7);
+      max-height: 70vh;
+      overflow-y: auto;
+    }
+    #channel-drawer.open { transform: translateY(0); }
+    #channel-drawer-backdrop {
+      position: fixed; inset: 0; z-index: 499;
+      background: rgba(0,0,0,0.55);
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.3s;
+    }
+    #channel-drawer-backdrop.open { opacity: 1; pointer-events: auto; }
+    .channel-drawer-handle {
+      width: 40px; height: 4px; border-radius: 2px;
+      background: rgba(212,168,67,0.3);
+      margin: 12px auto 4px;
+    }
+    .channel-drawer-title {
+      text-align: center;
+      font-family: 'Cinzel', serif;
+      font-size: 12px;
+      letter-spacing: 2px;
+      color: var(--gold-light);
+      padding: 4px 0 14px;
+      text-transform: uppercase;
+    }
+    .channel-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 10px;
+      padding: 0 16px 20px;
+    }
+    .channel-btn {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 6px;
+      padding: 14px 10px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.03);
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: center;
+    }
+    .channel-btn:hover { background: rgba(212,168,67,0.07); border-color: rgba(212,168,67,0.35); }
+    .channel-btn.active {
+      background: rgba(212,168,67,0.12);
+      border-color: rgba(212,168,67,0.6);
+      box-shadow: 0 0 16px rgba(212,168,67,0.15);
+    }
+    .channel-btn-icon { font-size: 22px; line-height: 1; }
+    .channel-btn-name {
+      font-size: 11px; font-weight: 700; color: var(--text);
+      letter-spacing: 0.5px; line-height: 1.3;
+    }
+    .channel-btn.active .channel-btn-name { color: var(--gold-light); }
+    .channel-btn-desc { font-size: 9px; color: var(--text-dim); line-height: 1.3; }
+
+    /* ── Album Art ───────────────────────────────────────────── */
+    #album-art-wrap {
+      position: absolute; inset: 0; border-radius: 50%;
+      overflow: hidden; opacity: 0;
+      transition: opacity 0.5s;
+      pointer-events: none;
+    }
+    #album-art-wrap.visible { opacity: 1; }
+    #album-art-img {
+      width: 100%; height: 100%;
+      object-fit: cover;
+    }
+
     /* ── Sermon Seek Bar ─────────────────────────────────────── */
     #sermon-seek-wrap {
       display: none;
@@ -1559,6 +1640,9 @@
           <div class="logo-ring"></div>
           <div class="vinyl-disc" id="vinyl-disc"></div>
           <div class="logo-inner">
+            <div id="album-art-wrap">
+              <img id="album-art-img" src="" alt="" onerror="this.parentElement.classList.remove('visible')">
+            </div>
             <img class="logo-img" src="/logo.png" alt="LETW Radio"
               onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2288%22 height=%2288%22%3E%3Crect width=%2288%22 height=%2288%22 rx=%2218%22 fill=%22%231a0f00%22/%3E%3Ctext x=%2244%22 y=%2258%22 font-size=%2236%22 text-anchor=%22middle%22 fill=%22%23d4a843%22%3E%F0%9F%93%BB%3C/text%3E%3C/svg%3E'">
           </div>
@@ -1640,6 +1724,7 @@
               </div>
             </div>
 
+            <button class="icon-btn" id="channel-btn" onclick="openChannelDrawer()" title="Switch Channel">📡</button>
             <button class="icon-btn" id="share-btn" onclick="shareStation()" title="Share">🔗</button>
             <button class="icon-btn" id="push-btn" onclick="togglePush()" title="Notifications">🔔</button>
           </div>
@@ -1806,6 +1891,18 @@
   <div class="rst-text" style="font-size:12px;color:var(--text-muted);"></div>
 </div>
 
+<!-- Channel Drawer Backdrop -->
+<div id="channel-drawer-backdrop" onclick="closeChannelDrawer()"></div>
+
+<!-- Channel Switcher Drawer -->
+<div id="channel-drawer">
+  <div class="channel-drawer-handle"></div>
+  <div class="channel-drawer-title">📡 Radio Channels</div>
+  <div class="channel-grid" id="channel-grid">
+    <div style="grid-column:1/-1;text-align:center;padding:20px 0;font-size:12px;color:var(--text-dim);">Loading channels…</div>
+  </div>
+</div>
+
 <!-- Flash Alert Overlay -->
 <div id="flash-alert-overlay">
   <div id="flash-alert-box">
@@ -1933,6 +2030,11 @@ let _currentSermonId   = null;    // id of the currently-active sermon track
 let _sermonSeekDragging = false;  // true while user is dragging the seek bar
 let _sermonLoaded      = false;   // tracks list loaded at least once
 
+// ── Channel / Stream state ────────────────────────────────────
+let _channels       = [];          // list fetched from /api/streams
+let _activeStreamUrl = '/stream';  // currently active stream URL
+let _activeStreamName = 'Main Stream';
+
 // ── Username ──────────────────────────────────────────────────
 function getUsername() {
   let u = localStorage.getItem('letw_username');
@@ -2012,6 +2114,8 @@ socket.on('trackStart', track => {
     track.title  || 'LETW Radio',
     track.artist || 'Light Encounter Tabernacle Worldwide'
   );
+  // Show album art if provided (e.g. from NowPlaying API or track metadata)
+  if (typeof updateAlbumArt === 'function') updateAlbumArt(track.cover_art_url || track.art || '');
   // Update like button for the new track
   resetLikeBtn();
   currentTrackId = track.id || null;
@@ -2396,10 +2500,13 @@ function exitLiveMode() {
   // Use setStatusBadge so hero-dot, hero-status, and progress bar are all
   // updated correctly.  Show ON AIR if already playing, OFFLINE if not.
   setStatusBadge(isPlaying);
-  if (isPlaying) reconnectAudio(STREAM_URL);
+  if (isPlaying) reconnectAudio(_activeStreamUrl);
 }
 
 function getStreamUrl() { return isLive ? LIVE_URL : STREAM_URL; }
+// Note: getStreamUrl() is overridden at the bottom of the page to return
+// _activeStreamUrl instead of the const STREAM_URL, keeping reconnects
+// on the selected channel.  The const stays as the initial default.
 
 // ── Audio ─────────────────────────────────────────────────────
 const audio = document.getElementById('audio-element');
@@ -2535,8 +2642,8 @@ function startPlayback() {
     return;
   }
 
-  // Regular stream
-  reconnectAudio(STREAM_URL);
+  // Regular stream — use selected channel (overridden by switchChannel)
+  reconnectAudio(_activeStreamUrl);
 }
 
 function stopPlayback() {
@@ -3853,9 +3960,95 @@ function stopSermon() {
   cancelSleepTimer();
   releaseWakeLock();
 
-  // Reconnect to stream
-  reconnectAudio(STREAM_URL);
+  // Reconnect to whichever channel the user last selected
+  reconnectAudio(_activeStreamUrl);
 }
+
+// ══════════════════════════════════════════════════════════════
+// Channel switcher (DCLM-style multi-stream selector)
+// ══════════════════════════════════════════════════════════════
+
+async function loadChannels() {
+  try {
+    const r = await fetch('/api/streams');
+    if (!r.ok) throw new Error();
+    _channels = await r.json();
+  } catch { _channels = [{ id: 'default', name: 'Main Stream', url: '/stream', description: 'Primary broadcast', is_default: 1 }]; }
+  renderChannelGrid();
+}
+
+function renderChannelGrid() {
+  const grid = document.getElementById('channel-grid');
+  if (!_channels.length) {
+    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:20px;font-size:12px;color:var(--text-dim);">No channels configured.</div>';
+    return;
+  }
+  const icons = ['📻','🎙️','🙏','🎵','✨','🎚️','📡','🔊'];
+  grid.innerHTML = _channels.map((ch, i) => {
+    const active = ch.url === _activeStreamUrl || (ch.url === '/stream' && _activeStreamUrl === '/stream');
+    return `<div class="channel-btn${active ? ' active' : ''}" onclick="switchChannel('${ch.url.replace(/'/g,"\\'")}','${ch.name.replace(/'/g,"\\'")}')">
+      <div class="channel-btn-icon">${icons[i % icons.length]}</div>
+      <div class="channel-btn-name">${esc(ch.name)}</div>
+      ${ch.description ? `<div class="channel-btn-desc">${esc(ch.description)}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function openChannelDrawer() {
+  if (!_channels.length) loadChannels();
+  document.getElementById('channel-drawer').classList.add('open');
+  document.getElementById('channel-drawer-backdrop').classList.add('open');
+}
+
+function closeChannelDrawer() {
+  document.getElementById('channel-drawer').classList.remove('open');
+  document.getElementById('channel-drawer-backdrop').classList.remove('open');
+}
+
+function switchChannel(url, name) {
+  closeChannelDrawer();
+  if (url === _activeStreamUrl && isPlaying && !isLive) return;
+  _activeStreamUrl = url;
+  _activeStreamName = name;
+  // Update ticker / title to show which channel is active
+  const trackTitle  = document.getElementById('track-title');
+  const trackArtist = document.getElementById('track-artist');
+  if (trackTitle)  trackTitle.textContent  = name;
+  if (trackArtist) trackArtist.textContent = 'LETW Radio';
+  // Re-render the grid so the active highlight updates
+  renderChannelGrid();
+  // Stop live if active
+  if (isLive) exitLiveMode();
+  // Reconnect to the new URL
+  clearTimeout(reconnectTO); reconnectTO = null;
+  audio.pause();
+  audio.src = url;
+  audio.load();
+  isPlaying = true;
+  document.getElementById('play-icon').textContent = '⏸';
+  document.getElementById('play-btn').classList.add('playing');
+  setStatusBadge(true);
+  audio.play().catch(() => scheduleReconnect());
+}
+
+// ── Patch getStreamUrl() to use the selected channel ─────────
+// All <script> blocks in the same HTML page share the global lexical
+// environment, so let/const from any prior block (isLive, LIVE_URL,
+// _activeStreamUrl) are visible here.  Function declarations are
+// mutable bindings, so we can safely reassign getStreamUrl.
+getStreamUrl = function() { return isLive ? LIVE_URL : _activeStreamUrl; };
+
+// ── Album art update ──────────────────────────────────────────
+function updateAlbumArt(src) {
+  if (!src) { document.getElementById('album-art-wrap').classList.remove('visible'); return; }
+  const img = document.getElementById('album-art-img');
+  img.onload  = () => document.getElementById('album-art-wrap').classList.add('visible');
+  img.onerror = () => document.getElementById('album-art-wrap').classList.remove('visible');
+  if (img.src !== src) img.src = src;
+}
+
+// Load channels on startup
+loadChannels();
 </script>
 </body>
 </html>

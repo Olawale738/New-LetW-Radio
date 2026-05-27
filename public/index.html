@@ -848,6 +848,9 @@
   </div>
 
   <div class="nav-section">Other</div>
+  <div class="nav-item" data-page="streams">
+    <span class="nav-icon">📡</span><span>Streams</span>
+  </div>
   <div class="nav-item" data-page="history">
     <span class="nav-icon">📜</span><span>History</span>
   </div>
@@ -1525,6 +1528,51 @@
 
     </div>
 
+<!-- ═══════════════════ STREAMS PAGE ═══════════════════ -->
+<div class="page" id="page-streams">
+  <div class="card">
+    <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+      <div class="card-title">📡 Radio Channels / Streams</div>
+      <button class="btn btn-primary" onclick="openAddStreamModal()">＋ Add Channel</button>
+    </div>
+    <p style="font-size:12px;color:var(--text3);margin-bottom:16px;">
+      Define multiple audio channels — like DCLM's language streams — that listeners can switch between.
+      Each channel has its own stream URL. The active channel button appears in the player.
+    </p>
+    <div id="streams-list">
+      <div style="text-align:center;padding:30px;color:var(--text3);font-size:13px;">Loading streams…</div>
+    </div>
+  </div>
+</div>
+
+<!-- Add/Edit Stream Modal -->
+<div id="stream-modal" style="display:none;position:fixed;inset:0;z-index:900;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px;width:90%;max-width:440px;box-shadow:0 20px 60px rgba(0,0,0,0.8);">
+    <div style="font-size:15px;font-weight:700;color:var(--white);margin-bottom:20px;" id="stream-modal-title">Add Channel</div>
+    <input type="hidden" id="stream-edit-id">
+    <div style="margin-bottom:12px;">
+      <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px;">Channel Name *</label>
+      <input type="text" class="form-control" id="stream-name" placeholder="e.g. Main Stream, Youth Channel" maxlength="80">
+    </div>
+    <div style="margin-bottom:12px;">
+      <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px;">Stream URL *</label>
+      <input type="text" class="form-control" id="stream-url" placeholder="/stream  or  https://yourserver.com/radio/8000/live" maxlength="300">
+    </div>
+    <div style="margin-bottom:12px;">
+      <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px;">Description (shown to listeners)</label>
+      <input type="text" class="form-control" id="stream-description" placeholder="e.g. Primary English broadcast" maxlength="200">
+    </div>
+    <div style="margin-bottom:16px;display:flex;align-items:center;gap:8px;">
+      <input type="number" class="form-control" id="stream-sort" placeholder="Sort order (0 = first)" style="width:140px;" min="0" max="999">
+      <label style="font-size:11px;color:var(--text3);">Display order</label>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button class="btn" style="background:var(--panel);" onclick="closeStreamModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveStream()">Save Channel</button>
+    </div>
+  </div>
+</div>
+
     <!-- ===== SETTINGS ===== -->
     <div class="page" id="page-settings">
       <div class="grid-2">
@@ -1954,7 +2002,8 @@ function navigate(page) {
     programs: 'Programs', planning: 'Planning', breaks: 'Breaks',
     dailygen: 'Daily Generation', history: 'History', settings: 'Settings',
     golive: '🎙️ Go Live — Browser Broadcast',
-    community: '💬 Community'
+    community: '💬 Community',
+    streams: '📡 Radio Channels'
   };
   document.getElementById('topbar-title').textContent = titles[page] || page;
 
@@ -1974,7 +2023,8 @@ function navigate(page) {
     dashboard: loadDashboardStats,
     dailygen: () => { document.getElementById('dailygen-date').valueAsDate = new Date(); loadDailyGen(); },
     golive: initGoLivePage,
-    community: loadCommunity
+    community: loadCommunity,
+    streams: loadAdminStreams
   };
   if (loaders[page]) loaders[page]();
 }
@@ -3873,6 +3923,111 @@ function initQueueDragDrop(tbody) {
 async function saveDailyQueueOrder(tbody) {
   const ids = [...tbody.querySelectorAll('tr')].map(r => r.dataset.queueId).filter(Boolean);
   try { await api('POST', '/daily-queue/reorder', { ids }); } catch(e) {}
+}
+
+// ══════════════════════════════════════════════════════════════
+// Streams / Channels management
+// ══════════════════════════════════════════════════════════════
+
+let _adminStreams = [];
+
+async function loadAdminStreams() {
+  const list = document.getElementById('streams-list');
+  list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text3);">Loading…</div>';
+  try {
+    _adminStreams = await api('GET', '/streams/all');
+    renderAdminStreamsList();
+  } catch(e) {
+    list.innerHTML = `<div style="text-align:center;padding:30px;color:#e05050;">${e.message}</div>`;
+  }
+}
+
+function renderAdminStreamsList() {
+  const list = document.getElementById('streams-list');
+  if (!_adminStreams.length) {
+    list.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text3);font-size:13px;">No channels yet. Click "Add Channel" to create one.</div>';
+    return;
+  }
+  list.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;">
+      <thead>
+        <tr style="font-size:10px;letter-spacing:1px;color:var(--text3);text-transform:uppercase;border-bottom:1px solid var(--border);">
+          <th style="padding:8px 12px;text-align:left;">Name</th>
+          <th style="padding:8px 12px;text-align:left;">Stream URL</th>
+          <th style="padding:8px 12px;text-align:left;">Description</th>
+          <th style="padding:8px 12px;text-align:center;">Order</th>
+          <th style="padding:8px 12px;text-align:center;">Active</th>
+          <th style="padding:8px 12px;text-align:right;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${_adminStreams.map(s => `
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.05);font-size:12px;">
+            <td style="padding:10px 12px;color:var(--white);font-weight:700;">${s.name}</td>
+            <td style="padding:10px 12px;color:var(--accent);font-family:monospace;font-size:11px;">${s.url}</td>
+            <td style="padding:10px 12px;color:var(--text3);">${s.description || '—'}</td>
+            <td style="padding:10px 12px;text-align:center;color:var(--text3);">${s.sort_order}</td>
+            <td style="padding:10px 12px;text-align:center;">
+              <span style="font-size:11px;padding:2px 10px;border-radius:10px;background:${s.active ? 'rgba(80,200,80,0.15)' : 'rgba(200,80,80,0.12)'};color:${s.active ? '#80e080' : '#e08080'};">${s.active ? 'Active' : 'Hidden'}</span>
+            </td>
+            <td style="padding:10px 12px;text-align:right;white-space:nowrap;">
+              <button class="btn" style="font-size:11px;padding:4px 12px;margin-right:4px;background:var(--panel);" onclick="editStream('${s.id}')">Edit</button>
+              <button class="btn" style="font-size:11px;padding:4px 12px;background:rgba(200,60,60,0.2);color:#e08080;border-color:rgba(200,60,60,0.3);" onclick="deleteStream('${s.id}')">Delete</button>
+            </td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>`;
+}
+
+function openAddStreamModal() {
+  document.getElementById('stream-modal-title').textContent = 'Add Channel';
+  document.getElementById('stream-edit-id').value = '';
+  document.getElementById('stream-name').value = '';
+  document.getElementById('stream-url').value = '';
+  document.getElementById('stream-description').value = '';
+  document.getElementById('stream-sort').value = _adminStreams.length;
+  document.getElementById('stream-modal').style.display = 'flex';
+}
+
+function editStream(id) {
+  const s = _adminStreams.find(x => x.id === id);
+  if (!s) return;
+  document.getElementById('stream-modal-title').textContent = 'Edit Channel';
+  document.getElementById('stream-edit-id').value = s.id;
+  document.getElementById('stream-name').value = s.name;
+  document.getElementById('stream-url').value = s.url;
+  document.getElementById('stream-description').value = s.description || '';
+  document.getElementById('stream-sort').value = s.sort_order || 0;
+  document.getElementById('stream-modal').style.display = 'flex';
+}
+
+function closeStreamModal() {
+  document.getElementById('stream-modal').style.display = 'none';
+}
+
+async function saveStream() {
+  const id   = document.getElementById('stream-edit-id').value;
+  const name = document.getElementById('stream-name').value.trim();
+  const url  = document.getElementById('stream-url').value.trim();
+  const desc = document.getElementById('stream-description').value.trim();
+  const sort = parseInt(document.getElementById('stream-sort').value, 10) || 0;
+  if (!name || !url) { alert('Name and URL are required'); return; }
+  try {
+    if (id) {
+      await api('PUT', `/streams/${id}`, { name, url, description: desc, sort_order: sort, active: 1 });
+    } else {
+      await api('POST', '/streams', { name, url, description: desc, sort_order: sort });
+    }
+    closeStreamModal();
+    loadAdminStreams();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function deleteStream(id) {
+  if (!confirm('Delete this channel?')) return;
+  try { await api('DELETE', `/streams/${id}`); loadAdminStreams(); }
+  catch(e) { alert('Error: ' + e.message); }
 }
 </script>
 </body>

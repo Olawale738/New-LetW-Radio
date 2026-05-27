@@ -104,11 +104,31 @@ function initSchema(sqlDb) {
       auth TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS streams (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      url TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      is_default INTEGER DEFAULT 0,
+      sort_order INTEGER DEFAULT 0,
+      active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   // Migrations for existing databases
   try { sqlDb.run(`ALTER TABLE tracks ADD COLUMN play_count INTEGER DEFAULT 0`); } catch {}
   try { sqlDb.run(`ALTER TABLE tracks ADD COLUMN likes INTEGER DEFAULT 0`); } catch {}
+  // Seed default stream if none exist
+  try {
+    const { v4: uuidv4 } = require('uuid');
+    const count = sqlDb.exec(`SELECT COUNT(*) as c FROM streams`);
+    const c = count[0] && count[0].values[0] && count[0].values[0][0];
+    if (!c || c === 0) {
+      sqlDb.run(`INSERT INTO streams (id, name, url, description, is_default, sort_order, active) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [uuidv4(), 'Main Stream', '/stream', 'Primary English broadcast', 1, 0, 1]);
+    }
+  } catch(e) { console.warn('Stream seed skipped:', e.message); }
 
   const defaults = {
     radio_name: 'LETW Radio',
