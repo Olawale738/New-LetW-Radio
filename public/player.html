@@ -921,6 +921,25 @@
 
     .panel-header { flex-shrink: 0; }
 
+    /* ── Panel close button (mobile only) ─────────────────────── */
+    #panel-close-btn {
+      display: none; /* hidden on desktop; shown via media query below */
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      width: 44px;
+      background: none;
+      border: none;
+      border-left: 1px solid rgba(212,168,67,0.12);
+      color: var(--text-dim);
+      font-size: 18px;
+      cursor: pointer;
+      padding: 0;
+      transition: color 0.15s, background 0.15s;
+    }
+    #panel-close-btn:hover { color: var(--gold); background: rgba(212,168,67,0.06); }
+    #panel-close-btn:active { color: var(--live-red); }
+
     /* ── Tabs ─────────────────────────────────────────────────── */
     .tabs-row {
       display: flex;
@@ -1403,9 +1422,12 @@
       }
       #community-panel.open { transform: translateY(0); }
       #mobile-chat-toggle { display: flex; }
+      /* Show the dedicated in-panel close button; hide ✕ from the floating toggle */
+      #panel-close-btn { display: flex; }
     }
     @media (min-width: 769px) {
       #mobile-chat-toggle { display: none; }
+      #panel-close-btn { display: none; }
     }
   </style>
 </head>
@@ -1561,6 +1583,8 @@
           <button class="tab-btn active" data-tab="chat" onclick="switchTab('chat')">💬 Live Chat</button>
           <button class="tab-btn" data-tab="onair" onclick="switchTab('onair')">📋 On Air</button>
           <button class="tab-btn" data-tab="request" onclick="switchTab('request')">🙏 Request</button>
+          <!-- Close button visible only on mobile — keeps it away from the chat send button -->
+          <button id="panel-close-btn" onclick="toggleMobilePanel()" aria-label="Close panel">✕</button>
         </div>
       </div>
 
@@ -3152,7 +3176,8 @@ async function submitRequest() {
 function toggleMobilePanel() {
   mobilePanelOpen = !mobilePanelOpen;
   document.getElementById('community-panel').classList.toggle('open', mobilePanelOpen);
-  document.getElementById('mobile-chat-toggle').textContent = mobilePanelOpen ? '✕' : '💬';
+  // Floating toggle always shows 💬 — the panel has its own ✕ close button now.
+  // This prevents the ✕ from overlapping the chat send button at the bottom.
   document.getElementById('panel-backdrop').classList.toggle('visible', mobilePanelOpen);
 }
 
