@@ -181,10 +181,8 @@ function initSchema(sqlDb) {
     // Tawk.to live chat widget (DCLM footer.php)
     tawkto_id: '',       // e.g. "5eb6e5fc967ae56c521848cd/default"
     tawkto_enabled: '0',
-    // Social share buttons on listener player
-    social_facebook: '',
-    social_twitter: '',
-    social_youtube: '',
+    // YouTube channel/video link shown on listener player
+    social_youtube: 'https://www.youtube.com/watch?v=8wTuN77RZJ4',
   };
   for (const [k, v] of Object.entries(defaults)) {
     sqlDb.run(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`, [k, v]);

@@ -5022,31 +5022,23 @@ loadChannels();
     if (siteLink) siteLink.href = settings.website_url;
   }
 
-  // ── Social Media Links ───────────────────────────────────────────────────────
-  const socialWrap = document.getElementById('social-links-row');
-  if (socialWrap) {
-    const socialLinks = [
-      { key: 'social_facebook', icon: '📘', label: 'Facebook', color: '#1877f2' },
-      { key: 'social_twitter',  icon: '𝕏',  label: 'Twitter',  color: '#1da1f2' },
-      { key: 'social_youtube',  icon: '▶',  label: 'YouTube',  color: '#e03060' },
-    ];
-    let socialHTML = '';
-    for (const { key, icon, label, color } of socialLinks) {
-      const url = settings[key];
-      if (url) {
-        socialHTML += `<a href="${url}" target="_blank" rel="noopener noreferrer" aria-label="${label}"
-          style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;
-                 background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);
-                 color:${color};font-size:12px;font-weight:700;text-decoration:none;transition:all 0.2s;
-                 letter-spacing:0.3px;"
-          onmouseover="this.style.background='rgba(255,255,255,0.12)'"
-          onmouseout="this.style.background='rgba(255,255,255,0.05)'">${icon} ${label}</a>`;
-      }
-    }
-    if (socialHTML) {
-      socialWrap.innerHTML = socialHTML;
-      socialWrap.style.display = 'flex';
-    }
+  // ── YouTube Link ─────────────────────────────────────────────────────────────
+  const ytWrap = document.getElementById('social-links-row');
+  const ytUrl  = settings.social_youtube || 'https://www.youtube.com/watch?v=8wTuN77RZJ4';
+  if (ytWrap && ytUrl) {
+    ytWrap.innerHTML = `<a href="${ytUrl}" target="_blank" rel="noopener noreferrer" aria-label="Watch on YouTube"
+      style="display:inline-flex;align-items:center;gap:8px;padding:8px 20px;border-radius:22px;
+             background:rgba(224,48,48,0.12);border:1px solid rgba(224,48,48,0.4);
+             color:#ff4444;font-size:13px;font-weight:700;text-decoration:none;transition:all 0.2s;
+             letter-spacing:0.3px;"
+      onmouseover="this.style.background='rgba(224,48,48,0.22)';this.style.borderColor='rgba(224,48,48,0.7)'"
+      onmouseout="this.style.background='rgba(224,48,48,0.12)';this.style.borderColor='rgba(224,48,48,0.4)'">
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="14" viewBox="0 0 576 512" fill="currentColor">
+        <path d="M549.655 124.083c-6.281-23.65-24.787-42.276-48.284-48.597C458.781 64 288 64 288 64S117.22 64 74.629 75.486c-23.497 6.322-42.003 24.947-48.284 48.597-11.412 42.867-11.412 132.305-11.412 132.305s0 89.438 11.412 132.305c6.281 23.65 24.787 41.5 48.284 47.821C117.22 448 288 448 288 448s170.78 0 213.371-11.486c23.497-6.321 42.003-24.171 48.284-47.821 11.412-42.867 11.412-132.305 11.412-132.305s0-89.438-11.412-132.305zm-317.51 213.508V175.185l142.739 81.205-142.739 81.201z"/>
+      </svg>
+      Watch on YouTube
+    </a>`;
+    ytWrap.style.display = 'flex';
   }
 
   // ── Tawk.to Live Chat Widget ─────────────────────────────────────────────────

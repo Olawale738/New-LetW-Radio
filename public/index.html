@@ -1739,21 +1739,13 @@
           <button class="btn btn-primary" onclick="saveSettings()">Save Changes</button>
         </div>
 
-        <!-- Social Media Links -->
+        <!-- YouTube Link -->
         <div class="card">
-          <div class="card-header"><div class="card-title">🌐 Social Media Links</div></div>
-          <p style="font-size:12px;color:var(--text3);margin-bottom:14px;">These links appear as share/follow buttons in the public player footer.</p>
+          <div class="card-header"><div class="card-title">▶ YouTube Link</div></div>
+          <p style="font-size:12px;color:var(--text3);margin-bottom:14px;">This YouTube button appears in the public player. Can be a channel URL or a specific video.</p>
           <div class="form-group">
-            <label class="form-label">Facebook Page URL</label>
-            <input class="form-control" id="set-social-facebook" placeholder="https://facebook.com/letw">
-          </div>
-          <div class="form-group">
-            <label class="form-label">Twitter / X URL</label>
-            <input class="form-control" id="set-social-twitter" placeholder="https://twitter.com/letw">
-          </div>
-          <div class="form-group">
-            <label class="form-label">YouTube Channel URL</label>
-            <input class="form-control" id="set-social-youtube" placeholder="https://youtube.com/@letw">
+            <label class="form-label">YouTube URL</label>
+            <input class="form-control" id="set-social-youtube" placeholder="https://youtube.com/watch?v=...">
           </div>
           <button class="btn btn-primary" onclick="saveSettings()">Save Changes</button>
         </div>
@@ -2979,13 +2971,9 @@ async function loadSettings() {
   const twkId = document.getElementById('set-tawkto-id');
   if (twkEn) twkEn.checked = s.tawkto_enabled === '1';
   if (twkId) twkId.value   = s.tawkto_id || '';
-  // Social
-  const fbEl  = document.getElementById('set-social-facebook');
-  const twEl  = document.getElementById('set-social-twitter');
-  const ytEl  = document.getElementById('set-social-youtube');
-  if (fbEl) fbEl.value = s.social_facebook || '';
-  if (twEl) twEl.value = s.social_twitter  || '';
-  if (ytEl) ytEl.value = s.social_youtube  || '';
+  // YouTube
+  const ytEl = document.getElementById('set-social-youtube');
+  if (ytEl) ytEl.value = s.social_youtube || 'https://www.youtube.com/watch?v=8wTuN77RZJ4';
 }
 
 async function saveSettings() {
@@ -3018,13 +3006,9 @@ async function saveSettings() {
   const twkId = document.getElementById('set-tawkto-id');
   if (twkEn) data.tawkto_enabled = twkEn.checked ? '1' : '0';
   if (twkId) data.tawkto_id      = twkId.value.trim();
-  // Social
-  const fbEl  = document.getElementById('set-social-facebook');
-  const twEl  = document.getElementById('set-social-twitter');
-  const ytEl  = document.getElementById('set-social-youtube');
-  if (fbEl) data.social_facebook = fbEl.value.trim();
-  if (twEl) data.social_twitter  = twEl.value.trim();
-  if (ytEl) data.social_youtube  = ytEl.value.trim();
+  // YouTube
+  const ytEl = document.getElementById('set-social-youtube');
+  if (ytEl) data.social_youtube = ytEl.value.trim();
   await api('PUT', '/settings', data);
   toast('Settings saved', 'success');
   document.getElementById('sidebar-radio-name').textContent = data.radio_name;
