@@ -2152,11 +2152,11 @@ socket.on('live:audio', (data) => {
   _livePending.push(buf);
   _liveFlush();
   // If the audio element is paused but we have a SourceBuffer ready,
-  // nudge play() — handles the case where the initial play() call was
-  // rejected before data arrived, or after a silent resume from stall.
-  // Guard with !reconnectTO so we don't interfere while a reconnect
-  // timer is pending (it will call audio.play() itself when it fires).
-  if (_liveUseMS && !_liveSB?.updating && audio.paused && !reconnectTO) {
+  // nudge play() — handles the case where the initial play() call got
+  // an AbortError before data arrived, or after a silent stall resume.
+  // We no longer gate on !reconnectTO: if a reconnect timer is already
+  // pending and data is flowing, we should resume rather than wait.
+  if (_liveUseMS && !_liveSB?.updating && audio.paused) {
     audio.play().catch(() => {});
   }
 });
@@ -2390,10 +2390,13 @@ function startLiveViaMS() {
     }
   }, { once: true });
 
-  // Set audio.src SYNCHRONOUSLY here so the caller can call audio.play()
-  // within the same user-gesture task (onclick handler).
+  // Set audio.src SYNCHRONOUSLY so the caller can call audio.play() within
+  // the same user-gesture task (onclick handler) — required by iOS Safari.
+  // Do NOT call audio.load() here: it restarts the resource-selection
+  // algorithm and causes audio.play() to get an AbortError ("interrupted by
+  // a call to load()"), which used to trigger a spurious scheduleLiveReconnect
+  // loop.  Setting audio.src alone is sufficient to attach the MediaSource.
   audio.src = _liveMSObjUrl;
-  audio.load();
 }
 
 /**
@@ -2428,9 +2431,15 @@ function scheduleLiveReconnect(delayMs) {
     reconnectTO = null;          // ← clear so keepalive / live:audio resume work
     if (!isLive) return;
     setJoiningBadge();
-    cleanupLiveMS();
-    startLiveViaMS();
-    audio.play().catch(() => scheduleLiveReconnect(2000));
+    // If the MediaSource pipeline is already set up and working, don't tear it
+    // down — just nudge play().  Only fully restart when it isn't running yet.
+    if (!_liveUseMS) {
+      cleanupLiveMS();
+      startLiveViaMS();
+    }
+    audio.play().catch(err => {
+      if (err.name !== 'AbortError') scheduleLiveReconnect(2000);
+    });
   }, delayMs);
 }
 
@@ -2473,7 +2482,7 @@ function switchToLiveMode(info) {
   startLiveEdgeMonitor();       // begin buffer watch immediately
   startLiveJoinTimeout();       // retry if stream doesn't start within 10 s
   startLiveViaMS();             // try MediaSource first; falls back to HTTP inside
-  audio.play().catch(() => scheduleLiveReconnect(800));
+  audio.play().catch(err => { if (err.name !== 'AbortError') scheduleLiveReconnect(800); });
 }
 
 function exitLiveMode() {
@@ -2632,13 +2641,28 @@ function startPlayback() {
   if (isLive) {
     hideLiveJoinBanner();
     setJoiningBadge();
+    // Optimistic UI: show ⏸ immediately so the user gets instant feedback that
+    // their tap registered.  Real playback state will sync when audio fires
+    // 'playing' (or we revert in scheduleLiveReconnect on genuine failure).
+    isPlaying = true;
+    const _spPlayIcon = document.getElementById('play-icon');
+    const _spPlayBtn  = document.getElementById('play-btn');
+    if (_spPlayIcon) _spPlayIcon.textContent = '⏸';
+    if (_spPlayBtn)  _spPlayBtn.classList.add('playing');
+    requestWakeLock();
     startLiveEdgeMonitor();
     startLiveJoinTimeout();
-    // Start live stream via MediaSource (HTTP fallback inside startLiveViaMS).
-    // startLiveViaMS() sets audio.src synchronously, then audio.play() is called
-    // here within the onclick user-gesture context — required by iOS Safari.
+    // startLiveViaMS() sets audio.src synchronously; play() is called here
+    // inside the onclick user-gesture context — required by iOS Safari.
     startLiveViaMS();
-    audio.play().catch(() => scheduleLiveReconnect(800));
+    audio.play().catch(err => {
+      // AbortError fires when the browser itself interrupted the play() call
+      // (e.g. while the MediaSource is still opening).  The 'sourceopen'
+      // handler / live:audio flush will resume playback as soon as data
+      // arrives — no reconnect needed.
+      if (err.name === 'AbortError') return;
+      scheduleLiveReconnect(1500);
+    });
     return;
   }
 
