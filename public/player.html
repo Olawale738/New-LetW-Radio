@@ -3046,10 +3046,13 @@ async function _setupAudioGraph() {
     // ── Load worklets ────────────────────────────────────────────────────
     // audio-processor: stereo widening + saturation + true-peak limiter
     // live-worklet:    dropout fade concealment (live mode only)
+    // Cache-bust worklet URLs so browsers always load the latest version after a deploy.
+    // The query param changes each page load; server responds with 304 if file unchanged.
+    const _wv = Date.now();
     let workletsOk = false;
     try {
-      await _audioCtx.audioWorklet.addModule('/audio-processor.js');
-      await _audioCtx.audioWorklet.addModule('/live-worklet.js');
+      await _audioCtx.audioWorklet.addModule('/audio-processor.js?v=' + _wv);
+      await _audioCtx.audioWorklet.addModule('/live-worklet.js?v=' + _wv);
       workletsOk = true;
     } catch (wErr) {
       console.warn('[Audio] Worklets unavailable — EQ chain only:', wErr.message);

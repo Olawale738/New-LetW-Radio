@@ -67,7 +67,25 @@ app.set('trust proxy', 1);
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(express.static(path.join(__dirname, 'public'), { index: false }));
+
+// Serve public/ with strong no-cache headers on every file.
+// Without this, browsers cache player.html, audio-processor.js, live-worklet.js
+// etc. and users never see updates after a deploy.
+app.use(express.static(path.join(__dirname, 'public'), {
+  index: false,
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html')) {
+      // HTML pages: never store in cache — always fetch fresh from server
+      res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+      res.set('Pragma', 'no-cache');
+      res.set('Expires', '0');
+    } else {
+      // JS / CSS / worklet / image files: allow conditional GET (ETag/304)
+      // but force revalidation on every request so new deploys are instant.
+      res.set('Cache-Control', 'no-cache');
+    }
+  },
+}));
 
 // ── Settings helper ───────────────────────────────────────────────────────────
 function getSettings() {
@@ -289,6 +307,7 @@ app.get('/admin-logout', (req, res) => {
 
 // GET /listen — public listener player
 app.get('/listen', (req, res) => {
+  noCache(res); // always serve fresh HTML — never let the browser cache player.html
   res.sendFile(path.join(__dirname, 'public', 'player.html'));
 });
 
