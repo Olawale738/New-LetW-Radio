@@ -2576,10 +2576,21 @@ audio.addEventListener('waiting', () => {
   }
 });
 
-// stalled = browser stopped fetching data even though more is expected
+// stalled = browser stopped fetching data even though more is expected.
+// For MediaSource live streams this fires NORMALLY during the initial
+// buffering gap between play() and the first appended chunk — it is NOT
+// a sign of a network problem.  Once we append data the browser resumes
+// automatically; a reconnect here would tear down the working pipeline.
+// Only reconnect immediately for HTTP-based live streams (_liveMS == null).
 audio.addEventListener('stalled', () => {
   if (isLive) {
-    scheduleLiveReconnect(800);
+    if (_liveMS) {
+      // MediaSource pipeline is active (or being set up) — give it time.
+      startLiveStallTimer(); // 8-second grace before deciding it's truly stuck
+    } else {
+      // HTTP fallback — stall means network dropped; reconnect quickly.
+      scheduleLiveReconnect(800);
+    }
   } else if (isPlaying) {
     scheduleReconnect();
   }
@@ -2849,14 +2860,17 @@ function clearStallTimer() {
 }
 
 // Keepalive: every 10 s, check for the zombie state where the player is
-// logically on (isPlaying or isLive) but the audio element is silently paused.
+// logically on but the audio element is silently paused.
 // This catches autoplay-policy kills and silent network drops with no error event.
+// For live mode we only trigger if BOTH isLive AND isPlaying — if the user
+// hasn't pressed Play yet (e.g. they're on the Join Live banner) we must NOT
+// reconnect because we'd be starting playback without a user gesture.
 setInterval(() => {
   if (audio.paused && !reconnectTO) {
-    if (isLive) {
+    if (isLive && isPlaying) {
       console.warn('[Keepalive] Live audio paused silently — reconnecting');
       scheduleLiveReconnect(500);
-    } else if (isPlaying) {
+    } else if (isPlaying && !isLive) {
       console.warn('[Keepalive] Audio paused while active — reconnecting');
       scheduleReconnect();
     }
