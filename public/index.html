@@ -1546,8 +1546,8 @@
 </div>
 
 <!-- Add/Edit Stream Modal -->
-<div id="stream-modal" style="display:none;position:fixed;inset:0;z-index:900;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px;width:90%;max-width:440px;box-shadow:0 20px 60px rgba(0,0,0,0.8);">
+<div id="stream-modal" style="display:none;position:fixed;inset:0;z-index:900;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;overflow-y:auto;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px;width:90%;max-width:480px;box-shadow:0 20px 60px rgba(0,0,0,0.8);margin:20px auto;">
     <div style="font-size:15px;font-weight:700;color:var(--white);margin-bottom:20px;" id="stream-modal-title">Add Channel</div>
     <input type="hidden" id="stream-edit-id">
     <div style="margin-bottom:12px;">
@@ -1556,11 +1556,29 @@
     </div>
     <div style="margin-bottom:12px;">
       <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px;">Stream URL *</label>
-      <input type="text" class="form-control" id="stream-url" placeholder="/stream  or  https://yourserver.com/radio/8000/live" maxlength="300">
+      <input type="text" class="form-control" id="stream-ch-url" placeholder="/stream  or  https://yourserver.com/radio/8000/live" maxlength="300">
     </div>
     <div style="margin-bottom:12px;">
       <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px;">Description (shown to listeners)</label>
       <input type="text" class="form-control" id="stream-description" placeholder="e.g. Primary English broadcast" maxlength="200">
+    </div>
+    <div style="margin-bottom:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div>
+        <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px;">Language</label>
+        <input type="text" class="form-control" id="stream-language" placeholder="e.g. English, Yoruba, Igbo" maxlength="50">
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px;">Category</label>
+        <input type="text" class="form-control" id="stream-category" placeholder="e.g. Gospel, Youth" maxlength="50">
+      </div>
+    </div>
+    <div style="margin-bottom:12px;">
+      <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px;">Channel Icon / Image URL (optional)</label>
+      <input type="text" class="form-control" id="stream-image-url" placeholder="https://... or leave blank for emoji icon" maxlength="300">
+    </div>
+    <div style="margin-bottom:12px;">
+      <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px;">WhatsApp Number (optional, with country code)</label>
+      <input type="text" class="form-control" id="stream-whatsapp" placeholder="e.g. 2348012345678" maxlength="30">
     </div>
     <div style="margin-bottom:16px;display:flex;align-items:center;gap:8px;">
       <input type="number" class="form-control" id="stream-sort" placeholder="Sort order (0 = first)" style="width:140px;" min="0" max="999">
@@ -1595,6 +1613,28 @@
               <label class="form-label">Language</label>
               <input class="form-control" id="set-lang" placeholder="English">
             </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Website URL</label>
+            <input class="form-control" id="set-website-url" placeholder="https://yourchurch.org">
+          </div>
+          <button class="btn btn-primary" onclick="saveSettings()">Save Changes</button>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><div class="card-title">📱 App Downloads (DCLM-style)</div></div>
+          <p style="font-size:12px;color:var(--text3);margin-bottom:14px;">Add your Google Play and iOS App Store links to display download buttons in the public player.</p>
+          <div class="form-group">
+            <label class="form-label">Google Play Store URL</label>
+            <input class="form-control" id="set-android-url" placeholder="https://play.google.com/store/apps/details?id=...">
+          </div>
+          <div class="form-group">
+            <label class="form-label">iOS App Store URL</label>
+            <input class="form-control" id="set-ios-url" placeholder="https://apps.apple.com/app/...">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Broadcast WhatsApp Number (optional)</label>
+            <input class="form-control" id="set-whatsapp" placeholder="e.g. 2348012345678 (with country code, no +)">
           </div>
           <button class="btn btn-primary" onclick="saveSettings()">Save Changes</button>
         </div>
@@ -2789,6 +2829,16 @@ async function loadSettings() {
   document.getElementById('player-url').value = `${base}/listen`;
 
   document.getElementById('sidebar-radio-name').textContent = s.radio_name || 'LETW Radio';
+
+  // App download + social links
+  const wbEl = document.getElementById('set-website-url');
+  const anEl = document.getElementById('set-android-url');
+  const ioEl = document.getElementById('set-ios-url');
+  const waEl = document.getElementById('set-whatsapp');
+  if (wbEl) wbEl.value = s.website_url || '';
+  if (anEl) anEl.value = s.app_store_android || '';
+  if (ioEl) ioEl.value = s.app_store_ios || '';
+  if (waEl) waEl.value = s.app_store_whatsapp || '';
 }
 
 async function saveSettings() {
@@ -2800,6 +2850,15 @@ async function saveSettings() {
     stream_bitrate: document.getElementById('set-bitrate').value,
     filler_enabled: document.getElementById('set-filler').checked ? '1' : '0',
   };
+  // App / social settings (optional fields — only save if element exists)
+  const wbEl = document.getElementById('set-website-url');
+  const anEl = document.getElementById('set-android-url');
+  const ioEl = document.getElementById('set-ios-url');
+  const waEl = document.getElementById('set-whatsapp');
+  if (wbEl) data.website_url = wbEl.value.trim();
+  if (anEl) data.app_store_android = anEl.value.trim();
+  if (ioEl) data.app_store_ios = ioEl.value.trim();
+  if (waEl) data.app_store_whatsapp = waEl.value.trim();
   await api('PUT', '/settings', data);
   toast('Settings saved', 'success');
   document.getElementById('sidebar-radio-name').textContent = data.radio_name;
@@ -3952,7 +4011,7 @@ function renderAdminStreamsList() {
     <table style="width:100%;border-collapse:collapse;">
       <thead>
         <tr style="font-size:10px;letter-spacing:1px;color:var(--text3);text-transform:uppercase;border-bottom:1px solid var(--border);">
-          <th style="padding:8px 12px;text-align:left;">Name</th>
+          <th style="padding:8px 12px;text-align:left;">Name / Language</th>
           <th style="padding:8px 12px;text-align:left;">Stream URL</th>
           <th style="padding:8px 12px;text-align:left;">Description</th>
           <th style="padding:8px 12px;text-align:center;">Order</th>
@@ -3963,7 +4022,14 @@ function renderAdminStreamsList() {
       <tbody>
         ${_adminStreams.map(s => `
           <tr style="border-bottom:1px solid rgba(255,255,255,0.05);font-size:12px;">
-            <td style="padding:10px 12px;color:var(--white);font-weight:700;">${s.name}</td>
+            <td style="padding:10px 12px;">
+              <div style="color:var(--white);font-weight:700;">${s.name}</div>
+              <div style="font-size:10px;margin-top:2px;">
+                ${s.language && s.language !== 'English' ? `<span style="padding:1px 6px;border-radius:6px;background:rgba(212,168,67,0.15);color:var(--accent);margin-right:4px;">${s.language}</span>` : ''}
+                ${s.category && s.category !== 'General' ? `<span style="padding:1px 6px;border-radius:6px;background:rgba(100,180,255,0.12);color:#8ac4ff;margin-right:4px;">${s.category}</span>` : ''}
+                ${s.whatsapp ? `<span style="padding:1px 6px;border-radius:6px;background:rgba(37,211,102,0.12);color:#25d366;">📱 WA</span>` : ''}
+              </div>
+            </td>
             <td style="padding:10px 12px;color:var(--accent);font-family:monospace;font-size:11px;">${s.url}</td>
             <td style="padding:10px 12px;color:var(--text3);">${s.description || '—'}</td>
             <td style="padding:10px 12px;text-align:center;color:var(--text3);">${s.sort_order}</td>
@@ -3984,8 +4050,12 @@ function openAddStreamModal() {
   document.getElementById('stream-modal-title').textContent = 'Add Channel';
   document.getElementById('stream-edit-id').value = '';
   document.getElementById('stream-name').value = '';
-  document.getElementById('stream-url').value = '';
+  document.getElementById('stream-ch-url').value = '';
   document.getElementById('stream-description').value = '';
+  document.getElementById('stream-language').value = 'English';
+  document.getElementById('stream-category').value = 'General';
+  document.getElementById('stream-image-url').value = '';
+  document.getElementById('stream-whatsapp').value = '';
   document.getElementById('stream-sort').value = _adminStreams.length;
   document.getElementById('stream-modal').style.display = 'flex';
 }
@@ -3996,8 +4066,12 @@ function editStream(id) {
   document.getElementById('stream-modal-title').textContent = 'Edit Channel';
   document.getElementById('stream-edit-id').value = s.id;
   document.getElementById('stream-name').value = s.name;
-  document.getElementById('stream-url').value = s.url;
+  document.getElementById('stream-ch-url').value = s.url;
   document.getElementById('stream-description').value = s.description || '';
+  document.getElementById('stream-language').value = s.language || 'English';
+  document.getElementById('stream-category').value = s.category || 'General';
+  document.getElementById('stream-image-url').value = s.image_url || '';
+  document.getElementById('stream-whatsapp').value = s.whatsapp || '';
   document.getElementById('stream-sort').value = s.sort_order || 0;
   document.getElementById('stream-modal').style.display = 'flex';
 }
@@ -4007,17 +4081,22 @@ function closeStreamModal() {
 }
 
 async function saveStream() {
-  const id   = document.getElementById('stream-edit-id').value;
-  const name = document.getElementById('stream-name').value.trim();
-  const url  = document.getElementById('stream-url').value.trim();
-  const desc = document.getElementById('stream-description').value.trim();
-  const sort = parseInt(document.getElementById('stream-sort').value, 10) || 0;
+  const id       = document.getElementById('stream-edit-id').value;
+  const name     = document.getElementById('stream-name').value.trim();
+  const url      = document.getElementById('stream-ch-url').value.trim();
+  const desc     = document.getElementById('stream-description').value.trim();
+  const language = document.getElementById('stream-language').value.trim() || 'English';
+  const category = document.getElementById('stream-category').value.trim() || 'General';
+  const image_url= document.getElementById('stream-image-url').value.trim();
+  const whatsapp = document.getElementById('stream-whatsapp').value.trim();
+  const sort     = parseInt(document.getElementById('stream-sort').value, 10) || 0;
   if (!name || !url) { alert('Name and URL are required'); return; }
   try {
+    const payload = { name, url, description: desc, sort_order: sort, language, category, image_url, whatsapp };
     if (id) {
-      await api('PUT', `/streams/${id}`, { name, url, description: desc, sort_order: sort, active: 1 });
+      await api('PUT', `/streams/${id}`, { ...payload, active: 1 });
     } else {
-      await api('POST', '/streams', { name, url, description: desc, sort_order: sort });
+      await api('POST', '/streams', payload);
     }
     closeStreamModal();
     loadAdminStreams();

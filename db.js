@@ -169,6 +169,11 @@ function initSchema(sqlDb) {
     vapid_private: '',
     crossfade_time: '3',
     auto_dj: '0',
+    // App download links (DCLM-style)
+    app_store_android: '',
+    app_store_ios: '',
+    app_store_whatsapp: '',
+    website_url: 'https://letw.org',
   };
   for (const [k, v] of Object.entries(defaults)) {
     sqlDb.run(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`, [k, v]);
