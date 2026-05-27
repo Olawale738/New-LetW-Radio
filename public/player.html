@@ -692,6 +692,8 @@
     }
     #live-timer.visible { display: block; }
     #live-rtt-wrap.visible { display: flex !important; }
+    #audio-enhanced-badge { display: none; }
+    #audio-enhanced-badge.visible { display: inline-flex !important; }
 
     /* ── Stream Error / Retry Banner ────────────────────────────── */
     #stream-error-banner {
@@ -2184,6 +2186,15 @@
           <span id="live-rtt-display" style="font-variant-numeric:tabular-nums;">– ms</span>
           <span style="opacity:0.5">latency</span>
         </div>
+        <!-- Audio enhancement indicator + GR meter (hidden until processing active) -->
+        <div id="audio-enhanced-badge" style="display:none;align-items:center;gap:6px;margin-top:5px;padding:4px 10px;border-radius:20px;background:rgba(212,168,67,0.10);border:1px solid rgba(212,168,67,0.25);">
+          <span style="font-size:11px;color:var(--gold);letter-spacing:0.5px;font-weight:600;">✦ ENHANCED</span>
+          <span style="font-size:10px;color:rgba(255,255,255,0.35)">EQ · COMPRESS · STEREO</span>
+          <!-- Gain-reduction meter: fills left→right as limiter is working -->
+          <div style="width:36px;height:4px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden;" title="Limiter gain reduction">
+            <div id="audio-gr-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#4caf82,#d4a843,#e05070);transition:width 80ms linear;border-radius:2px;"></div>
+          </div>
+        </div>
 
         <!-- Stream error / retry banner -->
         <div id="stream-error-banner" role="alert">
@@ -2623,15 +2634,26 @@ let   _lwsSeq   = 0;     // last received sequence number
 let   _lwsRtt   = null;  // latest RTT measurement (ms)
 let   _lwsPingTs = 0;    // client timestamp when last ping was sent
 
-// ── AudioWorklet (live-stream-processor) ─────────────────────
-// Runs in the audio rendering thread — immune to GC pauses and tab throttling.
-// Sits between createMediaElementSource() and AudioContext.destination.
-// Applies fade-in/fade-out on dropout boundaries so network glitches don't
-// produce hard clicks.
-let _liveAudioCtx  = null;  // AudioContext (created on first user gesture)
-let _liveSrcNode   = null;  // MediaElementSourceNode
-let _liveWorklet   = null;  // AudioWorkletNode
-let _liveWorkletOk = false; // true once the worklet has been loaded
+// ── Unified Audio Processing Graph ───────────────────────────
+// One AudioContext processes ALL audio — regular stream AND live broadcast.
+// Chain:
+//   <audio> → MediaElementSourceNode
+//     → HPF(80Hz) → LowShelf(120Hz,+3.5dB) → Peak(220Hz,+2.5dB)
+//     → Peak(380Hz,-2dB) → Peak(1.2kHz,-1dB) → Peak(2.8kHz,+3dB)
+//     → Peak(6kHz,+1.5dB) → HighShelf(12kHz,+2.5dB)
+//     → Compressor1(-20dB, 3:1, 8ms/200ms)
+//     → Compressor2(-4dB, 10:1, 1ms/50ms)  [brick-wall limiter]
+//     → AudioWorkletNode(audio-processor)   [stereo width, saturation, true-peak limit]
+//     → GainNode(makeup)
+//     → [AudioWorkletNode(live-stream-processor) — only in live mode]
+//     → AudioContext.destination
+let _audioCtx     = null;  // shared AudioContext (created once on first gesture)
+let _srcNode      = null;  // MediaElementSourceNode (created once, never recreated)
+let _chainTail    = null;  // last node before destination (audio-processor output)
+let _outGain      = null;  // master output gain node
+let _liveWorklet  = null;  // live-stream-processor (inserted only in live mode)
+let _graphReady   = false; // true once chain is set up and audio-processor loaded
+let _graphLoading = false; // prevents concurrent _setupAudioGraph calls
 
 // ── Sermon / On-Demand state ──────────────────────────────────
 let _sermonTracks      = [];      // full list fetched from API
@@ -3003,59 +3025,184 @@ function _toAB(data) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AudioWorklet — live-stream-processor
-// Installed once on first user gesture.  Handles smooth fade on dropout edges.
+// Unified Audio Processing Graph
+// Called once on the first user-gesture (play button tap).  Sets up the full
+// 8-band EQ → 2-stage compressor → audio-processor worklet chain.
+// All subsequent audio — regular stream AND live — flows through this chain.
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function _ensureAudioWorklet() {
-  if (_liveWorkletOk) return true;
+async function _setupAudioGraph() {
+  if (_graphReady || _graphLoading) return;
+  _graphLoading = true;
+
   try {
-    if (!_liveAudioCtx) {
-      _liveAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    // One AudioContext for the entire session (Chrome: 6-per-page limit)
+    _audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+      latencyHint: 'playback', // prioritise smooth output over low latency
+      sampleRate:  48000,      // Opus/WebM native sample rate
+    });
+    if (_audioCtx.state === 'suspended') await _audioCtx.resume();
+
+    // ── Load worklets ────────────────────────────────────────────────────
+    // audio-processor: stereo widening + saturation + true-peak limiter
+    // live-worklet:    dropout fade concealment (live mode only)
+    let workletsOk = false;
+    try {
+      await _audioCtx.audioWorklet.addModule('/audio-processor.js');
+      await _audioCtx.audioWorklet.addModule('/live-worklet.js');
+      workletsOk = true;
+    } catch (wErr) {
+      console.warn('[Audio] Worklets unavailable — EQ chain only:', wErr.message);
     }
-    if (_liveAudioCtx.state === 'suspended') await _liveAudioCtx.resume();
-    await _liveAudioCtx.audioWorklet.addModule('/live-worklet.js');
-    _liveWorkletOk = true;
-    console.log('[LiveWS] AudioWorklet loaded ✓');
-    return true;
+
+    // ── MediaElementSourceNode ───────────────────────────────────────────
+    // Create ONCE — the browser throws if called twice on the same element.
+    _srcNode = _audioCtx.createMediaElementSource(audio);
+
+    // ── 8-Band Equaliser ─────────────────────────────────────────────────
+    // Tuned for Gospel/Church radio: warm lows, clear vocals, airy highs.
+
+    // 1. High-Pass 80 Hz — remove floor rumble, A/C noise, mic handling
+    const hp = _audioCtx.createBiquadFilter();
+    hp.type = 'highpass'; hp.frequency.value = 80; hp.Q.value = 0.707;
+
+    // 2. Low Shelf +3.5 dB @ 120 Hz — body and warmth (music fullness)
+    const ls = _audioCtx.createBiquadFilter();
+    ls.type = 'lowshelf'; ls.frequency.value = 120; ls.gain.value = 3.5;
+
+    // 3. +2.5 dB @ 220 Hz Q=0.9 — punch and chest resonance
+    const b1 = _audioCtx.createBiquadFilter();
+    b1.type = 'peaking'; b1.frequency.value = 220; b1.Q.value = 0.9; b1.gain.value = 2.5;
+
+    // 4. -2.0 dB @ 380 Hz Q=1.2 — remove "boxy/telephone" sound
+    const b2 = _audioCtx.createBiquadFilter();
+    b2.type = 'peaking'; b2.frequency.value = 380; b2.Q.value = 1.2; b2.gain.value = -2.0;
+
+    // 5. -1.0 dB @ 1.2 kHz Q=2.0 — remove nasal/honky room character
+    const b3 = _audioCtx.createBiquadFilter();
+    b3.type = 'peaking'; b3.frequency.value = 1200; b3.Q.value = 2.0; b3.gain.value = -1.0;
+
+    // 6. +3.0 dB @ 2.8 kHz Q=1.4 — vocal presence and speech intelligibility
+    const b4 = _audioCtx.createBiquadFilter();
+    b4.type = 'peaking'; b4.frequency.value = 2800; b4.Q.value = 1.4; b4.gain.value = 3.0;
+
+    // 7. +1.5 dB @ 6 kHz Q=1.0 — consonant clarity (s, t, k, ch sounds)
+    const b5 = _audioCtx.createBiquadFilter();
+    b5.type = 'peaking'; b5.frequency.value = 6000; b5.Q.value = 1.0; b5.gain.value = 1.5;
+
+    // 8. High Shelf +2.5 dB @ 12 kHz — air and sparkle
+    const hs = _audioCtx.createBiquadFilter();
+    hs.type = 'highshelf'; hs.frequency.value = 12000; hs.gain.value = 2.5;
+
+    // ── Stage 1 Compressor — musical dynamics control ────────────────────
+    // Gentle ratio, slow attack (let transients punch through) — music.
+    const comp1 = _audioCtx.createDynamicsCompressor();
+    comp1.threshold.value = -20; // dB
+    comp1.knee.value      = 8;   // dB — soft knee
+    comp1.ratio.value     = 3;   // 3:1
+    comp1.attack.value    = 0.008; // 8 ms — fast enough to catch loud notes
+    comp1.release.value   = 0.2;   // 200 ms — musical release
+
+    // ── Stage 2 Compressor — broadcast brick-wall limiter ────────────────
+    // Very high ratio, instant attack — prevents clipping after EQ boosts.
+    const comp2 = _audioCtx.createDynamicsCompressor();
+    comp2.threshold.value = -4;  // dB — only catches peaks boosted by EQ
+    comp2.knee.value      = 1;   // dB — hard knee
+    comp2.ratio.value     = 20;  // 20:1 ≈ brick wall
+    comp2.attack.value    = 0.001; // 1 ms
+    comp2.release.value   = 0.05;  // 50 ms
+
+    // ── Makeup Gain ──────────────────────────────────────────────────────
+    // Recover the gain reduced by compression; final level ≈ -9 to -12 LUFS
+    // which is loud and punchy (professional broadcast target).
+    _outGain = _audioCtx.createGain();
+    _outGain.gain.value = 1.5; // +3.5 dB makeup — tuned empirically
+
+    // ── Wire the chain ───────────────────────────────────────────────────
+    _srcNode.connect(hp);
+    hp.connect(ls);
+    ls.connect(b1);
+    b1.connect(b2);
+    b2.connect(b3);
+    b3.connect(b4);
+    b4.connect(b5);
+    b5.connect(hs);
+    hs.connect(comp1);
+    comp1.connect(comp2);
+    comp2.connect(_outGain);
+
+    if (workletsOk) {
+      // audio-processor: stereo widening (width=1.35) + saturation (drive=0.15) + -1dBFS limiter
+      const proc = new AudioWorkletNode(_audioCtx, 'audio-processor', {
+        processorOptions: { width: 1.35, drive: 0.15, limitDb: -1 },
+      });
+      proc.port.onmessage = ({ data }) => {
+        if (!data || data.type !== 'meter') return;
+        // Update GR meter in UI (if element exists)
+        const gr = document.getElementById('audio-gr-bar');
+        if (gr) gr.style.width = Math.round(data.gainReduction * 100) + '%';
+      };
+      _outGain.connect(proc);
+      _chainTail = proc;
+    } else {
+      _chainTail = _outGain;
+    }
+
+    // Connect tail to destination (disconnected/reconnected in live mode)
+    _chainTail.connect(_audioCtx.destination);
+    _graphReady = true;
+
+    console.log('[Audio] ✦ Broadcast processing chain active'
+      + (workletsOk ? ' (stereo widener + limiter ✓)' : ' (EQ + compressor only)'));
+
+    // Show the "Enhanced" indicator in UI
+    const badge = document.getElementById('audio-enhanced-badge');
+    if (badge) badge.style.display = 'inline-flex';
+
   } catch (e) {
-    console.warn('[LiveWS] AudioWorklet unavailable:', e.message);
-    return false;
+    console.warn('[Audio] Processing chain setup failed — unprocessed output:', e.message);
+    _graphReady   = false;
+    _graphLoading = false;
   }
 }
 
-function _connectWorkletToAudio() {
-  if (!_liveWorkletOk || !_liveAudioCtx || _liveSrcNode) return;
+/** Insert the live-stream-processor between _chainTail and destination. */
+function _connectLiveWorklet() {
+  if (!_graphReady || _liveWorklet) return;
   try {
-    _liveSrcNode = _liveAudioCtx.createMediaElementSource(audio);
-    _liveWorklet = new AudioWorkletNode(_liveAudioCtx, 'live-stream-processor');
-
+    _chainTail.disconnect(_audioCtx.destination);
+    _liveWorklet = new AudioWorkletNode(_audioCtx, 'live-stream-processor');
     _liveWorklet.port.onmessage = ({ data }) => {
       if (!data) return;
       if (data.type === 'dropout-end') {
-        console.debug(`[LiveWorklet] dropout ${Math.round(data.durationMs)} ms`);
+        console.debug(`[LiveAudio] network gap concealed: ${Math.round(data.durationMs)} ms`);
       } else if (data.type === 'stats') {
         const el = document.getElementById('live-rtt-display');
         if (el && _lwsRtt !== null) el.textContent = `${Math.round(_lwsRtt)} ms`;
       }
     };
-
-    _liveSrcNode.connect(_liveWorklet);
-    _liveWorklet.connect(_liveAudioCtx.destination);
-    console.log('[LiveWS] AudioWorklet graph connected ✓');
+    _chainTail.connect(_liveWorklet);
+    _liveWorklet.connect(_audioCtx.destination);
   } catch (e) {
-    console.warn('[LiveWS] AudioWorklet graph error:', e.message);
-    if (_liveSrcNode) {
-      try { _liveSrcNode.connect(_liveAudioCtx.destination); } catch (_) {}
-    }
+    console.warn('[Audio] Live worklet insert failed:', e.message);
+    // Re-connect tail to destination so audio still plays
+    try { _chainTail.connect(_audioCtx.destination); } catch (_) {}
   }
 }
 
-function _disconnectWorklet() {
-  try { if (_liveWorklet) { _liveWorklet.disconnect(); _liveWorklet.port.postMessage({ type: 'reset' }); } } catch (_) {}
-  try { if (_liveSrcNode) _liveSrcNode.disconnect(); } catch (_) {}
-  _liveWorklet = null;
-  _liveSrcNode = null;
+/** Remove the live-stream-processor and restore direct chain → destination path. */
+function _disconnectLiveWorklet() {
+  if (!_liveWorklet) return;
+  try {
+    _chainTail.disconnect();
+    _liveWorklet.port.postMessage({ type: 'reset' });
+    _liveWorklet.disconnect();
+    _liveWorklet = null;
+    _chainTail.connect(_audioCtx.destination);
+  } catch (e) {
+    _liveWorklet = null;
+    try { _chainTail?.connect(_audioCtx.destination); } catch (_) {}
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3203,8 +3350,8 @@ function startLiveViaMS() {
       // The binary WS server already delivers INIT on connect if live.
       socket.emit('live:request-init');
 
-      // Connect AudioWorklet graph (fade-on-dropout concealment)
-      _connectWorkletToAudio();
+      // Connect live-stream-processor for dropout fade concealment
+      _connectLiveWorklet();
 
       _liveFlush(); // drain any chunks that arrived before sourceopen
     } catch(e) {
@@ -3341,8 +3488,8 @@ function switchToLiveMode(info) {
   // ── Connect binary WebSocket (primary fast path) ──────────────
   _lwsConnect();
 
-  // ── Load AudioWorklet async (no await — user gesture is over) ──
-  _ensureAudioWorklet();
+  // Audio graph is set up in startPlayback() or on first play gesture.
+  // _connectLiveWorklet() is called inside startLiveViaMS sourceopen handler.
 
   startLiveViaMS();             // try MediaSource first; falls back to HTTP inside
   audio.play().catch(err => { if (err.name !== 'AbortError') scheduleLiveReconnect(800); });
@@ -3374,9 +3521,9 @@ function exitLiveMode() {
   stopLiveTimer();
   // Tell server this listener is no longer in live mode
   socket.emit('live:leave');
-  // Disconnect binary WebSocket and AudioWorklet
+  // Disconnect binary WebSocket and live dropout-fade worklet
   _lwsDisconnect();
-  _disconnectWorklet();
+  _disconnectLiveWorklet();
   // Use setStatusBadge so hero-dot, hero-status, and progress bar are all
   // updated correctly.  Show ON AIR if already playing, OFFLINE if not.
   setStatusBadge(isPlaying);
@@ -3546,8 +3693,14 @@ function togglePlay() {
 }
 
 function startPlayback() {
-  // The <audio> element plays directly through the system audio — no Web Audio
-  // routing.  AudioContext is only used for the visualiser analyser tap.
+  // ── Broadcast-grade audio processing chain ────────────────────────────────
+  // Set up once on the first user gesture (required by browser autoplay policy).
+  // Routes all audio through 8-band EQ → 2-stage compressor → stereo widener
+  // → true-peak limiter.  Safe to call if already set up (_graphLoading guard).
+  _setupAudioGraph(); // async; fires in background — no await needed here
+
+  // Visualiser AudioContext (separate from processing chain;
+  // uses captureStream() NOT createMediaElementSource — see comment in initViz)
   if (!audioCtx && (window.AudioContext || window.webkitAudioContext)) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
@@ -3569,9 +3722,8 @@ function startPlayback() {
     requestWakeLock();
     startLiveEdgeMonitor();
     startLiveJoinTimeout();
-    // Connect binary WebSocket and pre-load AudioWorklet
+    // Connect binary WebSocket (primary fast path for audio delivery)
     _lwsConnect();
-    _ensureAudioWorklet();
     // startLiveViaMS() sets audio.src synchronously; play() is called here
     // inside the onclick user-gesture context — required by iOS Safari.
     startLiveViaMS();
