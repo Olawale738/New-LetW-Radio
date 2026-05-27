@@ -575,26 +575,230 @@ router.get('/streams/all', (req, res) => {
 });
 
 router.post('/streams', (req, res) => {
-  const { name, url, description, is_default, sort_order } = req.body;
+  const { name, url, description, is_default, sort_order, language, category, image_url, whatsapp } = req.body;
   if (!name || !url) return res.status(400).json({ error: 'name and url are required' });
   const id = uuidv4();
-  db.prepare(`INSERT INTO streams (id, name, url, description, is_default, sort_order, active) VALUES (?, ?, ?, ?, ?, ?, 1)`)
-    .run(id, name.slice(0, 80), url.slice(0, 300), (description || '').slice(0, 200),
-         is_default ? 1 : 0, sort_order || 0);
-  res.json({ id, name, url, description, is_default: !!is_default, sort_order: sort_order || 0, active: 1 });
+  db.prepare(`INSERT INTO streams (id, name, url, description, is_default, sort_order, active, language, category, image_url, whatsapp) VALUES (?,?,?,?,?,?,1,?,?,?,?)`)
+    .run(id, name.slice(0,80), url.slice(0,300), (description||'').slice(0,200),
+         is_default ? 1 : 0, sort_order || 0,
+         (language||'English').slice(0,50), (category||'General').slice(0,50),
+         (image_url||'').slice(0,300), (whatsapp||'').slice(0,100));
+  res.json({ id, name, url, description, is_default: !!is_default, sort_order: sort_order||0, active: 1 });
 });
 
 router.put('/streams/:id', (req, res) => {
-  const { name, url, description, is_default, sort_order, active } = req.body;
-  db.prepare(`UPDATE streams SET name=?, url=?, description=?, is_default=?, sort_order=?, active=? WHERE id=?`)
-    .run((name || '').slice(0,80), (url || '').slice(0,300), (description||'').slice(0,200),
-         is_default ? 1 : 0, sort_order || 0, active !== false ? 1 : 0, req.params.id);
+  const { name, url, description, is_default, sort_order, active, language, category, image_url, whatsapp } = req.body;
+  db.prepare(`UPDATE streams SET name=?, url=?, description=?, is_default=?, sort_order=?, active=?, language=?, category=?, image_url=?, whatsapp=? WHERE id=?`)
+    .run((name||'').slice(0,80), (url||'').slice(0,300), (description||'').slice(0,200),
+         is_default ? 1 : 0, sort_order||0, active !== false ? 1 : 0,
+         (language||'English').slice(0,50), (category||'General').slice(0,50),
+         (image_url||'').slice(0,300), (whatsapp||'').slice(0,100), req.params.id);
   res.json({ success: true });
 });
 
 router.delete('/streams/:id', (req, res) => {
   db.prepare(`DELETE FROM streams WHERE id = ?`).run(req.params.id);
   res.json({ success: true });
+});
+
+// ── Streams: update with new fields ──────────────────────────────────────────
+// Re-export streams PUT to handle language/category/image_url/whatsapp
+// (already handled by the generic PUT above — just ensure fields are accepted)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NOW PLAYING — AzuraCast-compatible API (used by DCLM-style integrations,
+// third-party apps, external stats dashboards, and the player's metadata poller)
+// ═══════════════════════════════════════════════════════════════════════════════
+router.get('/nowplaying', (req, res) => {
+  const settings = {};
+  db.prepare(`SELECT key, value FROM settings`).all().forEach(r => settings[r.key] = r.value);
+  const st = audioEngine.getStatus();
+  const track = st.currentTrack || {};
+  const elapsed = st.startTime ? Math.floor((Date.now() - st.startTime) / 1000) : 0;
+  const duration = track.duration ? Math.round(track.duration) : 0;
+  const remaining = duration > elapsed ? duration - elapsed : 0;
+  const streams = db.prepare(`SELECT * FROM streams WHERE active = 1 ORDER BY sort_order, created_at`).all();
+
+  res.json({
+    station: {
+      id: 1,
+      name: settings.radio_name || 'LETW Radio',
+      shortcode: 'letw',
+      description: settings.radio_description || '',
+      frontend: 'remote',
+      backend: 'liquidsoap',
+      listen_url: '/stream',
+      url: '',
+      public_player_url: '/listen',
+      is_public: true,
+      mounts: streams.map((s, i) => ({
+        id: i + 1,
+        name: s.name,
+        path: s.url,
+        is_default: !!s.is_default,
+        url: s.url,
+        bitrate: 128,
+        format: 'mp3',
+        listeners: { total: 0, unique: 0, current: 0 },
+        links: { self: '/api/nowplaying/' + (i + 1) }
+      }))
+    },
+    listeners: {
+      current: st.listeners || 0,
+      unique:  st.listeners || 0,
+      total:   st.listeners || 0
+    },
+    live: {
+      is_live: !!st.isLive,
+      streamer_name: st.isLive ? (st.liveArtist || 'Live Broadcast') : '',
+      broadcast_start: null
+    },
+    now_playing: {
+      sh_id: track.id ? parseInt(track.id, 16) || 0 : 0,
+      played_at: st.startTime ? Math.floor(st.startTime / 1000) : 0,
+      duration,
+      elapsed,
+      remaining,
+      is_live: !!st.isLive,
+      song: {
+        id: track.id || '',
+        text: st.isLive
+          ? (st.liveTitle || 'Live Broadcast')
+          : ((track.artist ? track.artist + ' - ' : '') + (track.title || '')),
+        artist: st.isLive ? (st.liveArtist || 'LETW Radio') : (track.artist || 'LETW Radio'),
+        title:  st.isLive ? (st.liveTitle  || 'Live Broadcast') : (track.title || 'LETW Radio'),
+        album:  track.album || '',
+        genre:  settings.radio_genre || 'Gospel',
+        lyrics: '',
+        art:    track.cover_art_url || track.art || '/logo.png',
+        custom_fields: {}
+      }
+    },
+    playing_next: null,
+    song_history: (() => {
+      try {
+        return db.prepare(`SELECT title, artist, played_at FROM history ORDER BY played_at DESC LIMIT 5`).all()
+          .map((r, i) => ({
+            sh_id: i + 1,
+            played_at: r.played_at ? Math.floor(new Date(r.played_at).getTime() / 1000) : 0,
+            song: { title: r.title || '', artist: r.artist || '', art: '/logo.png', text: ((r.artist || '') + ' - ' + (r.title || '')).trim() }
+          }));
+      } catch { return []; }
+    })()
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SERMONS — On-demand recordings (DCLM-style sermon archive)
+// ═══════════════════════════════════════════════════════════════════════════════
+router.get('/sermons', (req, res) => {
+  try {
+    const rows = db.prepare(`SELECT * FROM sermons WHERE active = 1 ORDER BY recorded_at DESC`).all();
+    res.json(rows);
+  } catch { res.json([]); }
+});
+
+router.get('/sermons/rss', (req, res) => {
+  const settings = {};
+  try { db.prepare(`SELECT key, value FROM settings`).all().forEach(r => settings[r.key] = r.value); } catch {}
+  const name = settings.radio_name || 'LETW Radio';
+  const desc = settings.radio_description || 'Gospel radio sermons and messages';
+  const siteUrl = (req.protocol + '://' + req.get('host'));
+  let sermons = [];
+  try { sermons = db.prepare(`SELECT * FROM sermons WHERE active = 1 ORDER BY recorded_at DESC LIMIT 50`).all(); } catch {}
+
+  const items = sermons.map(s => {
+    const pub = s.recorded_at ? new Date(s.recorded_at).toUTCString() : new Date().toUTCString();
+    const fileUrl = s.file_path.startsWith('http') ? s.file_path : (siteUrl + s.file_path);
+    const dur = s.duration ? Math.round(s.duration) : 0;
+    const hh = Math.floor(dur / 3600), mm = Math.floor((dur % 3600) / 60), ss = dur % 60;
+    const itunesDur = (hh ? hh + ':' : '') + String(mm).padStart(2,'0') + ':' + String(ss).padStart(2,'0');
+    return `
+    <item>
+      <title><![CDATA[${s.title}]]></title>
+      <description><![CDATA[${s.description || s.title}]]></description>
+      <pubDate>${pub}</pubDate>
+      <enclosure url="${fileUrl}" length="${s.file_size || 0}" type="audio/mpeg"/>
+      <guid isPermaLink="false">${s.id}</guid>
+      <itunes:author><![CDATA[${s.speaker || name}]]></itunes:author>
+      <itunes:duration>${itunesDur}</itunes:duration>
+      <itunes:summary><![CDATA[${s.description || ''}]]></itunes:summary>
+      <itunes:image href="${siteUrl}/logo.png"/>
+    </item>`;
+  }).join('');
+
+  res.setHeader('Content-Type', 'application/rss+xml; charset=utf-8');
+  res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+  xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"
+  xmlns:content="http://purl.org/rss/1.0/modules/content/"
+  xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title><![CDATA[${name} — Sermons]]></title>
+    <link>${siteUrl}/listen</link>
+    <description><![CDATA[${desc}]]></description>
+    <language>en</language>
+    <atom:link href="${siteUrl}/api/sermons/rss" rel="self" type="application/rss+xml"/>
+    <itunes:author><![CDATA[${name}]]></itunes:author>
+    <itunes:image href="${siteUrl}/logo.png"/>
+    <itunes:category text="Religion &amp; Spirituality">
+      <itunes:category text="Christianity"/>
+    </itunes:category>
+    <itunes:explicit>false</itunes:explicit>${items}
+  </channel>
+</rss>`);
+});
+
+router.post('/sermons', (req, res) => {
+  const { title, speaker, description, file_path, duration, file_size, tags, recorded_at } = req.body;
+  if (!title || !file_path) return res.status(400).json({ error: 'title and file_path required' });
+  const id = uuidv4();
+  try {
+    db.prepare(`INSERT INTO sermons (id, title, speaker, description, file_path, duration, file_size, tags, recorded_at) VALUES (?,?,?,?,?,?,?,?,?)`)
+      .run(id, title.slice(0,200), (speaker||'').slice(0,100), (description||'').slice(0,500),
+           file_path.slice(0,500), duration||0, file_size||0, (tags||'').slice(0,200),
+           recorded_at || new Date().toISOString());
+    res.json({ id, title, speaker, description, file_path, duration, file_size, tags });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+router.put('/sermons/:id', (req, res) => {
+  const { title, speaker, description, tags, active } = req.body;
+  try {
+    db.prepare(`UPDATE sermons SET title=?, speaker=?, description=?, tags=?, active=? WHERE id=?`)
+      .run((title||'').slice(0,200), (speaker||'').slice(0,100), (description||'').slice(0,500),
+           (tags||'').slice(0,200), active !== false ? 1 : 0, req.params.id);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete('/sermons/:id', (req, res) => {
+  try {
+    db.prepare(`UPDATE sermons SET active = 0 WHERE id = ?`).run(req.params.id);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Stream stats ─────────────────────────────────────────────────────────────
+router.get('/stats', (req, res) => {
+  try {
+    const totalTracks = db.prepare(`SELECT COUNT(*) as c FROM tracks`).get();
+    const totalSermons = db.prepare(`SELECT COUNT(*) as c FROM sermons WHERE active=1`).get();
+    const totalRequests = db.prepare(`SELECT COUNT(*) as c FROM requests`).get();
+    const totalChatMsgs = db.prepare(`SELECT COUNT(*) as c FROM chat_messages`).get();
+    const peakListeners = db.prepare(`SELECT MAX(count) as m FROM listener_stats`).get();
+    const st = audioEngine.getStatus();
+    res.json({
+      tracks: totalTracks?.c || 0,
+      sermons: totalSermons?.c || 0,
+      requests: totalRequests?.c || 0,
+      chatMessages: totalChatMsgs?.c || 0,
+      peakListeners: peakListeners?.m || 0,
+      currentListeners: st.listeners || 0,
+      isLive: !!st.isLive,
+      isPlaying: !!st.isPlaying
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 module.exports = router;

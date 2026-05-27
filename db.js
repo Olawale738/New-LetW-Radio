@@ -119,6 +119,29 @@ function initSchema(sqlDb) {
   // Migrations for existing databases
   try { sqlDb.run(`ALTER TABLE tracks ADD COLUMN play_count INTEGER DEFAULT 0`); } catch {}
   try { sqlDb.run(`ALTER TABLE tracks ADD COLUMN likes INTEGER DEFAULT 0`); } catch {}
+  // Streams: add language, category, image_url, whatsapp fields
+  try { sqlDb.run(`ALTER TABLE streams ADD COLUMN language TEXT DEFAULT 'English'`); } catch {}
+  try { sqlDb.run(`ALTER TABLE streams ADD COLUMN category TEXT DEFAULT 'General'`); } catch {}
+  try { sqlDb.run(`ALTER TABLE streams ADD COLUMN image_url TEXT DEFAULT ''`); } catch {}
+  try { sqlDb.run(`ALTER TABLE streams ADD COLUMN whatsapp TEXT DEFAULT ''`); } catch {}
+  // Sermons table (for recorded live broadcasts and uploaded recordings)
+  try {
+    sqlDb.run(`
+      CREATE TABLE IF NOT EXISTS sermons (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        speaker TEXT DEFAULT '',
+        description TEXT DEFAULT '',
+        file_path TEXT NOT NULL,
+        duration REAL DEFAULT 0,
+        file_size INTEGER DEFAULT 0,
+        recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        tags TEXT DEFAULT '',
+        play_count INTEGER DEFAULT 0,
+        active INTEGER DEFAULT 1
+      )
+    `);
+  } catch(e) { console.warn('Sermons table skipped:', e.message); }
   // Seed default stream if none exist
   try {
     const { v4: uuidv4 } = require('uuid');

@@ -848,8 +848,22 @@
       overflow: hidden;
       margin-bottom: 14px;
       display: none;
+      position: relative;
     }
     .now-playing-progress.active { display: block; }
+    /* Real-time fill track (width driven by --np-progress CSS var) */
+    .now-playing-progress::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0;
+      height: 100%;
+      width: var(--np-progress, 0%);
+      background: var(--gold);
+      border-radius: 3px;
+      transition: width 1s linear;
+      z-index: 1;
+    }
+    /* Shimmer overlay — shows when no real data yet (--np-progress = 0%) */
     .now-playing-progress::after {
       content: '';
       display: block;
@@ -859,6 +873,7 @@
       background-size: 200% 100%;
       animation: progress-shimmer 1.8s linear infinite;
       border-radius: 3px;
+      opacity: 0.35;
     }
     @keyframes progress-shimmer {
       0%   { transform: translateX(-150%); }
@@ -1989,6 +2004,29 @@
 
         <button class="req-submit-btn" onclick="submitRequest()">Send Request</button>
         <div class="req-toast" id="req-toast">Request submitted! God bless you. 🙏</div>
+
+        <!-- WhatsApp direct request (DCLM-style) -->
+        <div id="req-whatsapp-wrap" style="margin-top:14px;padding:10px 12px;border-radius:10px;background:rgba(37,211,102,0.06);border:1px solid rgba(37,211,102,0.2);text-align:center;">
+          <div style="font-size:10px;color:var(--text-dim);margin-bottom:8px;letter-spacing:0.5px;">Or send directly via WhatsApp</div>
+          <a id="req-whatsapp-link" href="#" target="_blank" rel="noopener"
+            style="display:inline-flex;align-items:center;gap:7px;padding:7px 18px;border-radius:20px;background:rgba(37,211,102,0.12);border:1px solid rgba(37,211,102,0.35);color:#25d366;font-size:12px;font-weight:700;text-decoration:none;letter-spacing:0.3px;"
+            onclick="openWhatsAppRequest(event)" aria-label="Send prayer request via WhatsApp">
+            <span style="font-size:16px;">📱</span> WhatsApp Request
+          </a>
+        </div>
+
+        <!-- Embed this player section -->
+        <div style="margin-top:14px;padding:10px 12px;border-radius:10px;background:rgba(212,168,67,0.04);border:1px solid rgba(212,168,67,0.1);">
+          <div style="font-size:10px;letter-spacing:1.5px;color:var(--text-dim);text-transform:uppercase;margin-bottom:8px;">Embed on your website</div>
+          <textarea id="embed-code-box" readonly
+            style="width:100%;background:rgba(0,0,0,0.3);border:1px solid rgba(212,168,67,0.15);border-radius:8px;color:var(--text-muted);font-size:9px;padding:7px;resize:none;font-family:monospace;line-height:1.5;"
+            rows="2"></textarea>
+          <div style="display:flex;gap:6px;margin-top:6px;">
+            <button onclick="copyEmbedCode()" style="flex:1;padding:5px;border-radius:8px;border:1px solid rgba(212,168,67,0.3);background:rgba(212,168,67,0.08);color:var(--gold);font-size:10px;cursor:pointer;font-weight:700;">📋 Copy Code</button>
+            <a id="embed-preview-link" href="/embed" target="_blank"
+              style="flex:1;text-align:center;padding:5px;border-radius:8px;border:1px solid rgba(212,168,67,0.2);background:rgba(212,168,67,0.05);color:var(--text-muted);font-size:10px;text-decoration:none;font-weight:700;">👁 Preview</a>
+          </div>
+        </div>
       </div>
 
       <!-- Sermons / Archive Panel -->
@@ -3860,6 +3898,53 @@ function toggleMobilePanel() {
   document.getElementById('panel-backdrop').classList.toggle('visible', mobilePanelOpen);
 }
 
+// ── WhatsApp Prayer Request (DCLM-style direct request) ──────
+function openWhatsAppRequest(e) {
+  e.preventDefault();
+  const name    = (document.getElementById('req-name').value.trim()    || getUsername());
+  const text    = (document.getElementById('req-text').value.trim()    || '');
+  const type    = currentReqType === 'prayer' ? '🙏 Prayer Request' : currentReqType === 'dedication' ? '💌 Dedication' : '🎵 Song Request';
+  const station = document.title.replace(' — Listen Live','') || 'LETW Radio';
+  const msg = encodeURIComponent(`${type} for ${station}\n\nFrom: ${name}\n\n${text}`);
+  // Try to use the channel's configured WhatsApp number, fallback to a generic LETW number
+  const activeChannel = _channels.find(c => c.url === _activeStreamUrl);
+  const waNum = (activeChannel && activeChannel.whatsapp) ? activeChannel.whatsapp.replace(/\D/g,'') : '';
+  const waUrl = waNum ? `https://wa.me/${waNum}?text=${msg}` : `https://wa.me/?text=${msg}`;
+  window.open(waUrl, '_blank', 'noopener');
+}
+
+// ── Embed code generator ──────────────────────────────────────
+function _updateEmbedCode() {
+  const box  = document.getElementById('embed-code-box');
+  const link = document.getElementById('embed-preview-link');
+  if (!box) return;
+  const base = window.location.origin;
+  const chId = _channels.find(c => c.url === _activeStreamUrl)?.id || '';
+  const src  = base + '/embed' + (chId ? '?ch=' + chId : '');
+  const code = `<iframe src="${src}" width="340" height="200" frameborder="0" allow="autoplay" style="border-radius:18px;"></iframe>`;
+  box.value = code;
+  if (link) link.href = src;
+}
+
+function copyEmbedCode() {
+  const box = document.getElementById('embed-code-box');
+  if (!box) return;
+  navigator.clipboard.writeText(box.value).then(() => {
+    const orig = box.style.borderColor;
+    box.style.borderColor = 'rgba(212,168,67,0.6)';
+    setTimeout(() => { box.style.borderColor = orig; }, 1200);
+  }).catch(() => {
+    box.select(); document.execCommand('copy');
+  });
+}
+
+// Refresh embed code whenever active channel changes (monkey-patch switchChannel)
+const _origSwitchChannel = switchChannel;
+function switchChannel(url, name, channelId) {
+  _origSwitchChannel(url, name, channelId);
+  setTimeout(_updateEmbedCode, 100);
+}
+
 // ── Wake Lock ─────────────────────────────────────────────────
 async function requestWakeLock() {
   if (!('wakeLock' in navigator)) return;
@@ -4008,7 +4093,91 @@ function esc(s) {
 
   // Media session
   setupMediaSession();
+
+  // Channel deep-link: ?ch=channelId — load channels then auto-select
+  try {
+    const urlParams = new URLSearchParams(window.location.search);
+    const chParam = urlParams.get('ch');
+    if (chParam) {
+      const r = await fetch('/api/streams');
+      if (r.ok) {
+        const chans = await r.json();
+        const found = chans.find(c => c.id === chParam || c.name.toLowerCase() === chParam.toLowerCase());
+        if (found) {
+          _channels = chans;
+          _activeStreamUrl  = found.url;
+          _activeStreamName = found.name;
+          renderChannelGrid();
+          // Update track title to channel name
+          const tt = document.getElementById('track-title');
+          if (tt) tt.textContent = found.name;
+        }
+      }
+    }
+  } catch {}
+
+  // NowPlaying metadata poller — DCLM-style 30-second refresh
+  // Fills in elapsed time, duration, and album art as a backup to Socket.IO
+  startNowPlayingPoller();
+
+  // Embed code & WhatsApp link — set after channels loaded
+  setTimeout(_updateEmbedCode, 500);
 })();
+
+// ── NowPlaying poller (DCLM-style) ───────────────────────────────────────────
+let _npPollTimer = null;
+let _npElapsedTimer = null;
+let _npElapsed = 0;
+let _npDuration = 0;
+
+function startNowPlayingPoller() {
+  if (_npPollTimer) return;
+  _pollNowPlaying(); // immediate first fetch
+  _npPollTimer = setInterval(_pollNowPlaying, 30000); // every 30 s
+}
+
+async function _pollNowPlaying() {
+  if (isLive) return; // live mode has its own state
+  try {
+    const res  = await fetch('/api/nowplaying');
+    const data = await res.json();
+    const np   = data.now_playing;
+    if (!np) return;
+    // Update track info if different from current
+    const title  = np.song.title  || '';
+    const artist = np.song.artist || '';
+    const art    = np.song.art    || '';
+    const trackTitle  = document.getElementById('track-title');
+    const trackArtist = document.getElementById('track-artist');
+    if (trackTitle && title && trackTitle.textContent !== title)  updateTrackInfo(title, artist);
+    if (typeof updateAlbumArt === 'function' && art) updateAlbumArt(art);
+    // Elapsed/duration progress
+    _npDuration = np.duration || 0;
+    _npElapsed  = np.elapsed  || 0;
+    _syncProgressBar();
+    // Listener count
+    if (data.listeners && typeof data.listeners.current === 'number') {
+      updateListeners(data.listeners.current);
+    }
+  } catch {}
+}
+
+function _syncProgressBar() {
+  if (!_npDuration) return;
+  const prog = document.getElementById('now-playing-progress');
+  if (!prog) return;
+  prog.classList.add('active');
+  const pct = Math.min(_npElapsed / _npDuration, 1) * 100;
+  prog.style.setProperty('--np-progress', pct + '%');
+}
+
+// Tick elapsed every second while playing
+setInterval(() => {
+  if (isPlaying && !isLive && _npDuration > 0) {
+    _npElapsed = Math.min(_npElapsed + 1, _npDuration);
+    _syncProgressBar();
+  }
+}, 1000);
 
 // ══════════════════════════════════════════════════════════════
 // Sermon / On-Demand playback
@@ -4239,9 +4408,13 @@ function renderChannelGrid() {
   const icons = ['📻','🎙️','🙏','🎵','✨','🎚️','📡','🔊'];
   grid.innerHTML = _channels.map((ch, i) => {
     const active = ch.url === _activeStreamUrl || (ch.url === '/stream' && _activeStreamUrl === '/stream');
-    return `<div class="channel-btn${active ? ' active' : ''}" onclick="switchChannel('${ch.url.replace(/'/g,"\\'")}','${ch.name.replace(/'/g,"\\'")}')">
-      <div class="channel-btn-icon">${icons[i % icons.length]}</div>
+    const lang = ch.language || '';
+    const cat  = ch.category || '';
+    const badge = (lang && lang !== 'English') ? `<span style="font-size:8px;padding:1px 5px;border-radius:8px;background:rgba(212,168,67,0.15);color:var(--gold);margin-top:3px;display:inline-block;">${esc(lang)}</span>` : '';
+    return `<div class="channel-btn${active ? ' active' : ''}" onclick="switchChannel('${ch.url.replace(/'/g,"\\'")}','${ch.name.replace(/'/g,"\\'")}','${(ch.id||'').replace(/'/g,'')}')">
+      <div class="channel-btn-icon">${ch.image_url ? `<img src="${esc(ch.image_url)}" style="width:28px;height:28px;border-radius:6px;object-fit:cover;" onerror="this.outerHTML='${icons[i % icons.length]}'">` : icons[i % icons.length]}</div>
       <div class="channel-btn-name">${esc(ch.name)}</div>
+      ${badge}
       ${ch.description ? `<div class="channel-btn-desc">${esc(ch.description)}</div>` : ''}
     </div>`;
   }).join('');
@@ -4258,11 +4431,17 @@ function closeChannelDrawer() {
   document.getElementById('channel-drawer-backdrop').classList.remove('open');
 }
 
-function switchChannel(url, name) {
+function switchChannel(url, name, channelId) {
   closeChannelDrawer();
   if (url === _activeStreamUrl && isPlaying && !isLive) return;
   _activeStreamUrl = url;
   _activeStreamName = name;
+  // Update URL bar with deep-link for sharing
+  try {
+    const u = new URL(window.location.href);
+    if (channelId) u.searchParams.set('ch', channelId); else u.searchParams.delete('ch');
+    window.history.replaceState({}, '', u.toString());
+  } catch {}
   // Update ticker / title to show which channel is active
   const trackTitle  = document.getElementById('track-title');
   const trackArtist = document.getElementById('track-artist');
