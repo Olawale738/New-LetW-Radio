@@ -2042,13 +2042,16 @@ function switchToLiveMode(info) {
   // can send it immediately, letting the browser start decoding right away.
   // (Previously 1200 ms because we waited for 3 chunks — reduced now that we
   //  store only 1 chunk as the init segment.)
+  //
+  // UPDATE: Connecting immediately is actually BETTER — if the client is in
+  // liveClients before the first chunk arrives, broadcastLive() sends it to
+  // them anyway.  The 400 ms delay only added latency with no real benefit.
   clearTimeout(window._liveConnectTO);
-  window._liveConnectTO = setTimeout(() => {
-    setJoiningBadge();           // show "JOINING LIVE…" while connecting
-    startLiveEdgeMonitor();      // begin buffer watch immediately
-    startLiveJoinTimeout();      // retry if stream doesn't start within 10 s
-    reconnectAudio(LIVE_URL);
-  }, 400);
+  window._liveConnectTO = null;
+  setJoiningBadge();           // show "JOINING LIVE…" while connecting
+  startLiveEdgeMonitor();      // begin buffer watch immediately
+  startLiveJoinTimeout();      // retry if stream doesn't start within 10 s
+  reconnectAudio(LIVE_URL);
 }
 
 function exitLiveMode() {
@@ -2104,19 +2107,24 @@ audio.addEventListener('pause', () => {
 });
 
 audio.addEventListener('waiting', () => {
-  document.getElementById('status-badge').className = 'status-badge buffering';
-  document.getElementById('status-text').textContent = 'BUFFERING';
-  // For regular streams, start a 4-second stall timer that forces a reconnect
-  // if the server stops sending data.
-  // For LIVE streams, 'waiting' fires naturally during the brief decoder-init
-  // gap between the WebM header chunk and the first live audio cluster.
-  // Triggering a reconnect here would replay the init chunk every 4 seconds,
-  // creating the "repeating voices" loop.  Live streams use a longer 12-second
-  // watchdog instead; genuine connection drops are caught by the error/stalled
-  // handlers below.
   if (!isLive) {
+    document.getElementById('status-badge').className = 'status-badge buffering';
+    document.getElementById('status-text').textContent = 'BUFFERING';
     startStallTimer();
   } else {
+    // Live mode: keep the live-tinted badge style so "JOINING LIVE…" or
+    // "RECONNECTING" aren't overwritten by the yellow buffering state.
+    // Only update the text if we're not already in a joining/reconnecting state.
+    const badge = document.getElementById('status-badge');
+    const text  = document.getElementById('status-text');
+    const cls   = badge ? badge.className : '';
+    if (!cls.includes('joining') && !cls.includes('live-reconnecting')) {
+      if (badge) badge.className = 'status-badge joining';
+      if (text)  text.textContent = 'BUFFERING…';
+    }
+    // 'waiting' fires naturally on the normal decoder-init gap between the
+    // WebM header chunk and the first audio cluster.  Use a longer grace
+    // period so we don't reconnect during normal initial buffering.
     startLiveStallTimer();
   }
 });
@@ -2219,8 +2227,18 @@ function startPlayback() {
     startLiveJoinTimeout();
   }
 
-  if (!audio.src || audio.src === window.location.href) {
-    audio.src = getStreamUrl();
+  // Always ensure the audio element points to the right URL for the current
+  // mode.  The old check `!audio.src || audio.src === window.location.href`
+  // was too narrow — if audio.src was still set to /stream from a previous
+  // session and the user taps "Join Live", they'd silently connect to the
+  // dead regular stream instead of the live one.
+  const targetUrl = getStreamUrl();   // '/live-stream' when isLive, '/stream' otherwise
+  const needsSrcUpdate = !audio.src
+    || audio.src === window.location.href
+    || (isLive  && !audio.src.endsWith('/live-stream'))  // on wrong stream
+    || (!isLive &&  audio.src.endsWith('/live-stream')); // lingering live src after end
+  if (needsSrcUpdate) {
+    audio.src = targetUrl;
   }
   audio.load();
   audio.play().catch(() => {});
@@ -2386,9 +2404,11 @@ function startStallTimer() {
   }, 4000);
 }
 
-// Live-stream stall watchdog — longer timeout (12 s) to avoid false-firing on
-// the normal decoder-init gap between the WebM header chunk and first live cluster.
-// Only reconnects if genuinely no audio has arrived for an extended period.
+// Live-stream stall watchdog — 6 s grace period.
+// The normal decoder-init gap between the WebM header and the first audio
+// cluster is ~100–300 ms.  6 s is far more than enough to distinguish a
+// normal startup from a genuine stall, while still recovering twice as fast
+// as the old 12 s timeout.
 function startLiveStallTimer() {
   clearStallTimer();
   stallTimer = setTimeout(() => {
@@ -2397,7 +2417,7 @@ function startLiveStallTimer() {
       audio.load();
       audio.play().catch(() => scheduleReconnect());
     }
-  }, 12000);
+  }, 6000);
 }
 
 function clearStallTimer() {
