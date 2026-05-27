@@ -302,6 +302,56 @@
     }
     #player-card.live-mode { border-color: rgba(224,48,96,0.45); }
 
+    /* ── Live "Joining" badge ──────────────────────────────────── */
+    .status-badge.joining {
+      background: rgba(224,48,96,0.08);
+      border: 1px solid rgba(224,48,96,0.35);
+      color: #ff80a0;
+    }
+    .status-badge.joining .dot {
+      background: var(--live-red);
+      animation: blink 0.35s ease-in-out infinite;
+    }
+
+    /* ── "Join Live" notification banner ──────────────────────── */
+    #live-join-banner {
+      display: none;
+      margin: 10px 0 4px;
+      padding: 10px 16px;
+      background: rgba(224,48,96,0.10);
+      border: 1px solid rgba(224,48,96,0.40);
+      border-radius: 12px;
+      text-align: center;
+      animation: live-banner-pulse 2s ease-in-out infinite;
+    }
+    @keyframes live-banner-pulse {
+      0%,100% { box-shadow: 0 0 0 0 rgba(224,48,96,0.0); }
+      50%      { box-shadow: 0 0 0 6px rgba(224,48,96,0.18); }
+    }
+    #live-join-banner .live-banner-label {
+      font-size: 11px; letter-spacing: 2px; font-weight: 700;
+      color: #ff5080; text-transform: uppercase; display: block; margin-bottom: 8px;
+    }
+    #live-join-banner button {
+      background: linear-gradient(135deg,#7a0820,var(--live-red));
+      color: #fff; border: none; border-radius: 20px;
+      padding: 7px 22px; font-size: 13px; font-weight: 700;
+      cursor: pointer; letter-spacing: 1px;
+      box-shadow: 0 4px 14px rgba(224,48,96,0.4);
+      transition: transform .15s, box-shadow .15s;
+    }
+    #live-join-banner button:hover { transform: scale(1.04); box-shadow: 0 6px 18px rgba(224,48,96,0.55); }
+
+    /* ── Live play-button ring pulse ──────────────────────────── */
+    #play-btn.live-mode.playing {
+      animation: play-pulse 2.2s ease-in-out infinite,
+                 live-ring  1.8s ease-in-out infinite;
+    }
+    @keyframes live-ring {
+      0%,100% { box-shadow: 0 10px 30px rgba(224,48,96,0.45), 0 0 0 3px rgba(224,48,96,0.18), inset 0 2px 4px rgba(255,180,180,0.2); }
+      50%      { box-shadow: 0 10px 30px rgba(224,48,96,0.65), 0 0 0 8px rgba(224,48,96,0.25), inset 0 2px 4px rgba(255,180,180,0.2); }
+    }
+
     .player-body {
       padding: 28px 28px 20px;
       display: flex;
@@ -1393,6 +1443,12 @@
           </div>
         </div>
 
+        <!-- Shown when the admin is live but this visitor hasn't pressed Play -->
+        <div id="live-join-banner">
+          <span class="live-banner-label">🔴 Live Broadcast in Progress</span>
+          <button onclick="startPlayback()">▶ Join Live</button>
+        </div>
+
         <div class="now-broadcasting-label">Now Broadcasting</div>
         <div class="track-title" id="track-title">LETW Radio</div>
         <div class="track-artist" id="track-artist">Light Encounter Tabernacle Worldwide</div>
@@ -1674,8 +1730,9 @@ let wakeLock      = null;
 let pushEnabled   = false;
 let pushSub       = null;
 let vapidPublicKey = '';
-let stallTimer    = null;
-let reconnectTO   = null;
+let stallTimer        = null;
+let reconnectTO       = null;
+let _liveEdgeTimer    = null;  // live-edge latency manager interval
 let currentReqType = 'song';
 let mobilePanelOpen = false;
 let deferredInstall = null;
@@ -1916,14 +1973,15 @@ function switchToLiveMode(info) {
   }
 
   // Only switch streams for listeners who are ALREADY playing.
-  // Visitors who haven't pressed Play yet just get the UI update; they will
-  // connect to /live-stream automatically when they press Play because
-  // getStreamUrl() returns LIVE_URL while isLive=true.
-  //
+  // Visitors who haven't pressed Play yet just get the UI update plus the
+  // "Join Live" banner — they connect when they tap the banner or Play button.
   // Auto-connecting idle visitors creates real HTTP connections to /live-stream
-  // that are counted as listeners even though no audio is heard.  This inflates
-  // the listener count with "phantom" entries.
-  if (!isPlaying) return;
+  // that inflate the listener count with phantom entries.
+  if (!isPlaying) {
+    showLiveJoinBanner();
+    return;
+  }
+  hideLiveJoinBanner();
 
   // Already on the live stream and playing — nothing to do.
   if (audio.src && audio.src.includes('/live-stream') && !audio.paused) return;
@@ -1936,6 +1994,8 @@ function switchToLiveMode(info) {
   //  store only 1 chunk as the init segment.)
   clearTimeout(window._liveConnectTO);
   window._liveConnectTO = setTimeout(() => {
+    setJoiningBadge();       // show "JOINING LIVE…" while connecting
+    startLiveEdgeMonitor();  // begin buffer watch immediately
     reconnectAudio(LIVE_URL);
   }, 400);
 }
@@ -1945,6 +2005,8 @@ function exitLiveMode() {
   document.getElementById('play-btn').classList.remove('live-mode');
   document.getElementById('player-shimmer').classList.remove('live');
   document.getElementById('panel-shimmer').classList.remove('live');
+  hideLiveJoinBanner();
+  stopLiveEdgeMonitor();
   // Use setStatusBadge so hero-dot, hero-status, and progress bar are all
   // updated correctly.  Show ON AIR if already playing, OFFLINE if not.
   setStatusBadge(isPlaying);
@@ -2033,16 +2095,18 @@ function togglePlay() {
 
 function startPlayback() {
   // The <audio> element plays directly through the system audio — no Web Audio
-  // routing.  We only use AudioContext for the visualiser analyser tap, which
-  // is set up in startVisualizerFromAudio() via captureStream().
-  // Pre-create the context here (user-gesture context) so it starts in 'running'
-  // state and the visualiser animates immediately without waiting for the
-  // 'playing' event to fire.
+  // routing.  AudioContext is only used for the visualiser analyser tap.
   if (!audioCtx && (window.AudioContext || window.webkitAudioContext)) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
   if (audioCtx && audioCtx.state === 'suspended') {
     audioCtx.resume().catch(() => {});
+  }
+
+  if (isLive) {
+    hideLiveJoinBanner();
+    setJoiningBadge();
+    startLiveEdgeMonitor();
   }
 
   if (!audio.src || audio.src === window.location.href) {
@@ -2106,6 +2170,65 @@ function scheduleReconnect() {
       audio.play().catch(() => scheduleReconnect());
     }
   }, reconnectDelay);
+}
+
+// ── Live-edge buffer manager ──────────────────────────────────
+// A live HTTP stream accumulates a growing audio buffer in the browser.
+// Without intervention, a listener who joined 10 seconds ago is 10 seconds
+// behind the live edge — they hear the admin's words long after they were
+// spoken.
+//
+// Every second we check how far ahead the audio buffer extends beyond the
+// current playback position:
+//   • > 2.5 s ahead → speed up slightly (≤ 6%) so the player catches up
+//   • < 0.6 s ahead → slow down to 99% to prevent stutter
+//   • 0.6 – 2.5 s  → normal 1× speed
+//
+// playbackRate changes are nearly imperceptible for speech (±6% pitch
+// shift at most) and invisible for music in this range.  preservesPitch
+// is set where supported so browsers apply pitch-correction automatically.
+function startLiveEdgeMonitor() {
+  stopLiveEdgeMonitor();
+  // Opt-in to pitch-preserving rate changes where the browser supports it
+  try { audio.preservesPitch = true; audio.mozPreservesPitch = true; } catch(_) {}
+
+  _liveEdgeTimer = setInterval(() => {
+    if (!isLive || audio.paused || !audio.buffered || !audio.buffered.length) return;
+    try {
+      const bufEnd = audio.buffered.end(audio.buffered.length - 1);
+      const ahead  = bufEnd - audio.currentTime;
+      if (ahead > 2.5) {
+        // Behind the live edge — speed up to catch up (max +6%)
+        audio.playbackRate = Math.min(1.06, 1 + (ahead - 1.5) * 0.025);
+      } else if (ahead < 0.6) {
+        // Buffer running thin — ease back to prevent stutter
+        audio.playbackRate = 0.99;
+      } else {
+        audio.playbackRate = 1.0;
+      }
+    } catch(_) {}
+  }, 1000);
+}
+
+function stopLiveEdgeMonitor() {
+  if (_liveEdgeTimer) { clearInterval(_liveEdgeTimer); _liveEdgeTimer = null; }
+  try { audio.playbackRate = 1.0; } catch(_) {}
+}
+
+// ── Join-live banner ──────────────────────────────────────────
+function showLiveJoinBanner() {
+  const el = document.getElementById('live-join-banner');
+  if (el) el.style.display = 'block';
+}
+function hideLiveJoinBanner() {
+  const el = document.getElementById('live-join-banner');
+  if (el) el.style.display = 'none';
+}
+function setJoiningBadge() {
+  const badge = document.getElementById('status-badge');
+  const text  = document.getElementById('status-text');
+  if (badge) badge.className = 'status-badge joining';
+  if (text)  text.textContent = 'JOINING LIVE…';
 }
 
 function startStallTimer() {

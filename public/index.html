@@ -3078,7 +3078,10 @@ registerProcessor('letw-noise-gate', NoiseGateProcessor);
   const recordCheck = document.getElementById('live-record-check');
   socket.emit('live:start', { title, artist, record: recordCheck ? recordCheck.checked : false });
 
-  liveMediaRecorder.start(250); // emit chunk every 250 ms
+  liveMediaRecorder.start(100); // 100 ms timeslice — smallest WebM cluster size Chrome
+                                // reliably produces.  Halves the per-chunk latency vs 250 ms
+                                // without fragmenting the stream so finely that the overhead
+                                // outweighs the benefit.
 
   // UI: on-air state
   setLiveUIState(true);
