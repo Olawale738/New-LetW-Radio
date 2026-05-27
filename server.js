@@ -63,6 +63,10 @@ app.use((req, res, next) => {
 // With it, Express reads X-Forwarded-Proto so we can set Secure cookies.
 app.set('trust proxy', 1);
 
+// ── EJS view engine ───────────────────────────────────────────────────────────
+app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views'));
+
 // ── Core middleware ───────────────────────────────────────────────────────────
 app.use(cors());
 app.use(express.json());
@@ -269,9 +273,9 @@ function loginPage(error) {
 app.get('/', (req, res) => {
   noCache(res);
   if (isAdmin(req)) {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    res.render('admin', { settings: getSettings() });
   } else {
-    res.send(loginPage());
+    res.render('login', { error: null });
   }
 });
 
@@ -289,7 +293,7 @@ app.post('/admin-login', (req, res) => {
     res.setHeader('Set-Cookie', cookieStr);
     res.redirect(302, '/');
   } else {
-    res.send(loginPage('Incorrect password. Please try again.'));
+    res.render('login', { error: 'Incorrect password. Please try again.' });
   }
 });
 
@@ -307,8 +311,8 @@ app.get('/admin-logout', (req, res) => {
 
 // GET /listen — public listener player
 app.get('/listen', (req, res) => {
-  noCache(res); // always serve fresh HTML — never let the browser cache player.html
-  res.sendFile(path.join(__dirname, 'public', 'player.html'));
+  noCache(res); // always serve fresh HTML — never let the browser cache player.ejs
+  res.render('player', { settings: getSettings() });
 });
 
 // API routes
