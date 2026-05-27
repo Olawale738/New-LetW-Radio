@@ -863,6 +863,11 @@ app.get('/tune-in', (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 io.on('connection', (socket) => {
   socket.emit('status', audioEngine.getStatus());
+  // If a live broadcast is already in progress and we have the WebM init chunk,
+  // send it immediately so a new MediaSource client can start decoding.
+  if (audioEngine.isLive && audioEngine.liveInitChunk) {
+    socket.emit('live:init', audioEngine.liveInitChunk);
+  }
 
   // ── Admin live-broadcast events ──────────────────────────────────────────
   // Admin must authenticate by sending their token in socket.auth or as a
@@ -883,9 +888,9 @@ io.on('connection', (socket) => {
   // Admin signals "going live"
   socket.on('live:start', (data) => {
     if (!isAdminSocket()) return;
-    const { title, artist, record } = data || {};
-    console.log(`[Live] Admin started live broadcast: "${title}"`);
-    audioEngine.startLive(title, artist);
+    const { title, artist, record, mimeType } = data || {};
+    console.log(`[Live] Admin started live broadcast: "${title}" [${mimeType || 'default'}]`);
+    audioEngine.startLive(title, artist, mimeType);
 
     // Recording (opt-in: admin must check "Record This Broadcast")
     if (record) {
@@ -913,10 +918,18 @@ io.on('connection', (socket) => {
     if (!isAdminSocket()) return;
     if (!audioEngine.isLive) return;
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    audioEngine.broadcastLive(buf);
+    audioEngine.broadcastLive(buf);                 // HTTP /live-stream clients
+    socket.broadcast.emit('live:audio', buf);       // Socket.IO listener clients
     // Write to recording file if recording is active
     if (liveRecordingEnabled && liveRecordingStream) {
       try { liveRecordingStream.write(buf); } catch(e) {}
+    }
+  });
+
+  // Public client requests the stored WebM init chunk for MediaSource playback
+  socket.on('live:request-init', () => {
+    if (audioEngine.isLive && audioEngine.liveInitChunk) {
+      socket.emit('live:init', audioEngine.liveInitChunk);
     }
   });
 

@@ -1792,6 +1792,20 @@ let crossfadeSecs   = 3;      // default; updated from trackWillEnd event
 let flashAlertTimer = null;   // auto-dismiss timer for flash alerts
 let _liveJoinTO     = null;   // timeout: if live audio doesn't start in 10 s, retry
 
+// ── Live MediaSource streaming (primary path) ─────────────────
+// Chunks are delivered via Socket.IO and appended to a SourceBuffer.
+// This is more reliable than the HTTP /live-stream approach on mobile because:
+//  - reuses the existing WebSocket connection (no extra TCP handshake)
+//  - correct MIME type/codec is negotiated up-front
+//  - browser doesn't impose streaming-HTTP quirks on mobile networks
+// Falls back to HTTP reconnectAudio(LIVE_URL) if MediaSource is unavailable.
+let liveMimeType  = 'audio/webm;codecs=opus'; // actual mimeType from admin's MediaRecorder
+let _liveMS       = null;     // MediaSource instance
+let _liveSB       = null;     // SourceBuffer
+let _livePending  = [];       // chunks queued before SourceBuffer is ready
+let _liveUseMS    = false;    // true = using MediaSource; false = HTTP /live-stream fallback
+let _liveMSObjUrl = null;     // ObjectURL to revoke on cleanup
+
 // ── Username ──────────────────────────────────────────────────
 function getUsername() {
   let u = localStorage.getItem('letw_username');
@@ -1885,6 +1899,7 @@ socket.on('listenerChange', count => updateListeners(count));
 
 socket.on('live:started', info => {
   isLive = true;
+  if (info && info.mimeType) liveMimeType = info.mimeType;
   switchToLiveMode(info);
 });
 
@@ -1892,6 +1907,34 @@ socket.on('live:ended', () => {
   isLive = false;
   clearTimeout(window._liveConnectTO);
   exitLiveMode();
+});
+
+// ── Live audio delivered via Socket.IO (primary path) ─────────
+// The server broadcasts each MediaRecorder chunk via socket.broadcast.emit
+// so every connected listener receives it over the existing WebSocket.
+// Chunks are appended to the MediaSource SourceBuffer; if the SourceBuffer
+// isn't ready yet they're queued in _livePending and flushed on sourceopen.
+socket.on('live:audio', (data) => {
+  if (!isLive || !_liveMS) return; // not in live mode or MS not set up
+  const buf = _toAB(data);
+  if (!buf) return;
+  _livePending.push(buf);
+  _liveFlush();
+  // Resume if paused (e.g. after a brief stall once we have data again)
+  if (_liveUseMS && audio.paused && !reconnectTO) {
+    audio.play().catch(() => {});
+  }
+});
+
+// Init chunk (WebM EBML header) sent by the server when the client
+// requests it (live:request-init) or when it first connects mid-broadcast.
+socket.on('live:init', (data) => {
+  if (!isLive || !_liveUseMS || !_liveSB) return;
+  const buf = _toAB(data);
+  if (!buf) return;
+  // Prepend so the EBML header is the very first thing appended to the SourceBuffer
+  _livePending.unshift(buf);
+  _liveFlush();
 });
 
 socket.on('chat:message', msg => appendChatMessage(msg, true));
@@ -1944,7 +1987,8 @@ function applyStatus(data) {
     // Server is live but we don't know it yet — enter live mode.
     // switchToLiveMode checks isPlaying and only auto-reconnects active listeners.
     isLive = true;
-    switchToLiveMode({ title: data.liveTitle, artist: data.liveArtist });
+    if (data.liveMimeType) liveMimeType = data.liveMimeType;
+    switchToLiveMode({ title: data.liveTitle, artist: data.liveArtist, mimeType: data.liveMimeType });
   } else if (!data.isLive && isLive) {
     // Live broadcast ended while we were in live mode — return to normal stream
     isLive = false;
@@ -2005,6 +2049,134 @@ function setSignal(val) {
   document.getElementById('meta-signal').textContent = val;
 }
 
+// ── Live MediaSource engine ───────────────────────────────────
+
+/** Release all MediaSource resources for the live stream. */
+function cleanupLiveMS() {
+  _liveUseMS    = false;
+  _livePending  = [];
+  if (_liveSB) {
+    try { _liveSB.abort(); } catch(_) {}
+    _liveSB = null;
+  }
+  if (_liveMS) {
+    try { if (_liveMS.readyState === 'open') _liveMS.endOfStream(); } catch(_) {}
+    _liveMS = null;
+  }
+  if (_liveMSObjUrl) {
+    try { URL.revokeObjectURL(_liveMSObjUrl); } catch(_) {}
+    _liveMSObjUrl = null;
+  }
+}
+
+/** Drain one pending chunk into the SourceBuffer (called after each updateend). */
+function _liveFlush() {
+  if (!_liveSB || _liveSB.updating || _livePending.length === 0) return;
+  try {
+    // Keep buffer under 30 s to prevent memory growth on long broadcasts
+    if (_liveSB.buffered.length > 0) {
+      const end   = _liveSB.buffered.end(_liveSB.buffered.length - 1);
+      const start = _liveSB.buffered.start(0);
+      if (end - start > 30) {
+        _liveSB.remove(start, Math.max(start + 1, end - 25));
+        return; // updateend will re-call _liveFlush
+      }
+    }
+    _liveSB.appendBuffer(_livePending.shift());
+  } catch(e) {
+    if (e.name === 'QuotaExceededError' || e.name === 'InvalidStateError') {
+      console.warn('[Live] SourceBuffer error', e.name, '— falling back to HTTP');
+      _livePending = [];
+      cleanupLiveMS();
+      if (isLive) reconnectAudio(LIVE_URL);
+    }
+  }
+}
+
+/**
+ * Helper to convert Socket.IO binary payloads to ArrayBuffer.
+ * Socket.IO v4 delivers binary as ArrayBuffer in the browser.
+ */
+function _toAB(data) {
+  if (data instanceof ArrayBuffer) return data;
+  if (ArrayBuffer.isView(data)) {
+    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+  }
+  return null;
+}
+
+/**
+ * Start live stream via MediaSource API.
+ * Sets audio.src synchronously so the caller can call audio.play() immediately
+ * within the user-gesture context (required by iOS Safari autoplay policy).
+ * Falls back to HTTP reconnectAudio(LIVE_URL) if MediaSource is unsupported.
+ */
+function startLiveViaMS() {
+  const mime = liveMimeType || 'audio/webm;codecs=opus';
+  if (!window.MediaSource || !MediaSource.isTypeSupported(mime)) {
+    // MediaSource unavailable or codec unsupported — use HTTP stream directly
+    reconnectAudio(LIVE_URL);
+    return;
+  }
+
+  cleanupLiveMS();
+
+  _liveMS       = new MediaSource();
+  _liveMSObjUrl = URL.createObjectURL(_liveMS);
+
+  // Fall back to HTTP if sourceopen doesn't fire within 5 s
+  const failTO = setTimeout(() => {
+    cleanupLiveMS();
+    if (isLive) reconnectAudio(LIVE_URL);
+  }, 5000);
+
+  _liveMS.addEventListener('sourceopen', () => {
+    clearTimeout(failTO);
+    try {
+      _liveSB      = _liveMS.addSourceBuffer(mime);
+      _liveSB.mode = 'sequence'; // browser handles timestamps automatically
+      _liveSB.addEventListener('updateend', _liveFlush);
+      _liveUseMS   = true;
+      // Request the stored WebM init chunk (EBML header) from the server.
+      // For a new broadcast the client will receive chunk 1 via live:audio.
+      // For a mid-broadcast join the server replies immediately with live:init.
+      socket.emit('live:request-init');
+      _liveFlush(); // drain any chunks that arrived before sourceopen
+    } catch(e) {
+      clearTimeout(failTO);
+      cleanupLiveMS();
+      if (isLive) reconnectAudio(LIVE_URL);
+    }
+  }, { once: true });
+
+  // Set audio.src SYNCHRONOUSLY here so the caller can call audio.play()
+  // within the same user-gesture task (onclick handler).
+  audio.src = _liveMSObjUrl;
+  audio.load();
+}
+
+/**
+ * Schedule a live-stream reconnect with the live-red "RECONNECTING" badge.
+ * Unlike scheduleReconnect() there is no exponential back-off — live streams
+ * recover as fast as possible.
+ */
+function scheduleLiveReconnect(delayMs) {
+  clearTimeout(reconnectTO);
+  clearStallTimer();
+  reconnectTO = null;
+  const badge = document.getElementById('status-badge');
+  const text  = document.getElementById('status-text');
+  if (badge) badge.className = 'status-badge live-reconnecting';
+  if (text)  text.textContent = 'RECONNECTING';
+  reconnectTO = setTimeout(() => {
+    if (!isLive) return;
+    setJoiningBadge();
+    cleanupLiveMS();
+    startLiveViaMS();
+    audio.play().catch(() => scheduleLiveReconnect(2000));
+  }, delayMs);
+}
+
 // ── Live mode ─────────────────────────────────────────────────
 function switchToLiveMode(info) {
   document.getElementById('player-card').classList.add('live-mode');
@@ -2033,25 +2205,18 @@ function switchToLiveMode(info) {
   }
   hideLiveJoinBanner();
 
-  // Already on the live stream and playing — nothing to do.
-  if (audio.src && audio.src.includes('/live-stream') && !audio.paused) return;
+  // Already playing live stream (either via MediaSource or HTTP) — nothing to do.
+  if (!audio.paused && (_liveUseMS || (audio.src && audio.src.includes('/live-stream')))) return;
 
-  // Wait 400 ms before connecting to /live-stream.
-  // The first MediaRecorder chunk (the WebM EBML header) arrives at ~250 ms.
-  // 400 ms gives the server time to receive and store it so addLiveClient()
-  // can send it immediately, letting the browser start decoding right away.
-  // (Previously 1200 ms because we waited for 3 chunks — reduced now that we
-  //  store only 1 chunk as the init segment.)
-  //
-  // UPDATE: Connecting immediately is actually BETTER — if the client is in
-  // liveClients before the first chunk arrives, broadcastLive() sends it to
-  // them anyway.  The 400 ms delay only added latency with no real benefit.
   clearTimeout(window._liveConnectTO);
   window._liveConnectTO = null;
-  setJoiningBadge();           // show "JOINING LIVE…" while connecting
-  startLiveEdgeMonitor();      // begin buffer watch immediately
-  startLiveJoinTimeout();      // retry if stream doesn't start within 10 s
-  reconnectAudio(LIVE_URL);
+  audio.pause();                // stop any currently-playing stream cleanly
+  cleanupLiveMS();              // reset any previous MediaSource state
+  setJoiningBadge();            // show "JOINING LIVE…" while connecting
+  startLiveEdgeMonitor();       // begin buffer watch immediately
+  startLiveJoinTimeout();       // retry if stream doesn't start within 10 s
+  startLiveViaMS();             // try MediaSource first; falls back to HTTP inside
+  audio.play().catch(() => scheduleLiveReconnect(800));
 }
 
 function exitLiveMode() {
@@ -2062,6 +2227,7 @@ function exitLiveMode() {
   hideLiveJoinBanner();
   stopLiveEdgeMonitor();
   clearLiveJoinTimeout();
+  cleanupLiveMS();   // release MediaSource + SourceBuffer
   // Use setStatusBadge so hero-dot, hero-status, and progress bar are all
   // updated correctly.  Show ON AIR if already playing, OFFLINE if not.
   setStatusBadge(isPlaying);
@@ -2132,17 +2298,7 @@ audio.addEventListener('waiting', () => {
 // stalled = browser stopped fetching data even though more is expected
 audio.addEventListener('stalled', () => {
   if (isLive) {
-    // Same fast-reconnect path as 'error' — live streams can't afford
-    // the exponential back-off of the regular scheduleReconnect().
-    clearTimeout(reconnectTO);
-    clearStallTimer();
-    const badge = document.getElementById('status-badge');
-    const text  = document.getElementById('status-text');
-    if (badge) badge.className = 'status-badge live-reconnecting';
-    if (text)  text.textContent = 'RECONNECTING';
-    reconnectTO = setTimeout(() => {
-      if (isLive) { audio.src = LIVE_URL; audio.load(); audio.play().catch(() => scheduleReconnect()); }
-    }, 800);
+    scheduleLiveReconnect(800);
   } else if (isPlaying) {
     scheduleReconnect();
   }
@@ -2156,12 +2312,7 @@ audio.addEventListener('ended', () => {
   if (isLive) {
     clearTimeout(reconnectTO);
     reconnectTO = setTimeout(() => {
-      if (isLive) {                     // still live → it was a network hiccup
-        setJoiningBadge();
-        audio.src = LIVE_URL;
-        audio.load();
-        audio.play().catch(() => scheduleReconnect());
-      }
+      if (isLive) scheduleLiveReconnect(0); // still live → network hiccup
     }, 1000);
   } else if (isPlaying) {
     scheduleReconnect();
@@ -2170,21 +2321,7 @@ audio.addEventListener('ended', () => {
 
 audio.addEventListener('error', () => {
   if (isLive) {
-    // Live streams: fast reconnect with live-red reconnecting badge,
-    // no exponential back-off (800 ms fixed delay).
-    clearTimeout(reconnectTO);
-    clearStallTimer();
-    const badge = document.getElementById('status-badge');
-    const text  = document.getElementById('status-text');
-    if (badge) badge.className = 'status-badge live-reconnecting';
-    if (text)  text.textContent = 'RECONNECTING';
-    reconnectTO = setTimeout(() => {
-      if (isLive) {
-        audio.src = LIVE_URL;
-        audio.load();
-        audio.play().catch(() => scheduleReconnect());
-      }
-    }, 800);
+    scheduleLiveReconnect(800);
   } else {
     setStatusBadge(false);
     if (isPlaying) scheduleReconnect();
@@ -2225,23 +2362,16 @@ function startPlayback() {
     setJoiningBadge();
     startLiveEdgeMonitor();
     startLiveJoinTimeout();
+    // Start live stream via MediaSource (HTTP fallback inside startLiveViaMS).
+    // startLiveViaMS() sets audio.src synchronously, then audio.play() is called
+    // here within the onclick user-gesture context — required by iOS Safari.
+    startLiveViaMS();
+    audio.play().catch(() => scheduleLiveReconnect(800));
+    return;
   }
 
-  // Always ensure the audio element points to the right URL for the current
-  // mode.  The old check `!audio.src || audio.src === window.location.href`
-  // was too narrow — if audio.src was still set to /stream from a previous
-  // session and the user taps "Join Live", they'd silently connect to the
-  // dead regular stream instead of the live one.
-  const targetUrl = getStreamUrl();   // '/live-stream' when isLive, '/stream' otherwise
-  const needsSrcUpdate = !audio.src
-    || audio.src === window.location.href
-    || (isLive  && !audio.src.endsWith('/live-stream'))  // on wrong stream
-    || (!isLive &&  audio.src.endsWith('/live-stream')); // lingering live src after end
-  if (needsSrcUpdate) {
-    audio.src = targetUrl;
-  }
-  audio.load();
-  audio.play().catch(() => {});
+  // Regular stream
+  reconnectAudio(STREAM_URL);
 }
 
 function stopPlayback() {
@@ -2267,20 +2397,17 @@ function reconnectAudio(url) {
   const was = isPlaying;
   audio.pause();
   audio.src = url;
-  // Always load and try to play — not only when previously playing.
-  // If the user wasn't playing, this begins the stream for them.
-  // If autoplay is blocked, the play() promise rejects → scheduleReconnect
-  // so the UI reflects the correct state and recovers automatically.
   audio.load();
   audio.play().catch(() => {
-    // Autoplay may be blocked (mobile browsers require a user gesture).
-    // scheduleReconnect keeps retrying; after a user tap the gesture
-    // is present and the next reconnect attempt will succeed.
-    if (was || isLive) scheduleReconnect();
+    if (isLive) scheduleLiveReconnect(1000);
+    else if (was) scheduleReconnect();
   });
 }
 
 function scheduleReconnect() {
+  // For live streams use the fast live-reconnect path, not exponential back-off
+  if (isLive) { scheduleLiveReconnect(800); return; }
+
   clearTimeout(reconnectTO);
   clearStallTimer();
   const badge = document.getElementById('status-badge');
@@ -2290,9 +2417,9 @@ function scheduleReconnect() {
   text.textContent = 'RECONNECTING';
   if (heroStatus) heroStatus.textContent = 'RECONNECTING';
   reconnectTO = setTimeout(() => {
+    if (isLive) { scheduleLiveReconnect(0); return; } // live mode started mid-backoff
     reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
-    if (isPlaying || isLive) {
-      // Always refresh src to force a fresh TCP connection to the server
+    if (isPlaying) {
       audio.src = getStreamUrl();
       audio.load();
       audio.play().catch(() => scheduleReconnect());
@@ -2364,10 +2491,7 @@ function startLiveJoinTimeout() {
       const text  = document.getElementById('status-text');
       if (badge) badge.className = 'status-badge live-reconnecting';
       if (text)  text.textContent = 'RETRYING…';
-      // Auto-retry — if it succeeds, 'playing' will clear the badge
-      audio.src = LIVE_URL;
-      audio.load();
-      audio.play().catch(() => scheduleReconnect());
+      scheduleLiveReconnect(500);
     }
   }, 10000);
 }
@@ -2404,20 +2528,15 @@ function startStallTimer() {
   }, 4000);
 }
 
-// Live-stream stall watchdog — 6 s grace period.
+// Live-stream stall watchdog — 8 s grace period.
 // The normal decoder-init gap between the WebM header and the first audio
-// cluster is ~100–300 ms.  6 s is far more than enough to distinguish a
-// normal startup from a genuine stall, while still recovering twice as fast
-// as the old 12 s timeout.
+// cluster is ~100–300 ms.  8 s is safely above that while still catching
+// genuine network stalls quickly.
 function startLiveStallTimer() {
   clearStallTimer();
   stallTimer = setTimeout(() => {
-    if (isLive) {
-      audio.src = LIVE_URL;
-      audio.load();
-      audio.play().catch(() => scheduleReconnect());
-    }
-  }, 6000);
+    if (isLive) scheduleLiveReconnect(0);
+  }, 8000);
 }
 
 function clearStallTimer() {
@@ -2428,9 +2547,14 @@ function clearStallTimer() {
 // logically on (isPlaying or isLive) but the audio element is silently paused.
 // This catches autoplay-policy kills and silent network drops with no error event.
 setInterval(() => {
-  if ((isPlaying || isLive) && audio.paused && !reconnectTO) {
-    console.warn('[Keepalive] Audio paused while active — reconnecting');
-    scheduleReconnect();
+  if (audio.paused && !reconnectTO) {
+    if (isLive) {
+      console.warn('[Keepalive] Live audio paused silently — reconnecting');
+      scheduleLiveReconnect(500);
+    } else if (isPlaying) {
+      console.warn('[Keepalive] Audio paused while active — reconnecting');
+      scheduleReconnect();
+    }
   }
 }, 10000);
 

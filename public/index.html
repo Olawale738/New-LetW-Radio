@@ -3191,7 +3191,11 @@ registerProcessor('letw-noise-gate', NoiseGateProcessor);
   // Send the admin token so server accepts live events
   socket.auth = { token: getAdminToken() };
   const recordCheck = document.getElementById('live-record-check');
-  socket.emit('live:start', { title, artist, record: recordCheck ? recordCheck.checked : false });
+  // Include the actual mimeType used by MediaRecorder so the server can
+  // set the correct Content-Type for HTTP clients and relay it to Socket.IO
+  // MediaSource clients.  Without this, browsers (especially Safari) that
+  // receive audio/mp4 data but see Content-Type: audio/webm will error.
+  socket.emit('live:start', { title, artist, record: recordCheck ? recordCheck.checked : false, mimeType });
 
   liveMediaRecorder.start(100); // 100 ms timeslice — smallest WebM cluster size Chrome
                                 // reliably produces.  Halves the per-chunk latency vs 250 ms

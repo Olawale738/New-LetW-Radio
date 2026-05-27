@@ -34,6 +34,7 @@ class AudioEngine extends EventEmitter {
     this.isLive           = false;      // true while admin is broadcasting live
     this.liveTitle        = 'Live Broadcast';
     this.liveArtist       = 'Light Encounter Tabernacle Worldwide';
+    this.liveMimeType     = 'audio/webm;codecs=opus';
     this.playbackTimer    = null;
     this.bytesPerSecond   = 16384;
     this.startTime        = null;
@@ -184,7 +185,7 @@ class AudioEngine extends EventEmitter {
 
   addLiveClient(id, res) {
     res.writeHead(200, {
-      'Content-Type': 'audio/webm',
+      'Content-Type': this.liveMimeType || 'audio/webm',
       'Cache-Control': 'no-cache, no-store',
       'Connection': 'keep-alive',
       'Transfer-Encoding': 'chunked',
@@ -242,12 +243,13 @@ class AudioEngine extends EventEmitter {
     if (dead.length) this._updateListeners();
   }
 
-  startLive(title, artist) {
+  startLive(title, artist, mimeType) {
     this.isLive          = true;
     this.isPlaying       = false;  // reset so health-check & queueEmpty can fire after live ends
     this._playGeneration++;        // invalidate any in-flight readAndBroadcast closure
-    this.liveTitle       = title  || 'Live Broadcast';
-    this.liveArtist      = artist || 'Light Encounter Tabernacle Worldwide';
+    this.liveTitle       = title    || 'Live Broadcast';
+    this.liveArtist      = artist   || 'Light Encounter Tabernacle Worldwide';
+    this.liveMimeType    = mimeType || 'audio/webm;codecs=opus';
     this.liveInitChunk   = null;   // reset init segment for new session
     this._liveChunkCount = 0;
     // Pause file playback so the scheduled stream goes silent
@@ -255,7 +257,7 @@ class AudioEngine extends EventEmitter {
     if (this._watchdogTimer) { clearInterval(this._watchdogTimer); this._watchdogTimer = null; }
     // Broadcast fresh count — scheduled-stream clients stay connected during live
     this._updateListeners();
-    this.emit('liveStart', { title: this.liveTitle, artist: this.liveArtist });
+    this.emit('liveStart', { title: this.liveTitle, artist: this.liveArtist, mimeType: this.liveMimeType });
   }
 
   stopLive() {
@@ -427,6 +429,7 @@ class AudioEngine extends EventEmitter {
       isLive:       this.isLive,
       liveTitle:    this.liveTitle,
       liveArtist:   this.liveArtist,
+      liveMimeType: this.liveMimeType,
       currentTrack: this.currentTrackInfo,
       queueLength:  this.queue.length,
       listeners:    this._listenerCount,
