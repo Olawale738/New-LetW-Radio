@@ -1139,14 +1139,22 @@ io.on('connection', (socket) => {
     if (!audioEngine.isLive) return;
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
 
-    // ── Ring buffer: keep last ~3 s for late-joining listeners ──────────────
-    _liveRingBuffer.push(buf);
-    if (_liveRingBuffer.length > LIVE_RING_SIZE) _liveRingBuffer.shift();
-    _liveBytesSent        += buf.length;
-    _liveAdminLastPing     = Date.now(); // each chunk counts as an implicit heartbeat
+    _liveBytesSent     += buf.length;
+    _liveAdminLastPing  = Date.now(); // each chunk counts as an implicit heartbeat
 
     audioEngine.broadcastLive(buf);                 // HTTP /live-stream clients
     socket.broadcast.emit('live:audio', buf);       // Socket.IO listener clients
+
+    // ── Ring buffer: keep last ~3 s for late-joining listeners ──────────────
+    // IMPORTANT: skip chunk 1 (the WebM EBML header / init segment).
+    // Chunk 1 is already stored in audioEngine.liveInitChunk and sent separately
+    // via the 'live:init' event.  If we also put it in the ring buffer, new
+    // listeners receive the header TWICE → SourceBuffer sees it as duplicate
+    // init data → InvalidStateError → stream silently falls back to HTTP.
+    if (audioEngine._liveChunkCount > 1) {
+      _liveRingBuffer.push(buf);
+      if (_liveRingBuffer.length > LIVE_RING_SIZE) _liveRingBuffer.shift();
+    }
     // Write to recording file if recording is active
     if (liveRecordingEnabled && liveRecordingStream) {
       try { liveRecordingStream.write(buf); } catch(e) {}

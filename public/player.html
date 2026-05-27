@@ -1438,22 +1438,6 @@
       border-color: rgba(37,211,102,0.5);
     }
 
-    /* ── Channel WhatsApp link ──────────────────────────────────── */
-    .channel-btn-wa {
-      display: inline-flex;
-      align-items: center;
-      gap: 3px;
-      font-size: 9px;
-      color: #25d366;
-      text-decoration: none;
-      margin-top: 3px;
-      padding: 2px 6px;
-      border-radius: 8px;
-      background: rgba(37,211,102,0.1);
-      transition: background 0.2s;
-    }
-    .channel-btn-wa:hover { background: rgba(37,211,102,0.22); }
-
     /* ── Community Panel ──────────────────────────────────────── */
     #community-panel {
       flex: 1;
@@ -2428,15 +2412,6 @@
         <button class="req-submit-btn" onclick="submitRequest()">Send Request</button>
         <div class="req-toast" id="req-toast">Request submitted! God bless you. 🙏</div>
 
-        <!-- WhatsApp direct request (DCLM-style) -->
-        <div id="req-whatsapp-wrap" style="margin-top:14px;padding:10px 12px;border-radius:10px;background:rgba(37,211,102,0.06);border:1px solid rgba(37,211,102,0.2);text-align:center;">
-          <div style="font-size:10px;color:var(--text-dim);margin-bottom:8px;letter-spacing:0.5px;">Or send directly via WhatsApp</div>
-          <a id="req-whatsapp-link" href="#" target="_blank" rel="noopener"
-            style="display:inline-flex;align-items:center;gap:7px;padding:7px 18px;border-radius:20px;background:rgba(37,211,102,0.12);border:1px solid rgba(37,211,102,0.35);color:#25d366;font-size:12px;font-weight:700;text-decoration:none;letter-spacing:0.3px;"
-            onclick="openWhatsAppRequest(event)" aria-label="Send prayer request via WhatsApp">
-            <span style="font-size:16px;">📱</span> WhatsApp Request
-          </a>
-        </div>
 
         <!-- Embed this player section -->
         <div style="margin-top:14px;padding:10px 12px;border-radius:10px;background:rgba(212,168,67,0.04);border:1px solid rgba(212,168,67,0.1);">
@@ -4373,21 +4348,6 @@ function toggleMobilePanel() {
   document.getElementById('panel-backdrop').classList.toggle('visible', mobilePanelOpen);
 }
 
-// ── WhatsApp Prayer Request (DCLM-style direct request) ──────
-function openWhatsAppRequest(e) {
-  e.preventDefault();
-  const name    = (document.getElementById('req-name').value.trim()    || getUsername());
-  const text    = (document.getElementById('req-text').value.trim()    || '');
-  const type    = currentReqType === 'prayer' ? '🙏 Prayer Request' : currentReqType === 'dedication' ? '💌 Dedication' : '🎵 Song Request';
-  const station = document.title.replace(' — Listen Live','') || 'LETW Radio';
-  const msg = encodeURIComponent(`${type} for ${station}\n\nFrom: ${name}\n\n${text}`);
-  // Try to use the channel's configured WhatsApp number, fallback to a generic LETW number
-  const activeChannel = _channels.find(c => c.url === _activeStreamUrl);
-  const waNum = (activeChannel && activeChannel.whatsapp) ? activeChannel.whatsapp.replace(/\D/g,'') : '';
-  const waUrl = waNum ? `https://wa.me/${waNum}?text=${msg}` : `https://wa.me/?text=${msg}`;
-  window.open(waUrl, '_blank', 'noopener');
-}
-
 // ── Embed code generator ──────────────────────────────────────
 function _updateEmbedCode() {
   const box  = document.getElementById('embed-code-box');
@@ -4595,7 +4555,7 @@ function esc(s) {
   // Fills in elapsed time, duration, and album art as a backup to Socket.IO
   startNowPlayingPoller();
 
-  // Embed code & WhatsApp link — set after channels loaded
+  // Embed code — set after channels loaded
   setTimeout(_updateEmbedCode, 500);
 })();
 
@@ -4885,14 +4845,11 @@ function renderChannelGrid() {
     const active = ch.url === _activeStreamUrl || (ch.url === '/stream' && _activeStreamUrl === '/stream');
     const lang = ch.language || '';
     const badge = (lang && lang !== 'English') ? `<span style="font-size:8px;padding:1px 5px;border-radius:8px;background:rgba(212,168,67,0.15);color:var(--gold);margin-top:2px;display:inline-block;">${esc(lang)}</span>` : '';
-    const waNum = (ch.whatsapp || '').replace(/\D/g,'');
-    const waLink = waNum ? `<a href="https://wa.me/${waNum}" target="_blank" rel="noopener" class="channel-btn-wa" onclick="event.stopPropagation()">📱 WhatsApp</a>` : '';
     return `<div class="channel-btn${active ? ' active' : ''}" onclick="switchChannel('${ch.url.replace(/'/g,"\\'")}','${ch.name.replace(/'/g,"\\'")}','${(ch.id||'').replace(/'/g,'')}')">
       <div class="channel-btn-icon">${ch.image_url ? `<img src="${esc(ch.image_url)}" style="width:32px;height:32px;border-radius:8px;object-fit:cover;" onerror="this.style.display='none'">` : icons[i % icons.length]}</div>
       <div class="channel-btn-name">${esc(ch.name)}</div>
       ${badge}
       ${ch.description ? `<div class="channel-btn-desc">${esc(ch.description)}</div>` : ''}
-      ${waLink}
     </div>`;
   }).join('');
 }
