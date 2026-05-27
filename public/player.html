@@ -1928,13 +1928,16 @@ function switchToLiveMode(info) {
   // Already on the live stream and playing — nothing to do.
   if (audio.src && audio.src.includes('/live-stream') && !audio.paused) return;
 
-  // Give the server 1200ms to buffer the first WebM chunks before connecting.
-  // MediaRecorder emits its first chunk at ~250ms; we want 3–4 chunks in the
-  // init segment before a client joins so audio starts immediately.
+  // Wait 400 ms before connecting to /live-stream.
+  // The first MediaRecorder chunk (the WebM EBML header) arrives at ~250 ms.
+  // 400 ms gives the server time to receive and store it so addLiveClient()
+  // can send it immediately, letting the browser start decoding right away.
+  // (Previously 1200 ms because we waited for 3 chunks — reduced now that we
+  //  store only 1 chunk as the init segment.)
   clearTimeout(window._liveConnectTO);
   window._liveConnectTO = setTimeout(() => {
     reconnectAudio(LIVE_URL);
-  }, 1200);
+  }, 400);
 }
 
 function exitLiveMode() {
@@ -1979,7 +1982,19 @@ audio.addEventListener('pause', () => {
 audio.addEventListener('waiting', () => {
   document.getElementById('status-badge').className = 'status-badge buffering';
   document.getElementById('status-text').textContent = 'BUFFERING';
-  startStallTimer();
+  // For regular streams, start a 4-second stall timer that forces a reconnect
+  // if the server stops sending data.
+  // For LIVE streams, 'waiting' fires naturally during the brief decoder-init
+  // gap between the WebM header chunk and the first live audio cluster.
+  // Triggering a reconnect here would replay the init chunk every 4 seconds,
+  // creating the "repeating voices" loop.  Live streams use a longer 12-second
+  // watchdog instead; genuine connection drops are caught by the error/stalled
+  // handlers below.
+  if (!isLive) {
+    startStallTimer();
+  } else {
+    startLiveStallTimer();
+  }
 });
 
 // stalled = browser stopped fetching data even though more is expected
@@ -2096,14 +2111,30 @@ function scheduleReconnect() {
 function startStallTimer() {
   clearStallTimer();
   stallTimer = setTimeout(() => {
-    // If still buffering after 4 s, escalate to a full reconnect
-    if (isPlaying || isLive) {
+    // If still buffering after 4 s on the REGULAR stream, force a reconnect.
+    // (Live streams use startLiveStallTimer which has a longer grace period.)
+    if (isPlaying && !isLive) {
       audio.src = getStreamUrl();
       audio.load();
       audio.play().catch(() => scheduleReconnect());
     }
   }, 4000);
 }
+
+// Live-stream stall watchdog — longer timeout (12 s) to avoid false-firing on
+// the normal decoder-init gap between the WebM header chunk and first live cluster.
+// Only reconnects if genuinely no audio has arrived for an extended period.
+function startLiveStallTimer() {
+  clearStallTimer();
+  stallTimer = setTimeout(() => {
+    if (isLive) {
+      audio.src = LIVE_URL;
+      audio.load();
+      audio.play().catch(() => scheduleReconnect());
+    }
+  }, 12000);
+}
+
 function clearStallTimer() {
   if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
 }

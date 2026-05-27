@@ -189,15 +189,25 @@ class AudioEngine extends EventEmitter {
       'X-Accel-Buffering': 'no',          // nginx: don't buffer live stream
       'X-Content-Type-Options': 'nosniff',
     });
-    // TCP-level keepalive — prevent reverse-proxy idle timeouts from dropping
-    // the long-lived live-stream HTTP connection between broadcasts.
+    // TCP tuning for minimum latency:
+    //   setNoDelay(true)  — disable Nagle's algorithm so each write() is sent
+    //                       immediately rather than waiting to fill a TCP segment.
+    //                       Without this, small 4-8 kB chunks can be delayed up
+    //                       to 200 ms before they leave the server.
+    //   setKeepAlive      — prevent reverse-proxy idle timeouts on long connections.
+    //   setTimeout(0)     — disable Node's own idle-connection timeout.
     try {
       if (res.socket) {
+        res.socket.setNoDelay(true);
         res.socket.setKeepAlive(true, 5000);
         res.socket.setTimeout(0);
       }
     } catch (e) {}
-    // Send the stored WebM init segment so late-joining listeners can decode
+    // Send the stored WebM init segment so late-joining listeners can decode.
+    // We store ONLY the first chunk (≈250 ms) — it contains the EBML header and
+    // Tracks element needed to initialise the decoder.  Storing more chunks
+    // would cause listeners to replay progressively older audio every time they
+    // reconnect, creating an audible "echo/repeat" effect.
     if (this.liveInitChunk) {
       try { res.write(this.liveInitChunk); } catch (e) {}
     }
@@ -211,12 +221,14 @@ class AudioEngine extends EventEmitter {
   }
 
   broadcastLive(chunk) {
-    // Accumulate first 3 chunks as the WebM init segment for late joiners
+    // Store ONLY the very first MediaRecorder chunk as the WebM init segment.
+    // Chunk 1 always contains the full EBML header + Tracks element that the
+    // browser needs to initialise its WebM/Opus decoder.  Subsequent chunks
+    // are Cluster elements (raw audio) — replaying them on reconnect would
+    // cause the listener to hear old audio before the live feed.
     this._liveChunkCount = (this._liveChunkCount || 0) + 1;
-    if (this._liveChunkCount <= 3) {
-      this.liveInitChunk = this.liveInitChunk
-        ? Buffer.concat([this.liveInitChunk, chunk])
-        : Buffer.from(chunk);
+    if (this._liveChunkCount === 1) {
+      this.liveInitChunk = Buffer.from(chunk);
     }
 
     const dead = [];
