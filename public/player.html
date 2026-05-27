@@ -313,6 +313,28 @@
       animation: blink 0.35s ease-in-out infinite;
     }
 
+    /* ── Live reconnecting badge (live-red tint, slower blink) ── */
+    .status-badge.live-reconnecting {
+      background: rgba(224,48,96,0.08);
+      border: 1px solid rgba(224,48,96,0.35);
+      color: #ff80a0;
+    }
+    .status-badge.live-reconnecting .dot {
+      background: var(--live-red);
+      animation: blink 0.7s ease-in-out infinite;
+    }
+
+    /* ── Live latency / delay indicator ───────────────────────── */
+    #live-delay-label {
+      display: none;
+      font-size: 10px;
+      color: rgba(224,48,96,0.6);
+      letter-spacing: 1px;
+      text-align: center;
+      margin-top: 5px;
+      font-family: var(--mono, monospace);
+    }
+
     /* ── "Join Live" notification banner ──────────────────────── */
     #live-join-banner {
       display: none;
@@ -1449,6 +1471,9 @@
           <button onclick="startPlayback()">▶ Join Live</button>
         </div>
 
+        <!-- Live latency display: shown only while live & playing -->
+        <div id="live-delay-label"></div>
+
         <div class="now-broadcasting-label">Now Broadcasting</div>
         <div class="track-title" id="track-title">LETW Radio</div>
         <div class="track-artist" id="track-artist">Light Encounter Tabernacle Worldwide</div>
@@ -2024,7 +2049,16 @@ audio.addEventListener('playing', () => {
   reconnectDelay = 2000;
   document.getElementById('play-icon').textContent = '⏸';
   document.getElementById('play-btn').classList.add('playing');
-  setStatusBadge(true);
+  if (isLive) {
+    // Transition from "JOINING LIVE…" / "live-reconnecting" to "LIVE BROADCAST"
+    // setStatusBadge() returns early during live mode, so we set it directly.
+    const badge = document.getElementById('status-badge');
+    const text  = document.getElementById('status-text');
+    if (badge) badge.className = 'status-badge live';
+    if (text)  text.textContent = 'LIVE';
+  } else {
+    setStatusBadge(true);
+  }
   startVisualizerFromAudio();
   requestWakeLock();
   clearStallTimer();
@@ -2064,14 +2098,47 @@ audio.addEventListener('stalled', () => {
   if (isPlaying || isLive) scheduleReconnect();
 });
 
-// ended = stream unexpectedly terminated (should not happen for live radio, but handle it)
+// ended = stream closed by the server (admin stopped OR network hiccup).
+// If we're in live mode and the socket hasn't sent 'live:ended', treat it
+// as a transient drop and reconnect after a 1-second grace period so the
+// socket event has time to arrive and exitLiveMode() can run instead.
 audio.addEventListener('ended', () => {
-  if (isPlaying || isLive) scheduleReconnect();
+  if (isLive) {
+    clearTimeout(reconnectTO);
+    reconnectTO = setTimeout(() => {
+      if (isLive) {                     // still live → it was a network hiccup
+        setJoiningBadge();
+        audio.src = LIVE_URL;
+        audio.load();
+        audio.play().catch(() => scheduleReconnect());
+      }
+    }, 1000);
+  } else if (isPlaying) {
+    scheduleReconnect();
+  }
 });
 
 audio.addEventListener('error', () => {
-  setStatusBadge(false);
-  if (isPlaying || isLive) scheduleReconnect();
+  if (isLive) {
+    // Live streams: fast reconnect with live-red reconnecting badge,
+    // no exponential back-off (800 ms fixed delay).
+    clearTimeout(reconnectTO);
+    clearStallTimer();
+    const badge = document.getElementById('status-badge');
+    const text  = document.getElementById('status-text');
+    if (badge) badge.className = 'status-badge live-reconnecting';
+    if (text)  text.textContent = 'RECONNECTING';
+    reconnectTO = setTimeout(() => {
+      if (isLive) {
+        audio.src = LIVE_URL;
+        audio.load();
+        audio.play().catch(() => scheduleReconnect());
+      }
+    }, 800);
+  } else {
+    setStatusBadge(false);
+    if (isPlaying) scheduleReconnect();
+  }
 });
 
 function setStatusBadge(playing) {
@@ -2206,6 +2273,13 @@ function startLiveEdgeMonitor() {
       } else {
         audio.playbackRate = 1.0;
       }
+      // Update the live delay indicator
+      const delayEl = document.getElementById('live-delay-label');
+      if (delayEl) {
+        const secs = Math.round(ahead);
+        delayEl.style.display = 'block';
+        delayEl.textContent   = `~${secs}s live delay`;
+      }
     } catch(_) {}
   }, 1000);
 }
@@ -2213,6 +2287,8 @@ function startLiveEdgeMonitor() {
 function stopLiveEdgeMonitor() {
   if (_liveEdgeTimer) { clearInterval(_liveEdgeTimer); _liveEdgeTimer = null; }
   try { audio.playbackRate = 1.0; } catch(_) {}
+  const delayEl = document.getElementById('live-delay-label');
+  if (delayEl) { delayEl.style.display = 'none'; delayEl.textContent = ''; }
 }
 
 // ── Join-live banner ──────────────────────────────────────────

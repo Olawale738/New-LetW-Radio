@@ -1283,10 +1283,14 @@
 
           <!-- Mic level meter -->
           <div style="margin-bottom:16px;">
-            <div style="font-size:10px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;">Mic Level</div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <div style="font-size:10px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;">Mic Level</div>
+              <span id="mic-clip-indicator" style="font-size:9px;font-weight:700;letter-spacing:1.5px;color:#ff2050;opacity:0;transition:opacity 0.15s;">CLIP</span>
+            </div>
             <div style="height:12px;background:rgba(255,255,255,0.05);border-radius:6px;overflow:hidden;border:1px solid rgba(255,255,255,0.06);">
               <div id="mic-level-bar" style="height:100%;width:0%;border-radius:6px;background:linear-gradient(90deg,#4caf82,#d4a843,#e05070);transition:width 0.05s;"></div>
             </div>
+            <div id="mic-peak-label" style="font-size:9px;color:rgba(255,255,255,0.2);margin-top:3px;text-align:right;font-family:var(--mono);">—</div>
           </div>
 
           <!-- Mic Boost (input gain) -->
@@ -1388,7 +1392,10 @@
 
           <!-- Live duration counter -->
           <div id="live-timer-wrap" style="display:none;margin-top:14px;padding:10px 14px;background:rgba(224,80,112,0.08);border:1px solid rgba(224,80,112,0.25);border-radius:8px;">
-            <div style="font-size:10px;color:#e05070;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px;">● BROADCASTING LIVE</div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+              <div style="font-size:10px;color:#e05070;letter-spacing:2px;text-transform:uppercase;">● BROADCASTING LIVE</div>
+              <div id="live-chunk-rate" style="font-size:10px;color:rgba(224,80,112,0.55);font-family:var(--mono);letter-spacing:1px;">— chunks/s</div>
+            </div>
             <div id="live-timer" style="font-family:var(--mono);font-size:22px;color:#ff6b8a;font-weight:700;">00:00:00</div>
           </div>
         </div>
@@ -1865,6 +1872,39 @@ const COLORS = ['#00e5ff','#ff6d3b','#00e676','#d500f9','#ffea00','#ff1744','#7c
 
 // =================== SOCKET ===================
 const socket = io({ auth: { token: getAdminToken() } });
+
+// ── Broadcast resilience: recover live session after socket reconnect ──────────
+// Socket.IO auto-reconnects silently. When it does, the server sees a NEW socket
+// object and fires io.on('connection') again.  We must re-announce the live session
+// so the new socket is authorised to send live:chunk events.
+// We do NOT re-start recording (record:false) because liveRecordingStream on the
+// server side is still open from the original session.
+socket.on('connect', () => {
+  if (liveMediaRecorder && liveMediaRecorder.state === 'recording') {
+    const title       = document.getElementById('live-title').value.trim()  || 'Live Broadcast';
+    const artist      = document.getElementById('live-artist').value.trim() || 'Light Encounter Tabernacle Worldwide';
+    socket.auth = { token: getAdminToken() };
+    // Re-register the live session — server resets init chunk so late joiners
+    // get a fresh WebM header; existing listeners on /live-stream are unaffected.
+    socket.emit('live:start', { title, artist, record: false });
+    setLiveUIState(true);  // restore on-air chip state in case it showed a warning
+    logActivity('✓ Connection restored — broadcast continuing');
+  }
+});
+
+socket.on('disconnect', (reason) => {
+  // If we're live when the socket drops, warn the admin immediately.
+  if (liveMediaRecorder && liveMediaRecorder.state === 'recording') {
+    const chip = document.getElementById('live-status-chip');
+    if (chip) {
+      chip.textContent  = '⚠ RECONNECTING…';
+      chip.style.background   = 'rgba(212,168,67,0.15)';
+      chip.style.borderColor  = 'rgba(212,168,67,0.50)';
+      chip.style.color        = '#d4a843';
+    }
+    logActivity('⚠ Server connection lost — reconnecting… (broadcast may be interrupted)');
+  }
+});
 
 socket.on('status', (s) => {
   state.status = s;
@@ -2788,6 +2828,7 @@ let liveTimerInterval = null;
 let liveGainNode      = null;   // pre-gain (main loudness)
 let liveBassNode      = null;   // low-shelf EQ (bass warmth)
 let livePresenceNode  = null;   // peaking EQ (voice clarity)
+let _liveChunksSent   = 0;      // chunks emitted to socket since last timer tick
 let liveTrebleNode    = null;   // high-shelf EQ (soprano / air)
 let liveNoiseGateNode = null;   // AudioWorkletNode (or ScriptProcessorNode fallback) noise gate
 let liveDestStream    = null;   // processed MediaStream from MediaStreamDestination (for monitor)
@@ -3067,6 +3108,7 @@ registerProcessor('letw-noise-gate', NoiseGateProcessor);
 
   liveMediaRecorder.addEventListener('dataavailable', e => {
     if (e.data && e.data.size > 0) {
+      _liveChunksSent++;
       e.data.arrayBuffer().then(buf => {
         socket.emit('live:chunk', buf);
       });
@@ -3112,6 +3154,8 @@ function stopLiveBroadcast() {
   if (liveTimerInterval) { clearInterval(liveTimerInterval); liveTimerInterval = null; }
 
   document.getElementById('mic-level-bar').style.width = '0%';
+  document.getElementById('mic-peak-label').textContent = '—';
+  _liveChunksSent = 0;
 
   socket.auth = { token: getAdminToken() };
   socket.emit('live:stop');
@@ -3251,11 +3295,50 @@ function setMonitorVolume(val) {
 function animateMicLevel() {
   liveMicRAF = requestAnimationFrame(animateMicLevel);
   if (!liveMicAnalyser) return;
-  const data = new Uint8Array(liveMicAnalyser.frequencyBinCount);
-  liveMicAnalyser.getByteFrequencyData(data);
-  const avg = data.reduce((s, v) => s + v, 0) / data.length;
-  const pct = Math.min(100, (avg / 128) * 100);
-  document.getElementById('mic-level-bar').style.width = pct + '%';
+
+  const freqData = new Uint8Array(liveMicAnalyser.frequencyBinCount);
+  liveMicAnalyser.getByteFrequencyData(freqData);
+
+  // Use RMS of time-domain signal for a truer VU reading + peak hold for visuals
+  const timeData = new Uint8Array(liveMicAnalyser.fftSize);
+  liveMicAnalyser.getByteTimeDomainData(timeData);
+  let sq = 0;
+  let peak = 0;
+  for (let i = 0; i < timeData.length; i++) {
+    const s = (timeData[i] - 128) / 128;  // -1 … +1
+    sq += s * s;
+    if (Math.abs(s) > peak) peak = Math.abs(s);
+  }
+  const rms  = Math.sqrt(sq / timeData.length);
+  const pct  = Math.min(100, rms * 300);  // scale: full voice ≈ 100%
+  const pkPct = Math.min(100, peak * 100);
+
+  const bar = document.getElementById('mic-level-bar');
+  if (bar) {
+    bar.style.width = pct + '%';
+    // Colour-code: green (safe) → amber (hot) → red (clipping)
+    if (pkPct > 95) {
+      bar.style.background = 'linear-gradient(90deg,#ff2050,#ff0030)'; // clipping
+    } else if (pkPct > 75) {
+      bar.style.background = 'linear-gradient(90deg,#4caf82,#d4a843,#e05070)'; // hot
+    } else {
+      bar.style.background = 'linear-gradient(90deg,#4caf82,#7ecf90)'; // safe
+    }
+  }
+
+  // Clip indicator flash
+  const clipEl = document.getElementById('mic-clip-indicator');
+  if (clipEl) {
+    if (pkPct > 95) {
+      clipEl.style.opacity = '1';
+      clearTimeout(clipEl._hideTO);
+      clipEl._hideTO = setTimeout(() => { clipEl.style.opacity = '0'; }, 300);
+    }
+  }
+
+  // Peak percentage label
+  const peakLabel = document.getElementById('mic-peak-label');
+  if (peakLabel) peakLabel.textContent = Math.round(pkPct) + '%';
 }
 
 function updateLiveTimer() {
@@ -3265,6 +3348,16 @@ function updateLiveTimer() {
   const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2,'0');
   const s = String(elapsed % 60).padStart(2,'0');
   document.getElementById('live-timer').textContent = `${h}:${m}:${s}`;
+
+  // Show chunks-per-second (how many MediaRecorder slices were emitted last second)
+  const rateEl = document.getElementById('live-chunk-rate');
+  if (rateEl) {
+    const rate = _liveChunksSent;
+    _liveChunksSent = 0;   // reset for next second
+    const color = rate >= 8 ? '#4caf82' : rate >= 4 ? '#d4a843' : '#e05070';
+    rateEl.style.color = color;
+    rateEl.textContent = rate + ' chunks/s';
+  }
 }
 
 function setLiveUIState(on) {
