@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title><%= name %></title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:<%= bg %>;font-family:'Segoe UI',Arial,sans-serif;height:100vh;display:flex;align-items:center;justify-content:center;overflow:hidden;}
+.card{width:320px;background:<%= card %>;border:1px solid rgba(212,168,67,0.3);border-radius:18px;padding:18px;box-shadow:0 12px 48px rgba(0,0,0,0.6);display:flex;flex-direction:column;gap:14px;}
+.top{display:flex;align-items:center;gap:12px;}
+.logo{width:52px;height:52px;border-radius:12px;overflow:hidden;flex-shrink:0;background:rgba(212,168,67,0.1);}
+.logo img{width:100%;height:100%;object-fit:cover;}
+.info{flex:1;min-width:0;}
+.sname{font-size:13px;font-weight:800;color:<%= gold %>;letter-spacing:0.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.track{font-size:11px;color:<%= muted %>;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.pill{display:inline-flex;align-items:center;gap:4px;font-size:9px;font-weight:700;letter-spacing:1.5px;padding:2px 8px;border-radius:10px;background:rgba(224,48,96,0.12);border:1px solid rgba(224,48,96,0.3);color:#ff80a0;margin-top:4px;opacity:0;transition:opacity 0.3s;}
+.pill.on{opacity:1;}
+.pill .rdot{width:5px;height:5px;border-radius:50%;background:#e03060;animation:pulse 0.9s ease-in-out infinite;}
+.vis{height:32px;border-radius:8px;overflow:hidden;background:rgba(0,0,0,0.2);}
+canvas{display:block;width:100%;height:32px;}
+.ctrl{display:flex;align-items:center;gap:10px;}
+.playbtn{width:52px;height:52px;border-radius:50%;border:none;background:linear-gradient(135deg,#b88820,<%= gold %>);color:#1a0800;font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 6px 20px rgba(212,168,67,0.4);transition:transform 0.15s,box-shadow 0.15s;}
+.playbtn:hover{transform:scale(1.06);box-shadow:0 8px 28px rgba(212,168,67,0.55);}
+.playbtn.playing{background:linear-gradient(135deg,#7a0820,#e03060);}
+.meta{flex:1;display:flex;flex-direction:column;gap:4px;}
+.bar-wrap{height:4px;background:rgba(212,168,67,0.1);border-radius:2px;overflow:hidden;position:relative;}
+.bar-fill{height:100%;background:<%= gold %>;border-radius:2px;width:0%;transition:width 1s linear;}
+.times{display:flex;justify-content:space-between;font-size:9px;color:<%= muted %>;}
+.listeners{font-size:10px;color:<%= muted %>;text-align:right;}
+.foot{display:flex;justify-content:space-between;align-items:center;padding-top:4px;border-top:1px solid rgba(212,168,67,0.1);}
+.foot a{font-size:10px;color:<%= muted %>;text-decoration:none;display:flex;align-items:center;gap:4px;}
+.foot a:hover{color:<%= gold %>;}
+.vol{display:flex;align-items:center;gap:6px;}
+.vol input{width:72px;accent-color:<%= gold %>;cursor:pointer;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.3;}}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="top">
+    <div class="logo"><img src="/logo.png" onerror="this.src=''" alt=""></div>
+    <div class="info">
+      <div class="sname"><%= name %></div>
+      <div class="track" id="etrack"><%= desc %></div>
+      <div class="pill" id="epill"><span class="rdot"></span><span id="epill-txt">LIVE</span></div>
+    </div>
+  </div>
+  <div class="vis"><canvas id="evis"></canvas></div>
+  <div class="ctrl">
+    <button class="playbtn" id="epbtn" onclick="etoggle()" title="Play/Pause">&#x25B6;</button>
+    <div class="meta">
+      <div class="bar-wrap"><div class="bar-fill" id="ebar"></div></div>
+      <div class="times"><span id="eel">0:00</span><span id="etot">&#x2013;:&#x2013;&#x2013;</span></div>
+    </div>
+    <div class="vol">🔊<input type="range" min="0" max="1" step="0.05" value="0.85" id="evol" oninput="eaudio.volume=+this.value"></div>
+  </div>
+  <div class="foot">
+    <a href="/listen" target="_blank">🔗 Open full player</a>
+    <span class="listeners" id="elis">&#x2013;</span>
+  </div>
+</div>
+<audio id="eaudio" preload="none"></audio>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const eaudio=document.getElementById('eaudio');
+const epbtn=document.getElementById('epbtn');
+const etrack=document.getElementById('etrack');
+const epill=document.getElementById('epill');
+const ebar=document.getElementById('ebar');
+const eel=document.getElementById('eel');
+const etot=document.getElementById('etot');
+const elis=document.getElementById('elis');
+const defaultDesc=<%- JSON.stringify(desc).replace(/<\//g,'<\\/') %>;
+let eplaying=false, eisLive=false, eduration=0, eelapsed=0, etimer=null, evisraf=null;
+const echUrl=<%- JSON.stringify(chUrl).replace(/<\//g,'<\\/') %>;
+
+const ecanvas=document.getElementById('evis');
+const ectx=ecanvas.getContext('2d');
+let eAudioCtx=null,eAnalyser=null,eSource=null;
+const eW=ecanvas.offsetWidth||320,eH=32;
+ecanvas.width=eW*2;ecanvas.height=eH*2;
+ectx.scale(2,2);
+
+function efmt(s){const m=Math.floor(s/60),ss=Math.floor(s%60);return m+':'+(ss<10?'0':'')+ss;}
+function etoggle(){eplaying?estop():eplay();}
+function eplay(){
+  eaudio.src=eisLive?'/live-stream?t='+Date.now():echUrl+'?t='+Date.now();
+  eaudio.volume=+document.getElementById('evol').value;
+  eaudio.load();eaudio.play().catch(()=>{});
+  eplaying=true;epbtn.textContent='⏸';epbtn.classList.add('playing');
+  eStartViz();
+}
+function estop(){
+  eaudio.pause();eaudio.src='';
+  eplaying=false;epbtn.textContent='▶';epbtn.classList.remove('playing');
+  if(etimer){clearInterval(etimer);etimer=null;}
+  ebar.style.width='0%';eel.textContent='0:00';
+  if(evisraf){cancelAnimationFrame(evisraf);evisraf=null;}
+  ectx.clearRect(0,0,eW,eH);
+}
+function eStartViz(){
+  if(!eAudioCtx)eAudioCtx=new(window.AudioContext||window.webkitAudioContext)();
+  if(eAudioCtx.state==='suspended')eAudioCtx.resume();
+  if(eSource){try{eSource.disconnect();}catch{}}
+  try{eSource=eAudioCtx.createMediaElementSource(eaudio);}catch{eSource=null;}
+  eAnalyser=eAudioCtx.createAnalyser();eAnalyser.fftSize=64;
+  if(eSource){eSource.connect(eAnalyser);eAnalyser.connect(eAudioCtx.destination);}
+  eDrawViz();
+}
+function eDrawViz(){
+  evisraf=requestAnimationFrame(eDrawViz);
+  if(!eAnalyser){ectx.clearRect(0,0,eW,eH);return;}
+  const d=new Uint8Array(eAnalyser.frequencyBinCount);
+  eAnalyser.getByteFrequencyData(d);
+  ectx.clearRect(0,0,eW,eH);
+  const bw=eW/d.length;
+  d.forEach((v,i)=>{
+    const h=(v/255)*eH;
+    const g=ectx.createLinearGradient(0,eH-h,0,eH);
+    g.addColorStop(0,'#f0c85a');g.addColorStop(1,'rgba(212,168,67,0.3)');
+    ectx.fillStyle=g;
+    ectx.fillRect(i*bw+1,eH-h,bw-2,h);
+  });
+}
+
+const esocket=io({transports:['websocket','polling']});
+esocket.on('status',d=>{
+  if(d.isLive){eisLive=true;epill.classList.add('on');}
+  else{eisLive=false;epill.classList.remove('on');}
+  if(d.listeners!=null)elis.textContent=d.listeners+' 👥';
+  if(d.currentTrack){
+    etrack.textContent=(d.currentTrack.artist?d.currentTrack.artist+' – ':'')+d.currentTrack.title;
+    eduration=d.currentTrack.duration||0;
+    etot.textContent=eduration?efmt(eduration):'–:––';
+    if(d.startTime){eelapsed=Math.floor((Date.now()-d.startTime)/1000);ebar.style.width=eduration?(Math.min(eelapsed/eduration,1)*100)+'%':'0%';}
+  }
+});
+esocket.on('trackStart',t=>{
+  etrack.textContent=(t.artist?t.artist+' – ':'')+t.title;
+  eduration=t.duration||0;eelapsed=0;
+  etot.textContent=eduration?efmt(eduration):'–:––';ebar.style.width='0%';
+  if(etimer)clearInterval(etimer);
+  if(eduration&&!eisLive){etimer=setInterval(()=>{eelapsed++;const p=Math.min(eelapsed/eduration,1);ebar.style.width=(p*100)+'%';eel.textContent=efmt(eelapsed);if(p>=1)clearInterval(etimer);},1000);}
+});
+esocket.on('live:started',i=>{eisLive=true;epill.classList.add('on');epill.querySelector('#epill-txt').textContent='LIVE';etrack.textContent='🔴 '+(i.title||'Live Broadcast');if(etimer){clearInterval(etimer);etimer=null;}ebar.style.width='0%';});
+esocket.on('live:ended',()=>{eisLive=false;epill.classList.remove('on');etrack.textContent=defaultDesc;});
+esocket.on('listenerChange',c=>{elis.textContent=c+' 👥';});
+
+setInterval(()=>{
+  if(eplaying&&!eisLive&&eduration){eelapsed=Math.min(eelapsed+1,eduration);ebar.style.width=(Math.min(eelapsed/eduration,1)*100)+'%';eel.textContent=efmt(eelapsed);}
+},1000);
+</script>
+</body>
+</html>

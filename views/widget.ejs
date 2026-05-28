@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title><%= name %> Widget</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#0e0a0f;color:#f5f0ff;font-family:'Segoe UI',Arial,sans-serif;height:100vh;display:flex;align-items:center;justify-content:center;overflow:hidden;}
+.w{display:flex;align-items:center;gap:14px;background:rgba(20,12,24,0.98);border:1px solid rgba(212,168,67,0.35);border-radius:14px;padding:12px 18px;width:100%;max-width:420px;box-shadow:0 8px 32px rgba(0,0,0,0.7);}
+.logo{width:44px;height:44px;border-radius:10px;background:#fff;overflow:hidden;flex-shrink:0;}
+.logo img{width:100%;height:100%;object-fit:cover;}
+.info{flex:1;min-width:0;}
+.name{font-size:13px;font-weight:700;color:#d4a843;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.track{font-size:11px;color:#c0a8d8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;}
+.btn{width:42px;height:42px;border-radius:50%;border:2px solid #d4a843;background:rgba(212,168,67,0.12);color:#d4a843;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background 0.15s;}
+.btn:hover{background:rgba(212,168,67,0.28);}
+.btn.playing{background:#d4a843;color:#070508;}
+.dot{width:7px;height:7px;border-radius:50%;background:#e03060;animation:pulse 1.4s ease-in-out infinite;flex-shrink:0;display:none;}
+.dot.on{display:block;}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:0.5;transform:scale(0.75);}}
+</style>
+</head>
+<body>
+<div class="w">
+  <div class="logo"><img src="/logo.png" onerror="this.style.display='none'" alt=""></div>
+  <div class="info">
+    <div class="name" id="wname"><%= name %></div>
+    <div class="track" id="wtrack"><%= desc %></div>
+  </div>
+  <div class="dot" id="wdot"></div>
+  <button class="btn" id="wbtn" onclick="toggle()" title="Play / Pause">&#x25B6;</button>
+</div>
+<audio id="wa" preload="none"></audio>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const audio=document.getElementById('wa');
+const btn=document.getElementById('wbtn');
+const dot=document.getElementById('wdot');
+const wtrack=document.getElementById('wtrack');
+const defaultDesc=<%- JSON.stringify(desc).replace(/<\//g,'<\\/') %>;
+let playing=false;
+function toggle(){playing?stop():play();}
+function play(){audio.src='/stream?t='+Date.now();audio.load();audio.play().catch(()=>{});playing=true;btn.textContent='⏸';btn.classList.add('playing');dot.classList.add('on');}
+function stop(){audio.pause();audio.src='';playing=false;btn.textContent='▶';btn.classList.remove('playing');dot.classList.remove('on');}
+const socket=io({transports:['websocket','polling']});
+socket.on('trackStart',t=>{wtrack.textContent=(t.artist?t.artist+' – ':'')+t.title;});
+socket.on('live:started',i=>{wtrack.textContent='🔴 LIVE: '+(i.title||'Live Broadcast');});
+socket.on('live:ended',()=>{wtrack.textContent=defaultDesc;});
+</script>
+</body>
+</html>

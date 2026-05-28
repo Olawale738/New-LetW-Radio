@@ -12,11 +12,32 @@ const { buildDailyQueue, scheduleBreaks, getDateString } = require('../scheduler
 let _io = null;
 function setIo(ioInstance) { _io = ioInstance; }
 
+// ── Admin auth guard ──────────────────────────────────────────────────────────
+const _ADMIN_PW    = process.env.ADMIN_PASSWORD || 'Segun123@';
+const _ADMIN_TOKEN = Buffer.from(_ADMIN_PW).toString('base64');
+
+function requireAdmin(req, res, next) {
+  const cookieHeader = req.headers.cookie || '';
+  const match = cookieHeader.match(/admin_token=([^;]+)/);
+  const fromCookie = match ? (() => { try { return decodeURIComponent(match[1]); } catch { return ''; } })() : '';
+  const fromHeader = req.headers['x-admin-token'] || '';
+  const token = fromCookie || fromHeader;
+  if (token === _ADMIN_TOKEN || token === _ADMIN_PW) return next();
+  res.status(403).json({ error: 'Unauthorized' });
+}
+
 // ── Chat rate-limit: IP -> last message timestamp ────────────────────────────
 const chatRateMap = new Map();
 setInterval(() => {
   const cutoff = Date.now() - 60_000;
   for (const [ip, ts] of chatRateMap) if (ts < cutoff) chatRateMap.delete(ip);
+}, 60_000);
+
+// ── Request rate-limit: IP -> last request timestamp ─────────────────────────
+const requestRateMap = new Map();
+setInterval(() => {
+  const cutoff = Date.now() - 60_000;
+  for (const [ip, ts] of requestRateMap) if (ts < cutoff) requestRateMap.delete(ip);
 }, 60_000);
 
 // ── Ban / content-filter helpers ──────────────────────────────────────────────
@@ -106,7 +127,7 @@ router.get('/settings', (req, res) => {
   res.json(settings);
 });
 
-router.put('/settings', (req, res) => {
+router.put('/settings', requireAdmin, (req, res) => {
   const update = db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`);
   const updateMany = db.transaction((obj) => {
     for (const [key, value] of Object.entries(obj)) {
@@ -135,7 +156,7 @@ router.get('/tracks', (req, res) => {
   res.json(db.prepare(query).all(...params));
 });
 
-router.post('/tracks/upload', upload.array('files'), async (req, res) => {
+router.post('/tracks/upload', requireAdmin, upload.array('files'), async (req, res) => {
   try {
     const tray = req.body.tray || 'music';
     const insertTrack = db.prepare(`
@@ -168,7 +189,7 @@ router.get('/tracks/:id', (req, res) => {
   res.json(track);
 });
 
-router.put('/tracks/:id', (req, res) => {
+router.put('/tracks/:id', requireAdmin, (req, res) => {
   const { title, artist, album, tray, bpm, year, tags } = req.body;
   db.prepare(`
     UPDATE tracks SET title = ?, artist = ?, album = ?, tray = ?, bpm = ?, year = ?, tags = ?
@@ -182,7 +203,7 @@ router.get('/tracks/top-played', (req, res) => {
   res.json(db.prepare(`SELECT id, title, artist, play_count FROM tracks ORDER BY play_count DESC LIMIT ?`).all(limit));
 });
 
-router.delete('/tracks/:id', (req, res) => {
+router.delete('/tracks/:id', requireAdmin, (req, res) => {
   const track = db.prepare(`SELECT * FROM tracks WHERE id = ?`).get(req.params.id);
   if (!track) return res.status(404).json({ error: 'Not found' });
   try { fs.unlinkSync(track.file_path); } catch {}
@@ -230,7 +251,7 @@ router.get('/playlists', (req, res) => {
   res.json(playlists);
 });
 
-router.post('/playlists', (req, res) => {
+router.post('/playlists', requireAdmin, (req, res) => {
   const { name, type, color } = req.body;
   const id = uuidv4();
   db.prepare(`INSERT INTO playlists (id, name, type, color) VALUES (?, ?, ?, ?)`).run(
@@ -253,18 +274,18 @@ router.get('/playlists/:id', (req, res) => {
   res.json(playlist);
 });
 
-router.put('/playlists/:id', (req, res) => {
+router.put('/playlists/:id', requireAdmin, (req, res) => {
   const { name, color } = req.body;
   db.prepare(`UPDATE playlists SET name = ?, color = ? WHERE id = ?`).run(name, color, req.params.id);
   res.json({ success: true });
 });
 
-router.delete('/playlists/:id', (req, res) => {
+router.delete('/playlists/:id', requireAdmin, (req, res) => {
   db.prepare(`DELETE FROM playlists WHERE id = ?`).run(req.params.id);
   res.json({ success: true });
 });
 
-router.post('/playlists/:id/tracks', (req, res) => {
+router.post('/playlists/:id/tracks', requireAdmin, (req, res) => {
   const { track_ids } = req.body;
   const maxPos = db.prepare(`SELECT MAX(position) as m FROM playlist_tracks WHERE playlist_id = ?`).get(req.params.id);
   let pos = (maxPos.m || 0) + 1;
@@ -276,7 +297,7 @@ router.post('/playlists/:id/tracks', (req, res) => {
   res.json({ success: true });
 });
 
-router.delete('/playlists/:id/tracks/:trackId', (req, res) => {
+router.delete('/playlists/:id/tracks/:trackId', requireAdmin, (req, res) => {
   db.prepare(`DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?`).run(req.params.id, req.params.trackId);
   res.json({ success: true });
 });
@@ -286,7 +307,7 @@ router.get('/programs', (req, res) => {
   res.json(db.prepare(`SELECT * FROM programs ORDER BY created_at DESC`).all());
 });
 
-router.post('/programs', (req, res) => {
+router.post('/programs', requireAdmin, (req, res) => {
   const { name, color, description } = req.body;
   const id = uuidv4();
   db.prepare(`INSERT INTO programs (id, name, color, description) VALUES (?, ?, ?, ?)`).run(
@@ -295,14 +316,14 @@ router.post('/programs', (req, res) => {
   res.json({ id, name, color, description });
 });
 
-router.put('/programs/:id', (req, res) => {
+router.put('/programs/:id', requireAdmin, (req, res) => {
   const { name, color, description, slots } = req.body;
   db.prepare(`UPDATE programs SET name = ?, color = ?, description = ?, slots = ? WHERE id = ?`)
     .run(name, color, description, JSON.stringify(slots || []), req.params.id);
   res.json({ success: true });
 });
 
-router.delete('/programs/:id', (req, res) => {
+router.delete('/programs/:id', requireAdmin, (req, res) => {
   db.prepare(`DELETE FROM programs WHERE id = ?`).run(req.params.id);
   res.json({ success: true });
 });
@@ -312,7 +333,7 @@ router.get('/breaks', (req, res) => {
   res.json(db.prepare(`SELECT * FROM breaks ORDER BY broadcast_time`).all());
 });
 
-router.post('/breaks', (req, res) => {
+router.post('/breaks', requireAdmin, (req, res) => {
   const { name, broadcast_time, days, content_type, content_id, can_stop_music, priority, start_date, end_date } = req.body;
   const id = uuidv4();
   db.prepare(`
@@ -324,7 +345,7 @@ router.post('/breaks', (req, res) => {
   res.json({ id });
 });
 
-router.put('/breaks/:id', (req, res) => {
+router.put('/breaks/:id', requireAdmin, (req, res) => {
   const { name, broadcast_time, days, content_type, content_id, can_stop_music, priority, active } = req.body;
   db.prepare(`
     UPDATE breaks SET name = ?, broadcast_time = ?, days = ?, content_type = ?, content_id = ?, 
@@ -335,7 +356,7 @@ router.put('/breaks/:id', (req, res) => {
   res.json({ success: true });
 });
 
-router.delete('/breaks/:id', (req, res) => {
+router.delete('/breaks/:id', requireAdmin, (req, res) => {
   db.prepare(`DELETE FROM breaks WHERE id = ?`).run(req.params.id);
   scheduleBreaks();
   res.json({ success: true });
@@ -346,7 +367,7 @@ router.get('/planning', (req, res) => {
   res.json(db.prepare(`SELECT * FROM planning ORDER BY day_of_week, start_time`).all());
 });
 
-router.post('/planning', (req, res) => {
+router.post('/planning', requireAdmin, (req, res) => {
   const { day_of_week, start_time, end_time, content_type, content_id, content_name, color, play_order, play_at_fixed_time, repeat_weekly } = req.body;
   
   // Validate no overlap.
@@ -371,7 +392,7 @@ router.post('/planning', (req, res) => {
   res.json({ id });
 });
 
-router.put('/planning/:id', (req, res) => {
+router.put('/planning/:id', requireAdmin, (req, res) => {
   const { start_time, end_time, play_order, play_at_fixed_time, content_name, color } = req.body;
   db.prepare(`
     UPDATE planning SET start_time = ?, end_time = ?, play_order = ?, play_at_fixed_time = ?, content_name = ?, color = ?
@@ -380,7 +401,7 @@ router.put('/planning/:id', (req, res) => {
   res.json({ success: true });
 });
 
-router.delete('/planning/:id', (req, res) => {
+router.delete('/planning/:id', requireAdmin, (req, res) => {
   db.prepare(`DELETE FROM planning WHERE id = ?`).run(req.params.id);
   res.json({ success: true });
 });
@@ -398,7 +419,7 @@ router.get('/daily-queue', (req, res) => {
   res.json(rows);
 });
 
-router.post('/daily-queue/reorder', (req, res) => {
+router.post('/daily-queue/reorder', requireAdmin, (req, res) => {
   // body: { date, order: [{id, position}] }
   const { date, order } = req.body;
   if (!Array.isArray(order)) return res.status(400).json({ error: 'order must be an array' });
@@ -410,14 +431,14 @@ router.post('/daily-queue/reorder', (req, res) => {
   res.json({ success: true });
 });
 
-router.post('/daily-queue/generate', (req, res) => {
+router.post('/daily-queue/generate', requireAdmin, (req, res) => {
   const { date } = req.body;
   const targetDate = date || getDateString();
   const count = buildDailyQueue(targetDate);
   res.json({ success: true, date: targetDate, trackCount: count });
 });
 
-router.post('/daily-queue/play', (req, res) => {
+router.post('/daily-queue/play', requireAdmin, (req, res) => {
   const { date } = req.body;
   const targetDate = date || getDateString();
   const rows = db.prepare(`
@@ -458,7 +479,7 @@ router.get('/status', (req, res) => {
 });
 
 // ==================== PLAYER CONTROLS ====================
-router.post('/player/play', (req, res) => {
+router.post('/player/play', requireAdmin, (req, res) => {
   if (!audioEngine.isPlaying) {
     const today = getDateString();
     const tracks = db.prepare(`
@@ -481,12 +502,12 @@ router.post('/player/play', (req, res) => {
   res.json({ success: true });
 });
 
-router.post('/player/stop', (req, res) => {
+router.post('/player/stop', requireAdmin, (req, res) => {
   audioEngine.stop();
   res.json({ success: true });
 });
 
-router.post('/player/skip', (req, res) => {
+router.post('/player/skip', requireAdmin, (req, res) => {
   audioEngine.skip();
   res.json({ success: true });
 });
@@ -517,13 +538,13 @@ router.post('/chat', (req, res) => {
   res.json(inserted);
 });
 
-router.delete('/chat/all', (req, res) => {
+router.delete('/chat/all', requireAdmin, (req, res) => {
   db.prepare(`DELETE FROM chat_messages`).run();
   if (_io) _io.emit('chat:cleared');
   res.json({ success: true });
 });
 
-router.delete('/chat/:id', (req, res) => {
+router.delete('/chat/:id', requireAdmin, (req, res) => {
   const id = parseInt(req.params.id, 10);
   db.prepare(`DELETE FROM chat_messages WHERE id = ?`).run(id);
   if (_io) _io.emit('chat:deleted', { id });
@@ -536,9 +557,12 @@ router.get('/requests', (req, res) => {
 });
 
 router.post('/requests', (req, res) => {
-  const ip = getClientIp(req);
+  const ip  = getClientIp(req);
+  const now = Date.now();
   const { username, request_type, request_text, dedicated_to } = req.body;
   if (isBanned(ip, username)) return res.status(403).json({ error: 'banned', message: 'You have been banned from the community.' });
+  if (now - (requestRateMap.get(ip) || 0) < 5000) return res.status(429).json({ error: 'Rate limit: 1 request per 5 seconds' });
+  requestRateMap.set(ip, now);
   if (!username || !request_text) return res.status(400).json({ error: 'username and request_text are required' });
   if (containsAbuse(username + ' ' + request_text + ' ' + (dedicated_to || ''))) {
     banIp(ip, username, 'Abusive content in request', 'auto');
@@ -552,7 +576,7 @@ router.post('/requests', (req, res) => {
   res.json(inserted);
 });
 
-router.put('/requests/:id', (req, res) => {
+router.put('/requests/:id', requireAdmin, (req, res) => {
   const { status } = req.body;
   if (!['pending','approved','played','rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
   db.prepare(`UPDATE requests SET status = ? WHERE id = ?`).run(status, req.params.id);
@@ -561,30 +585,30 @@ router.put('/requests/:id', (req, res) => {
   res.json({ success: true });
 });
 
-router.delete('/requests/:id', (req, res) => {
+router.delete('/requests/:id', requireAdmin, (req, res) => {
   db.prepare(`DELETE FROM requests WHERE id = ?`).run(req.params.id);
   res.json({ success: true });
 });
 
 // ==================== BAN MANAGEMENT (admin only) ====================
-router.get('/bans', (req, res) => {
+router.get('/bans', requireAdmin, (req, res) => {
   res.json(db.prepare(`SELECT * FROM banned_ips ORDER BY banned_at DESC`).all());
 });
 
-router.post('/bans', (req, res) => {
+router.post('/bans', requireAdmin, (req, res) => {
   const { ip, username, reason } = req.body;
   if (!ip) return res.status(400).json({ error: 'ip required' });
   banIp(ip, username || '', reason || 'Manual ban by admin', 'admin');
   res.json({ success: true });
 });
 
-router.delete('/bans/:id', (req, res) => {
+router.delete('/bans/:id', requireAdmin, (req, res) => {
   db.prepare(`DELETE FROM banned_ips WHERE id = ?`).run(req.params.id);
   res.json({ success: true });
 });
 
 // Ban by username (bans most recent known IP for that username)
-router.post('/bans/by-username', (req, res) => {
+router.post('/bans/by-username', requireAdmin, (req, res) => {
   const { username, reason } = req.body;
   if (!username) return res.status(400).json({ error: 'username required' });
   // Find the last chat message or request from this username to get their IP
@@ -602,7 +626,7 @@ router.get('/ticker', (req, res) => {
   res.json({ text: t ? t.value : '', enabled: e ? e.value === '1' : false });
 });
 
-router.put('/ticker', (req, res) => {
+router.put('/ticker', requireAdmin, (req, res) => {
   const { text, enabled } = req.body;
   db.prepare(`INSERT OR REPLACE INTO settings (key,value) VALUES ('ticker_text',?)`).run(String(text||''));
   db.prepare(`INSERT OR REPLACE INTO settings (key,value) VALUES ('ticker_enabled',?)`).run(enabled ? '1' : '0');
@@ -663,7 +687,7 @@ router.get('/streams/all', (req, res) => {
   res.json(db.prepare(`SELECT * FROM streams ORDER BY sort_order, created_at`).all());
 });
 
-router.post('/streams', (req, res) => {
+router.post('/streams', requireAdmin, (req, res) => {
   const { name, url, description, is_default, sort_order, language, category, image_url, whatsapp } = req.body;
   if (!name || !url) return res.status(400).json({ error: 'name and url are required' });
   const id = uuidv4();
@@ -675,7 +699,7 @@ router.post('/streams', (req, res) => {
   res.json({ id, name, url, description, is_default: !!is_default, sort_order: sort_order||0, active: 1 });
 });
 
-router.put('/streams/:id', (req, res) => {
+router.put('/streams/:id', requireAdmin, (req, res) => {
   const { name, url, description, is_default, sort_order, active, language, category, image_url, whatsapp } = req.body;
   db.prepare(`UPDATE streams SET name=?, url=?, description=?, is_default=?, sort_order=?, active=?, language=?, category=?, image_url=?, whatsapp=? WHERE id=?`)
     .run((name||'').slice(0,80), (url||'').slice(0,300), (description||'').slice(0,200),
@@ -685,7 +709,7 @@ router.put('/streams/:id', (req, res) => {
   res.json({ success: true });
 });
 
-router.delete('/streams/:id', (req, res) => {
+router.delete('/streams/:id', requireAdmin, (req, res) => {
   db.prepare(`DELETE FROM streams WHERE id = ?`).run(req.params.id);
   res.json({ success: true });
 });
@@ -838,7 +862,7 @@ router.get('/sermons/rss', (req, res) => {
 </rss>`);
 });
 
-router.post('/sermons', (req, res) => {
+router.post('/sermons', requireAdmin, (req, res) => {
   const { title, speaker, description, file_path, duration, file_size, tags, recorded_at } = req.body;
   if (!title || !file_path) return res.status(400).json({ error: 'title and file_path required' });
   const id = uuidv4();
@@ -851,7 +875,7 @@ router.post('/sermons', (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-router.put('/sermons/:id', (req, res) => {
+router.put('/sermons/:id', requireAdmin, (req, res) => {
   const { title, speaker, description, tags, active } = req.body;
   try {
     db.prepare(`UPDATE sermons SET title=?, speaker=?, description=?, tags=?, active=? WHERE id=?`)
@@ -861,7 +885,7 @@ router.put('/sermons/:id', (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-router.delete('/sermons/:id', (req, res) => {
+router.delete('/sermons/:id', requireAdmin, (req, res) => {
   try {
     db.prepare(`UPDATE sermons SET active = 0 WHERE id = ?`).run(req.params.id);
     res.json({ success: true });

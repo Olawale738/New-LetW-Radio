@@ -8,8 +8,16 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="<%= settings.radio_name || 'LETW Radio' %>">
   <meta name="description" content="<%= settings.radio_description || 'Light Encounter Tabernacle Worldwide — Listen Live to Gospel Radio' %>">
+  <meta property="og:title" content="<%= settings.radio_name || 'LETW Radio' %> — Listen Live">
+  <meta property="og:description" content="<%= settings.radio_description || 'Live worship, sermons and messages. Stream directly in your browser.' %>">
+  <meta property="og:image" content="/logo.png">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="<%= settings.radio_name || 'LETW Radio' %> — Listen Live">
+  <meta name="twitter:description" content="<%= settings.radio_description || 'Live worship, sermons and messages.' %>">
+  <meta name="twitter:image" content="/logo.png">
   <title><%= settings.radio_name || 'LETW Radio' %> — Listen Live</title>
-  <script>window.__S=<%- JSON.stringify(settings) %>;</script>
+  <script>window.__S=<%- JSON.stringify(settings).replace(/<\//g, '<\\/') %>;</script>
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" href="/logo.png" type="image/png">
   <link rel="apple-touch-icon" href="/logo.png">
