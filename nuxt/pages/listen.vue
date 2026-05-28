@@ -30,7 +30,7 @@
           <div class="station-name">{{ radio.settings.radio_name || 'LETW Radio' }}</div>
           <div class="live-pill" :class="{ on: radio.isLive, connecting: liveConnecting }">
             <span class="rdot"></span>
-            {{ liveConnecting ? 'CONNECTING…' : radio.isLive ? 'LIVE' : 'ON AIR' }}
+            {{ liveConnecting ? (liveReconnectCount > 0 ? 'RECONNECTING…' : 'JOINING LIVE…') : radio.isLive ? 'LIVE' : 'ON AIR' }}
           </div>
         </div>
       </div>
@@ -239,7 +239,7 @@ let vizRaf: number | null = null
 // ── Live WebSocket + MSE state ─────────────────────────────────────────────
 // Uses the binary /live-ws protocol (liveWs.js) for reliable live delivery.
 // Falls back to HTTP /live-stream if MSE is unsupported.
-const T_HELLO = 0x01, T_INIT = 0x02, T_AUDIO = 0x03, T_ENDED = 0x04
+const T_HELLO = 0x01, T_INIT = 0x02, T_AUDIO = 0x03, T_ENDED = 0x04, T_PONG = 0x06
 const LIVE_HDR = 13          // frame header size in bytes
 
 let liveWs: WebSocket | null         = null
@@ -254,9 +254,12 @@ let liveRetryT:    ReturnType<typeof setTimeout>  | null = null
 let livePingT:     ReturnType<typeof setInterval> | null = null
 let liveWatchdogT: ReturnType<typeof setInterval> | null = null
 let liveLastAudio  = 0              // epoch ms of last T_AUDIO frame received
+let livePingTime   = 0              // timestamp of last outgoing PING frame
+let liveReconnecting = false        // guard against concurrent reconnect storms
 let livePendingMime: string | null   = null
 let livePendingInit: ArrayBuffer | null = null
-const liveConnecting = ref(false)
+const liveConnecting     = ref(false)
+const liveReconnectCount = ref(0)
 
 function liveParseFrame(buf: ArrayBuffer) {
   if (buf.byteLength < 1) return null
@@ -328,13 +331,17 @@ function liveStartWatchdog() {
 
 function liveConnect() {
   if (!liveWant || !audioEl.value) return
+  if (liveReconnecting) return   // prevent concurrent reconnect storms
 
-  // Tear down any existing connection cleanly
-  if (liveWs) { try { liveWs.close() } catch {}; liveWs = null }
+  liveReconnecting  = true
+  liveConnecting.value = true
+
+  // Tear down any existing connection — null onclose FIRST so it doesn't spawn
+  // another reconnect when we call close() below (that was the cascade root cause).
+  if (liveWs) { liveWs.onclose = null; try { liveWs.close() } catch {}; liveWs = null }
   if (liveUrl) { URL.revokeObjectURL(liveUrl); liveUrl = null }
   liveSb = null; liveSbQ = []; liveSbBusy = false
   livePendingMime = null; livePendingInit = null
-  liveConnecting.value = true
 
   // Fresh MediaSource for this connection attempt
   liveMs = new MediaSource()
@@ -355,7 +362,8 @@ function liveConnect() {
   liveWs.binaryType = 'arraybuffer'
 
   liveWs.onopen = () => {
-    liveDelay = 1000           // reset backoff on success
+    liveReconnecting = false    // allow future reconnect triggers to proceed
+    liveDelay = 1000            // reset backoff on success
     liveConnecting.value = false
     // Tell server we're actively listening (for listener-count tracking)
     radio.getSocket()?.emit('live:join')
@@ -364,6 +372,7 @@ function liveConnect() {
       if (liveWs?.readyState === WebSocket.OPEN) {
         const b = new ArrayBuffer(LIVE_HDR)
         new DataView(b).setUint8(0, 0x05)   // TYPE_PING
+        livePingTime = Date.now()
         liveWs.send(b)
       }
     }, 15000)  // ping every 15 s to keep the connection through proxies/firewalls
@@ -404,6 +413,18 @@ function liveConnect() {
       return
     }
 
+    if (frm.type === T_PONG) {
+      // Clamp RTT to valid range — prevents bogus latency values (server epoch leak)
+      if (livePingTime > 0) {
+        const rtt = Date.now() - livePingTime
+        if (rtt < 0 || rtt > 30000) {
+          console.warn('[Live] Ignoring out-of-range PONG RTT:', rtt, 'ms')
+        }
+        livePingTime = 0
+      }
+      return
+    }
+
     if (frm.type === T_ENDED) {
       // Broadcast ended — server sent the close signal
       liveStopAndSwitch()
@@ -411,10 +432,12 @@ function liveConnect() {
   }
 
   liveWs.onclose = () => {
+    liveReconnecting = false    // allow the next scheduled reconnect to proceed
     liveConnecting.value = false
     if (livePingT) { clearInterval(livePingT); livePingT = null }
     if (!liveWant) return
     // Reconnect with exponential backoff (max 16 s)
+    liveReconnectCount.value++
     liveRetryT = setTimeout(() => {
       liveDelay = Math.min(liveDelay * 2, 16000)
       liveConnect()
@@ -424,7 +447,8 @@ function liveConnect() {
 }
 
 function liveDisconnect() {
-  liveWant = false
+  liveWant        = false
+  liveReconnecting = false
   if (liveRetryT)    { clearTimeout(liveRetryT);    liveRetryT    = null }
   if (livePingT)     { clearInterval(livePingT);    livePingT     = null }
   if (liveWatchdogT) { clearInterval(liveWatchdogT); liveWatchdogT = null }
@@ -444,7 +468,9 @@ function liveDisconnect() {
     liveMs = null
   }
   if (liveUrl) { URL.revokeObjectURL(liveUrl); liveUrl = null }
-  liveConnecting.value = false
+  liveConnecting.value     = false
+  liveReconnectCount.value = 0
+  liveLastAudio            = 0
 }
 
 function liveStopAndSwitch() {
@@ -576,7 +602,7 @@ function onAudioError() {
     setTimeout(() => {
       if (!radio.isPlaying || !radio.isLive) return
       liveDelay = 1000
-      if (liveMseSupported()) liveConnect() else liveHttpFallback()
+      liveMseSupported() ? liveConnect() : liveHttpFallback()
     }, 1500)
   } else {
     setTimeout(() => {
@@ -590,15 +616,19 @@ function onAudioError() {
 let _stallT: ReturnType<typeof setTimeout> | null = null
 function onAudioStall() {
   if (!radio.isPlaying || !radio.isLive) return
-  // Debounce — brief stalls are normal during buffering; reconnect only if it persists
+  // Don't reconnect before we've received any audio — the watchdog handles that.
+  // The `stalled` event fires immediately on a fresh MSE src if the buffer is empty,
+  // which would otherwise cause an instant reconnect cascade on every connect attempt.
+  if (liveLastAudio === 0) return
+  // Debounce — brief stalls are normal during MSE buffering; only reconnect if it persists
   if (_stallT) return
   _stallT = setTimeout(() => {
     _stallT = null
     if (!radio.isPlaying || !radio.isLive) return
     console.warn('[Live] Audio stalled — reconnecting WS')
     liveDelay = 1000
-    if (liveMseSupported()) liveConnect() else liveHttpFallback()
-  }, 4000)
+    liveMseSupported() ? liveConnect() : liveHttpFallback()
+  }, 8000)  // 8 s — generous enough to survive normal rebuffering pauses
 }
 
 // ── MediaSession API ───────────────────────────────────────────────────────
@@ -624,8 +654,7 @@ watch(() => radio.isLive, (live) => {
   if (live) {
     // Go live: connect WS+MSE (or HTTP fallback)
     liveWant = true
-    if (liveMseSupported()) liveConnect()
-    else liveHttpFallback()
+    liveMseSupported() ? liveConnect() : liveHttpFallback()
     if (!radio.isPlaying) { radio.setPlaying(true); initAudioCtx() }
   } else {
     // Broadcast ended: disconnect and resume regular stream
@@ -803,9 +832,11 @@ onMounted(async () => {
 
   if (audioEl.value) {
     audioEl.value.addEventListener('error', onAudioError)
-    // Stall/waiting while live → reconnect the WebSocket (not just retry the URL)
+    // `stalled` while live → reconnect the WebSocket.
+    // Note: `waiting` is intentionally NOT listened to here — it fires immediately
+    // every time audio.src is reassigned with an empty MSE buffer, which would
+    // cause an instant reconnect cascade before any audio has arrived.
     audioEl.value.addEventListener('stalled', onAudioStall)
-    audioEl.value.addEventListener('waiting', onAudioStall)
   }
   window.addEventListener('keydown', onKeyDown)
 
@@ -834,7 +865,6 @@ onUnmounted(() => {
   if (audioEl.value) {
     audioEl.value.removeEventListener('error', onAudioError)
     audioEl.value.removeEventListener('stalled', onAudioStall)
-    audioEl.value.removeEventListener('waiting', onAudioStall)
   }
   const socket = radio.getSocket()
   if (socket) socket.off('flash:alert')
