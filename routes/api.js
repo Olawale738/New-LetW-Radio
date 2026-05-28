@@ -13,13 +13,59 @@ let _io = null;
 function setIo(ioInstance) { _io = ioInstance; }
 
 // ── Chat rate-limit: IP -> last message timestamp ────────────────────────────
-// Periodically prune stale entries so the Map doesn't grow unbounded on
-// long-running servers with many unique IPs.
 const chatRateMap = new Map();
 setInterval(() => {
-  const cutoff = Date.now() - 60_000; // drop entries older than 60 s
+  const cutoff = Date.now() - 60_000;
   for (const [ip, ts] of chatRateMap) if (ts < cutoff) chatRateMap.delete(ip);
 }, 60_000);
+
+// ── Ban / content-filter helpers ──────────────────────────────────────────────
+function getClientIp(req) {
+  return ((req.headers['x-forwarded-for'] || '') || req.ip || 'unknown')
+    .split(',')[0].trim();
+}
+
+function isBanned(ip, username) {
+  try {
+    if (db.prepare(`SELECT id FROM banned_ips WHERE ip = ?`).get(ip)) return true;
+    if (username) {
+      const key = 'username:' + username.trim().toLowerCase();
+      if (db.prepare(`SELECT id FROM banned_ips WHERE ip = ?`).get(key)) return true;
+    }
+    return false;
+  } catch { return false; }
+}
+
+function getBannedWords() {
+  try {
+    const row = db.prepare(`SELECT value FROM settings WHERE key = 'banned_words'`).get();
+    if (!row || !row.value.trim()) return [];
+    return row.value.split(',').map(w => w.trim().toLowerCase()).filter(Boolean);
+  } catch { return []; }
+}
+
+function containsAbuse(text) {
+  try {
+    const row = db.prepare(`SELECT value FROM settings WHERE key = 'chat_ban_enabled'`).get();
+    if (!row || row.value !== '1') return false;
+  } catch {}
+  const words = getBannedWords();
+  if (!words.length) return false;
+  const lower = (text || '').toLowerCase();
+  return words.some(w => {
+    try {
+      const safe = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp('\\b' + safe + '\\b', 'i').test(lower);
+    } catch { return lower.includes(w); }
+  });
+}
+
+function banIp(ip, username, reason, bannedBy) {
+  try {
+    db.prepare(`INSERT OR IGNORE INTO banned_ips (ip, username, reason, banned_by) VALUES (?, ?, ?, ?)`)
+      .run(ip, username || '', reason || 'Abusive content', bannedBy || 'auto');
+  } catch {}
+}
 
 // --- MULTER SETUP ---
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
@@ -451,12 +497,19 @@ router.get('/chat', (req, res) => {
 });
 
 router.post('/chat', (req, res) => {
-  const ip = req.ip || req.connection.remoteAddress || 'unknown';
+  const ip  = getClientIp(req);
   const now = Date.now();
+  const { username: _uCheck } = req.body;
+  if (isBanned(ip, _uCheck)) return res.status(403).json({ error: 'banned', message: 'You have been banned from the community.' });
   if (now - (chatRateMap.get(ip) || 0) < 2000) return res.status(429).json({ error: 'Rate limit: 1 message per 2 seconds' });
   chatRateMap.set(ip, now);
   const { username, message, type, color } = req.body;
   if (!username || !message) return res.status(400).json({ error: 'username and message are required' });
+  if (containsAbuse(username + ' ' + message)) {
+    banIp(ip, username, 'Abusive content in chat', 'auto');
+    if (_io) _io.emit('ban:new', { ip, username, reason: 'Abusive content in chat' });
+    return res.status(403).json({ error: 'banned', message: 'Your message contains prohibited content. You have been banned.' });
+  }
   db.prepare(`INSERT INTO chat_messages (username, message, type, color) VALUES (?, ?, ?, ?)`)
     .run(username.slice(0,50), message.slice(0,500), type || 'message', color || '#d4a843');
   const inserted = db.prepare(`SELECT * FROM chat_messages ORDER BY id DESC LIMIT 1`).get();
@@ -483,8 +536,15 @@ router.get('/requests', (req, res) => {
 });
 
 router.post('/requests', (req, res) => {
+  const ip = getClientIp(req);
   const { username, request_type, request_text, dedicated_to } = req.body;
+  if (isBanned(ip, username)) return res.status(403).json({ error: 'banned', message: 'You have been banned from the community.' });
   if (!username || !request_text) return res.status(400).json({ error: 'username and request_text are required' });
+  if (containsAbuse(username + ' ' + request_text + ' ' + (dedicated_to || ''))) {
+    banIp(ip, username, 'Abusive content in request', 'auto');
+    if (_io) _io.emit('ban:new', { ip, username, reason: 'Abusive content in request' });
+    return res.status(403).json({ error: 'banned', message: 'Your request contains prohibited content. You have been banned.' });
+  }
   db.prepare(`INSERT INTO requests (username, request_type, request_text, dedicated_to) VALUES (?, ?, ?, ?)`)
     .run(username.slice(0,50), (request_type||'song').slice(0,20), request_text.slice(0,1000), (dedicated_to||'').slice(0,100));
   const inserted = db.prepare(`SELECT * FROM requests ORDER BY id DESC LIMIT 1`).get();
@@ -503,6 +563,35 @@ router.put('/requests/:id', (req, res) => {
 
 router.delete('/requests/:id', (req, res) => {
   db.prepare(`DELETE FROM requests WHERE id = ?`).run(req.params.id);
+  res.json({ success: true });
+});
+
+// ==================== BAN MANAGEMENT (admin only) ====================
+router.get('/bans', (req, res) => {
+  res.json(db.prepare(`SELECT * FROM banned_ips ORDER BY banned_at DESC`).all());
+});
+
+router.post('/bans', (req, res) => {
+  const { ip, username, reason } = req.body;
+  if (!ip) return res.status(400).json({ error: 'ip required' });
+  banIp(ip, username || '', reason || 'Manual ban by admin', 'admin');
+  res.json({ success: true });
+});
+
+router.delete('/bans/:id', (req, res) => {
+  db.prepare(`DELETE FROM banned_ips WHERE id = ?`).run(req.params.id);
+  res.json({ success: true });
+});
+
+// Ban by username (bans most recent known IP for that username)
+router.post('/bans/by-username', (req, res) => {
+  const { username, reason } = req.body;
+  if (!username) return res.status(400).json({ error: 'username required' });
+  // Find the last chat message or request from this username to get their IP
+  // We store IP in banned_ips; find if they already have a record (re-ban or fresh)
+  // Since we don't store IP on messages, ban with ip='username:X' as a soft block
+  // Primarily: ban by username marker so future messages from same name are blocked
+  banIp('username:' + username.toLowerCase(), username, reason || 'Banned by admin', 'admin');
   res.json({ success: true });
 });
 

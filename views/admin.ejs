@@ -1542,6 +1542,25 @@
         </div>
       </div>
 
+      <!-- Banned Users Card -->
+      <div class="card" style="margin-bottom:20px;">
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+          <div class="card-title">🚫 Banned Users</div>
+          <button class="btn btn-secondary" style="padding:4px 12px;font-size:11px;" onclick="loadBannedUsers()">Refresh</button>
+        </div>
+        <div style="padding:10px 16px 8px;border-bottom:1px solid rgba(212,168,67,0.1);">
+          <div style="font-size:11px;color:var(--text3);margin-bottom:8px;">Users are auto-banned when they send abusive words. You can also manually ban or unban any user.</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <input type="text" id="manual-ban-username" class="form-control" placeholder="Username to ban" style="width:160px;padding:5px 10px;font-size:12px;">
+            <input type="text" id="manual-ban-reason" class="form-control" placeholder="Reason (optional)" style="width:180px;padding:5px 10px;font-size:12px;">
+            <button class="btn btn-secondary" style="padding:5px 14px;font-size:12px;color:#e05070;border-color:rgba(224,80,112,0.4);" onclick="manualBan()">Ban User</button>
+          </div>
+        </div>
+        <div id="banned-users-list" style="max-height:280px;overflow-y:auto;scrollbar-width:thin;">
+          <div style="padding:20px;text-align:center;font-size:13px;color:var(--text3);">Loading…</div>
+        </div>
+      </div>
+
       <!-- Chat Moderation Card -->
       <div class="card" style="margin-bottom:20px;">
         <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
@@ -1755,6 +1774,25 @@
             <input class="form-control" id="set-ga-id" placeholder="e.g. G-XXXXXXXXXX">
           </div>
           <button class="btn btn-primary" onclick="saveSettings()">Save Changes</button>
+        </div>
+
+        <!-- Chat Moderation Settings -->
+        <div class="card">
+          <div class="card-header"><div class="card-title">🚫 Chat Moderation</div></div>
+          <div style="padding:16px;">
+            <div class="form-group">
+              <label style="font-size:13px;color:var(--text2);display:flex;align-items:center;gap:8px;cursor:pointer;">
+                <input type="checkbox" id="set-ban-enabled" style="accent-color:var(--gold);width:15px;height:15px;">
+                Auto-ban users who send abusive words
+              </label>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Banned Words <span style="color:var(--text3);font-weight:400;">(comma-separated, case-insensitive)</span></label>
+              <textarea class="form-control" id="set-banned-words" rows="3" placeholder="e.g. badword1, badword2" style="resize:vertical;font-family:var(--mono);font-size:12px;"></textarea>
+              <div style="font-size:11px;color:var(--text3);margin-top:4px;">Users who type these words will be automatically banned. Add your own custom words.</div>
+            </div>
+            <button class="btn btn-primary" onclick="saveSettings()">Save Changes</button>
+          </div>
         </div>
 
         <!-- YouTube Link -->
@@ -2997,6 +3035,11 @@ async function loadSettings() {
   // YouTube
   const ytEl = document.getElementById('set-social-youtube');
   if (ytEl) ytEl.value = s.social_youtube || 'https://www.youtube.com/watch?v=8wTuN77RZJ4';
+  // Moderation
+  const banEnEl = document.getElementById('set-ban-enabled');
+  const banWdEl = document.getElementById('set-banned-words');
+  if (banEnEl) banEnEl.checked = s.chat_ban_enabled !== '0';
+  if (banWdEl) banWdEl.value   = s.banned_words || '';
 }
 
 async function saveSettings() {
@@ -3037,6 +3080,11 @@ async function saveSettings() {
   // YouTube
   const ytEl = document.getElementById('set-social-youtube');
   if (ytEl) data.social_youtube = ytEl.value.trim();
+  // Moderation
+  const banEnEl  = document.getElementById('set-ban-enabled');
+  const banWdEl  = document.getElementById('set-banned-words');
+  if (banEnEl) data.chat_ban_enabled = banEnEl.checked ? '1' : '0';
+  if (banWdEl) data.banned_words     = banWdEl.value.trim();
   await api('PUT', '/settings', data);
   toast('Settings saved', 'success');
   document.getElementById('sidebar-radio-name').textContent = data.radio_name;
@@ -3901,6 +3949,11 @@ socket.on('request:new', () => {
   if (badge && state.currentPage !== 'community') badge.style.display = 'inline';
 });
 
+socket.on('ban:new', () => {
+  // Refresh banned list if community page is open
+  if (state.currentPage === 'community') loadBannedUsers();
+});
+
 socket.on('live:ended', () => {
   logActivity('⏹ Live broadcast ended');
 });
@@ -4041,7 +4094,76 @@ const escHtml = esc;
 
 // ── Community page loader ─────────────────────────────────────────────────────
 async function loadCommunity() {
-  await Promise.all([loadTickerAdmin(), loadChatMod(), loadRequestsAdmin(), loadPushCount()]);
+  await Promise.all([loadTickerAdmin(), loadChatMod(), loadRequestsAdmin(), loadPushCount(), loadBannedUsers()]);
+}
+
+// ── Banned Users ──────────────────────────────────────────────────────────────
+async function loadBannedUsers() {
+  const container = document.getElementById('banned-users-list');
+  if (!container) return;
+  try {
+    const res   = await apiFetch('/api/bans');
+    const bans  = await res.json();
+    if (!bans.length) {
+      container.innerHTML = '<div style="padding:16px;text-align:center;font-size:12px;color:var(--text3);">No banned users. ✓</div>';
+      return;
+    }
+    container.innerHTML = '';
+    bans.forEach(ban => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid rgba(224,48,96,0.08);';
+      const d    = ban.banned_at ? new Date(ban.banned_at).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
+      const isUsername = ban.ip && ban.ip.startsWith('username:');
+      const ipLabel    = isUsername ? '(by username)' : ban.ip;
+      row.innerHTML =
+        '<div style="flex:1;min-width:0;">' +
+          '<div style="font-size:12px;font-weight:700;color:#e05070;">' + escHtml(ban.username || '—') + '</div>' +
+          '<div style="font-size:10px;color:var(--text3);margin-top:2px;">' + escHtml(ipLabel) + ' · ' + escHtml(ban.reason || '') + '</div>' +
+          '<div style="font-size:9px;color:rgba(192,168,216,0.35);margin-top:1px;">' + d + ' · by ' + escHtml(ban.banned_by || 'auto') + '</div>' +
+        '</div>' +
+        '<button onclick="unbanUser(' + ban.id + ', this)" style="background:rgba(76,175,130,0.1);border:1px solid rgba(76,175,130,0.3);color:#4caf82;border-radius:6px;padding:3px 10px;font-size:10px;cursor:pointer;font-family:inherit;flex-shrink:0;" onmouseenter="this.style.background=\'rgba(76,175,130,0.2)\'" onmouseleave="this.style.background=\'rgba(76,175,130,0.1)\'">Unban</button>';
+      container.appendChild(row);
+    });
+  } catch(e) {
+    if (container) container.innerHTML = '<div style="padding:16px;text-align:center;font-size:12px;color:var(--text3);">Failed to load bans.</div>';
+  }
+}
+
+async function unbanUser(id, btn) {
+  try {
+    await apiFetch('/api/bans/' + id, { method: 'DELETE' });
+    const row = btn && btn.closest('[style*="border-bottom"]');
+    if (row) row.remove();
+    const container = document.getElementById('banned-users-list');
+    if (container && !container.children.length) {
+      container.innerHTML = '<div style="padding:16px;text-align:center;font-size:12px;color:var(--text3);">No banned users. ✓</div>';
+    }
+  } catch(e) { alert('Failed to unban: ' + e.message); }
+}
+
+async function banFromChat(username) {
+  if (!username) return;
+  if (!confirm('Ban user "' + username + '"? They will not be able to send messages or requests.')) return;
+  try {
+    await apiFetch('/api/bans/by-username', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, reason: 'Banned by admin from chat' }),
+    });
+    toast('User "' + username + '" banned', 'success');
+    await loadBannedUsers();
+  } catch(e) { alert('Failed to ban user: ' + e.message); }
+}
+
+async function manualBan() {
+  const username = (document.getElementById('manual-ban-username') || {}).value?.trim();
+  const reason   = (document.getElementById('manual-ban-reason')   || {}).value?.trim() || 'Manual ban by admin';
+  if (!username) { alert('Enter a username to ban.'); return; }
+  await banFromChat(username);
+  const inp = document.getElementById('manual-ban-username');
+  const rInp = document.getElementById('manual-ban-reason');
+  if (inp) inp.value = '';
+  if (rInp) rInp.value = '';
 }
 
 // ── Ticker ────────────────────────────────────────────────────────────────────
@@ -4108,7 +4230,10 @@ async function loadChatMod() {
           '</div>' +
           '<div style="font-size:12px;color:var(--text3);word-break:break-word;">' + escHtml(msg.message) + '</div>' +
         '</div>' +
-        '<button onclick="deleteChat(' + msg.id + ')" style="flex-shrink:0;background:rgba(224,48,96,0.1);border:1px solid rgba(224,48,96,0.3);color:#e03060;border-radius:6px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:inherit;" onmouseenter="this.style.background=\'rgba(224,48,96,0.2)\'" onmouseleave="this.style.background=\'rgba(224,48,96,0.1)\'">Delete</button>';
+        '<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;">' +
+          '<button onclick="deleteChat(' + msg.id + ')" style="background:rgba(224,48,96,0.1);border:1px solid rgba(224,48,96,0.3);color:#e03060;border-radius:6px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:inherit;" onmouseenter="this.style.background=\'rgba(224,48,96,0.2)\'" onmouseleave="this.style.background=\'rgba(224,48,96,0.1)\'">Delete</button>' +
+          '<button onclick="banFromChat(\'' + escHtml(msg.username).replace(/'/g, "\\'") + '\')" style="background:rgba(150,30,50,0.12);border:1px solid rgba(180,40,60,0.35);color:#c05070;border-radius:6px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:inherit;" onmouseenter="this.style.background=\'rgba(150,30,50,0.22)\'" onmouseleave="this.style.background=\'rgba(150,30,50,0.12)\'">🚫 Ban</button>' +
+        '</div>';
       container.appendChild(row);
     });
   } catch(e) {

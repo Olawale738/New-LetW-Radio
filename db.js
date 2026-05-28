@@ -114,6 +114,14 @@ function initSchema(sqlDb) {
       active INTEGER DEFAULT 1,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS banned_ips (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ip TEXT NOT NULL,
+      username TEXT DEFAULT '',
+      reason TEXT DEFAULT 'Abusive content',
+      banned_by TEXT DEFAULT 'auto',
+      banned_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   // Migrations for existing databases
@@ -186,6 +194,9 @@ function initSchema(sqlDb) {
     // Google Analytics (DCLM footer.php style — paste your GA4 measurement ID or UA-XXXXXX)
     ga_id: '',
     ga_enabled: '0',
+    // Chat / request moderation
+    chat_ban_enabled: '1',
+    banned_words: 'fuck,shit,bitch,cunt,nigger,nigga,bastard,whore,slut,cock,dick,pussy,faggot,retard,asshole,motherfucker,bullshit',
   };
   for (const [k, v] of Object.entries(defaults)) {
     sqlDb.run(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`, [k, v]);

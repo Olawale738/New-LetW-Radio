@@ -4551,11 +4551,21 @@ async function sendChat() {
   const color    = userColor(username);
   input.value    = '';
   try {
-    await fetch('/api/chat', {
+    const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, message, color }),
     });
+    if (res.status === 403) {
+      const data = await res.json().catch(() => ({}));
+      input.value = message;
+      showFlashAlert(data.message || 'You have been banned from the community.', '#e03060');
+      // Lock the chat input to make the ban visible
+      input.disabled = true;
+      input.placeholder = 'You are banned from this chat.';
+      const sendBtn = document.querySelector('.send-btn');
+      if (sendBtn) sendBtn.disabled = true;
+    }
   } catch(e) {
     input.value = message;
   }
@@ -4702,6 +4712,11 @@ async function submitRequest() {
         dedicated_to: dedicated,
       }),
     });
+    if (res.status === 403) {
+      const data = await res.json().catch(() => ({}));
+      showFlashAlert(data.message || 'You have been banned from the community.', '#e03060');
+      return;
+    }
     if (res.ok) {
       document.getElementById('req-text').value      = '';
       document.getElementById('req-dedicated').value = '';
