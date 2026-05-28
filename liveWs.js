@@ -154,6 +154,20 @@ class LiveWsServer {
     }
   }
 
+  /**
+   * Mark the server as live without an init segment.
+   * Used for formats that have no discrete init chunk (e.g. MP3, AAC-ADTS)
+   * so that injectChunk(buf, false) broadcasts immediately instead of being
+   * silently discarded because _isLive is still false.
+   */
+  setLive() {
+    if (!this._isLive) {
+      this._isLive     = true;
+      this._initFrame  = null;
+      this._ringBuffer = [];
+    }
+  }
+
   /** Signal end of broadcast to all binary-WS listeners. */
   injectEnded() {
     this._isLive     = false;

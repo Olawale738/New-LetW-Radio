@@ -11,7 +11,8 @@ const audioEngine = require('./audioEngine');
 const { startScheduler, getDateString } = require('./scheduler');
 const apiRoutes = require('./routes/api');
 const webpush = require('web-push');
-const { liveWs } = require('./liveWs');
+const { liveWs }    = require('./liveWs');
+const icecastIngest = require('./icecastIngest');
 
 const app = express();
 const server = http.createServer(app);
@@ -79,6 +80,11 @@ app.set('views', path.join(__dirname, 'views'));
 
 // ── Core middleware ───────────────────────────────────────────────────────────
 app.use(cors());
+// ── Icecast SOURCE/PUT ingest — must be before body parsers ──────────────────
+// Intercepts SOURCE /live and PUT /live before express.json() can buffer the
+// audio stream.  Auth and mount path are configured via env vars.
+app.use(icecastIngest.middleware());
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -682,6 +688,51 @@ db.init().then(() => {
   };
   liveWs.attach(server, SESSION_TOKEN);
 
+  // ── Icecast ingest callbacks ───────────────────────────────────────────────
+  // Reject new Icecast connections while browser-mic broadcast is already active.
+  icecastIngest.setBusyCheck(() => (audioEngine.isLive && !icecastIngest.isActive) ? 'Broadcast already active from another source' : '');
+
+  let _iceMimeType = '';
+
+  icecastIngest.on('start', (mimeType, title, artist) => {
+    _iceMimeType = mimeType;
+    console.log(`[IcecastIngest] Starting broadcast: "${title}" [${mimeType}]`);
+    audioEngine.startLive(title, artist, mimeType);
+
+    // For formats without a WebM/OGG init segment (e.g. MP3, AAC-ADTS), mark
+    // liveWs as live immediately so the first injected chunk is broadcast.
+    const needsInitSegment = mimeType.includes('webm') || mimeType.includes('ogg');
+    if (!needsInitSegment) liveWs.setLive();
+  });
+
+  icecastIngest.on('chunk', (buf, isFirst) => {
+    if (!audioEngine.isLive) return;
+    _liveAdminLastPing = Date.now();   // feed the heartbeat watchdog
+    _liveBytesSent    += buf.length;
+
+    audioEngine.broadcastLive(buf);   // HTTP /live-stream clients
+
+    // For WebM/OGG the first chunk is the init segment; for other formats all
+    // chunks are standalone so isInit is always false.
+    const needsInitSegment = _iceMimeType.includes('webm') || _iceMimeType.includes('ogg');
+    liveWs.injectChunk(buf, needsInitSegment && isFirst);
+  });
+
+  icecastIngest.on('stop', () => {
+    if (!audioEngine.isLive) return;
+    console.log('[IcecastIngest] Broadcast stopped by encoder disconnect');
+    audioEngine.stopLive();
+    io.emit('live:ended');
+    io.emit('status', audioEngine.getStatus());
+    _liveRingBuffer    = [];
+    _liveBytesSent     = 0;
+    _liveListeners     = 0;
+    _liveAdminLastPing = 0;
+    if (_liveHeartbeatTimer) { clearInterval(_liveHeartbeatTimer); _liveHeartbeatTimer = null; }
+    liveWs.injectEnded();
+    _iceMimeType = '';
+  });
+
   server.listen(PORT, () => {
     console.log(`\n🎙️  LETW Radio is running!\n`);
     console.log(`📻  Stream URL  : http://localhost:${PORT}/stream`);
@@ -690,7 +741,8 @@ db.init().then(() => {
     console.log(`📋  PLS playlist: http://localhost:${PORT}/stream.pls`);
     console.log(`📋  M3U playlist: http://localhost:${PORT}/stream.m3u`);
     console.log(`📊  Admin panel : http://localhost:${PORT}`);
-    console.log(`⚡  Binary WS   : ws://localhost:${PORT}/live-ws\n`);
+    console.log(`⚡  Binary WS   : ws://localhost:${PORT}/live-ws`);
+    console.log(`🎙️  Icecast in  : SOURCE http://source:<pass>@localhost:${PORT}${icecastIngest.mountPath}\n`);
   });
   startScheduler(io);
 
