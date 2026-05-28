@@ -27,16 +27,14 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Segun123@';
 
-// Vue 3 SPA build output (cd frontend && npm run build → writes to ../frontend-dist)
-const SPA_DIST  = path.join(__dirname, 'frontend-dist');
-const SPA_INDEX = path.join(SPA_DIST, 'index.html');
-const SPA_BUILT = fs.existsSync(SPA_INDEX);
-
-// Serve SPA static assets — hashed chunks get long cache, root files (manifest.json etc) get no-cache
-if (SPA_BUILT) {
-  app.use('/assets', express.static(path.join(SPA_DIST, 'assets'), { maxAge: '1y', immutable: true }));
-  // Serve manifest.json and other root-level SPA assets (logo copy, etc.) without caching
-  app.use(express.static(SPA_DIST, { maxAge: 0, index: false }));
+// ── Nuxt 3 SSR — load handler from built output ───────────────────────────
+const NUXT_HANDLER_PATH = path.join(__dirname, 'nuxt/.output/server/index.mjs');
+let nuxtHandler = null;
+if (fs.existsSync(NUXT_HANDLER_PATH)) {
+  import(NUXT_HANDLER_PATH).then(m => {
+    nuxtHandler = m.handler || m.default;
+    console.log('[Nuxt SSR] ✓ Handler loaded');
+  }).catch(e => console.error('[Nuxt SSR] Failed to load handler:', e.message));
 }
 
 // Warn operators who haven't set a custom password via environment variable.
@@ -138,30 +136,10 @@ function noCache(res) {
 // ─────────────────────────────────────────────────────────────────────────────
 // NOTE: loginPage() function was removed — login is now rendered via views/login.ejs
 
-// Helper: serve SPA or fall back to EJS
-function serveSPA(res) {
-  if (SPA_BUILT) return res.sendFile(SPA_INDEX);
-  return null; // caller handles fallback
-}
-
-// GET / — SPA (admin dashboard) or EJS fallback
-app.get('/', (req, res) => {
+// GET /admin-login — Nuxt handles; EJS fallback when Nuxt not built
+app.get('/admin-login', (req, res, next) => {
+  if (nuxtHandler) return next(); // Let Nuxt catch-all handle it
   noCache(res);
-  if (SPA_BUILT) return res.sendFile(SPA_INDEX);
-  if (isAdmin(req)) {
-    res.render('admin', { settings: getSettings() });
-  } else {
-    res.render('login', { error: null, settings: getSettings() });
-  }
-});
-
-// GET /admin — alias for SPA root
-app.get('/admin', (req, res) => { noCache(res); if (SPA_BUILT) return res.sendFile(SPA_INDEX); res.redirect('/'); });
-
-// GET /admin-login — SPA handles the login UI
-app.get('/admin-login', (req, res) => {
-  noCache(res);
-  if (SPA_BUILT) return res.sendFile(SPA_INDEX);
   res.render('login', { error: null, settings: getSettings() });
 });
 
@@ -196,10 +174,10 @@ app.get('/admin-logout', (req, res) => {
 // PUBLIC ROUTES
 // ─────────────────────────────────────────────────────────────────────────────
 
-// GET /listen — Vue SPA player (EJS fallback when SPA not built)
-app.get('/listen', (req, res) => {
+// GET /listen — Nuxt handles; EJS fallback when Nuxt not built
+app.get('/listen', (req, res, next) => {
+  if (nuxtHandler) return next();
   noCache(res);
-  if (SPA_BUILT) return res.sendFile(SPA_INDEX);
   res.render('player', { settings: getSettings() });
 });
 
@@ -780,6 +758,22 @@ db.init().then(() => {
 }).catch(err => {
   console.error('Failed to initialize database:', err);
   process.exit(1);
+});
+
+// ── Nuxt SSR catch-all (handles /, /admin, /listen, /admin-login etc.) ────
+// All API, socket.io, streaming and upload routes above take priority.
+// Falls back to EJS when Nuxt output is not present.
+app.use((req, res) => {
+  if (nuxtHandler) return nuxtHandler(req, res);
+  // EJS fallback
+  noCache(res);
+  const p = req.path;
+  if (p === '/' || p === '/admin') {
+    if (isAdmin(req)) res.render('admin', { settings: getSettings() });
+    else res.render('login', { error: null, settings: getSettings() });
+  } else {
+    res.status(404).send('Not found');
+  }
 });
 
 process.on('SIGTERM', () => { audioEngine.stop(); server.close(); });

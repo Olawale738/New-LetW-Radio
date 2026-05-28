@@ -1,0 +1,17 @@
+{
+  "name": "letw-radio-nuxt",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "nuxt build",
+    "dev": "nuxt dev --port 5173",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare"
+  },
+  "dependencies": {
+    "nuxt": "^3.13.0",
+    "@pinia/nuxt": "^0.5.4",
+    "pinia": "^2.1.7",
+    "socket.io-client": "^4.7.5"
+  }
+}
