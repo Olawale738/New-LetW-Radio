@@ -48,7 +48,8 @@ export const useRadioStore = defineStore('radio', () => {
     try {
       const r = await fetch('/api/ticker')
       const d = await r.json()
-      tickerItems.value = d.items || []
+      // Server stores ticker as a newline-separated text string
+      tickerItems.value = d.text ? d.text.split('\n').filter(Boolean) : []
     } catch {}
   }
 
@@ -118,7 +119,7 @@ export const useRadioStore = defineStore('radio', () => {
   })
 
   socket.on('ticker:update', (d) => {
-    tickerItems.value = d.items || []
+    tickerItems.value = d.text ? d.text.split('\n').filter(Boolean) : (d.items || [])
   })
 
   // Elapsed timer

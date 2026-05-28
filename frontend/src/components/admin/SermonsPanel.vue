@@ -42,11 +42,11 @@
         <div class="sermon-icon">🎙</div>
         <div class="sermon-info">
           <div class="sermon-title">{{ s.title }}</div>
-          <div class="sermon-meta">{{ s.preacher }} · {{ fmtDate(s.date) }}</div>
+          <div class="sermon-meta">{{ s.speaker }} · {{ fmtDate(s.recorded_at) }}</div>
           <div class="sermon-desc">{{ s.description }}</div>
         </div>
         <div class="sermon-actions">
-          <a :href="s.fileUrl || `/uploads/${s.filename}`" download class="dl-btn" title="Download">⬇</a>
+          <a :href="s.file_path" download class="dl-btn" title="Download">⬇</a>
           <button class="del-btn" @click="remove(s.id)">✕</button>
         </div>
       </div>

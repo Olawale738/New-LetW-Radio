@@ -6,15 +6,15 @@
         <div class="stat-lbl">Peak Listeners</div>
       </div>
       <div class="stat-card">
-        <div class="stat-val">{{ stats.totalTracksPlayed || 0 }}</div>
-        <div class="stat-lbl">Tracks Played</div>
+        <div class="stat-val">{{ stats.tracks || 0 }}</div>
+        <div class="stat-lbl">Total Tracks</div>
       </div>
       <div class="stat-card">
-        <div class="stat-val">{{ stats.totalChatMessages || 0 }}</div>
+        <div class="stat-val">{{ stats.chatMessages || 0 }}</div>
         <div class="stat-lbl">Chat Messages</div>
       </div>
       <div class="stat-card">
-        <div class="stat-val">{{ stats.totalRequests || 0 }}</div>
+        <div class="stat-val">{{ stats.requests || 0 }}</div>
         <div class="stat-lbl">Requests</div>
       </div>
     </div>
@@ -34,7 +34,7 @@
         <div class="top-info">
           <div class="top-title">{{ t.artist ? t.artist + ' – ' : '' }}{{ t.title }}</div>
         </div>
-        <span class="top-plays">{{ t.playCount }} plays</span>
+        <span class="top-plays">{{ t.play_count || 0 }} plays</span>
       </div>
     </div>
   </div>
@@ -53,8 +53,9 @@ const chartCanvas = ref(null)
 async function load() {
   stats.value     = await adminStore.getStats().catch(() => ({}))
   history.value   = await adminStore.getAnalytics().catch(() => [])
-  const tracks    = await fetch('/api/tracks?sort=plays&limit=10').then(r => r.json()).catch(() => [])
-  topTracks.value = tracks.filter(t => t.playCount > 0).slice(0, 10)
+  // Top-played endpoint returns tracks sorted by play_count desc
+  const tracks    = await fetch('/api/tracks/top-played').then(r => r.json()).catch(() => [])
+  topTracks.value = tracks.slice(0, 10)
   drawChart()
 }
 

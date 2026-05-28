@@ -63,15 +63,16 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, defineAsyncComponent } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import { useAdminStore } from '../stores/admin.js'
 
 const adminStore = useAdminStore()
+const { settings } = storeToRefs(adminStore)
 const router = useRouter()
 
 const sidebarOpen = ref(false)
 const activePanel = ref('overview')
-const settings    = ref({})
 const status      = ref({})
 
 const navItems = [
@@ -138,8 +139,7 @@ async function refresh() {
 
 onMounted(async () => {
   await adminStore.loadSettings()
-  settings.value = adminStore.settings
-  status.value   = await adminStore.getLiveStatus().catch(() => ({}))
+  status.value = await adminStore.getLiveStatus().catch(() => ({}))
   document.title = (settings.value.radio_name || 'LETW Radio') + ' — Admin'
   pollTimer = setInterval(async () => {
     status.value = await adminStore.getLiveStatus().catch(() => status.value)

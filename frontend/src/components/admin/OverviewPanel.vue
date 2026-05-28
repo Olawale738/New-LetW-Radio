@@ -2,19 +2,19 @@
   <div class="overview">
     <div class="stats-grid">
       <div class="stat-card">
-        <div class="stat-val">{{ stats.totalTracks || 0 }}</div>
+        <div class="stat-val">{{ stats.tracks || 0 }}</div>
         <div class="stat-lbl">Tracks</div>
       </div>
       <div class="stat-card">
-        <div class="stat-val">{{ stats.totalPlaylists || 0 }}</div>
-        <div class="stat-lbl">Playlists</div>
+        <div class="stat-val">{{ stats.peakListeners || 0 }}</div>
+        <div class="stat-lbl">Peak Listeners</div>
       </div>
       <div class="stat-card">
-        <div class="stat-val">{{ status.listeners || 0 }}</div>
-        <div class="stat-lbl">Listeners</div>
+        <div class="stat-val">{{ stats.currentListeners || status.listeners || 0 }}</div>
+        <div class="stat-lbl">Live Now</div>
       </div>
       <div class="stat-card">
-        <div class="stat-val">{{ stats.totalSermons || 0 }}</div>
+        <div class="stat-val">{{ stats.sermons || 0 }}</div>
         <div class="stat-lbl">Sermons</div>
       </div>
     </div>
@@ -45,7 +45,7 @@
       <div v-if="history.length === 0" class="empty">No history yet</div>
       <div v-for="h in history" :key="h.id" class="history-row">
         <span class="history-title">{{ h.artist ? h.artist + ' – ' : '' }}{{ h.title }}</span>
-        <span class="history-time">{{ fmtDate(h.playedAt) }}</span>
+        <span class="history-time">{{ fmtDate(h.played_at) }}</span>
       </div>
     </div>
   </div>

@@ -21,10 +21,11 @@ export const useAdminStore = defineStore('admin', () => {
 
   async function checkAuth() {
     try {
-      await api('/settings')
+      await api('/admin/check')
       authed.value = true
       return true
     } catch {
+      authed.value = false
       return false
     }
   }
@@ -58,7 +59,7 @@ export const useAdminStore = defineStore('admin', () => {
 
   // Tracks
   async function getTracks(q = '') {
-    return api('/tracks' + (q ? `?q=${encodeURIComponent(q)}` : ''))
+    return api('/tracks' + (q ? `?search=${encodeURIComponent(q)}` : ''))
   }
 
   async function uploadTracks(files) {
@@ -119,16 +120,39 @@ export const useAdminStore = defineStore('admin', () => {
   async function removeBan(id) { return api(`/bans/${id}`, { method: 'DELETE' }) }
   async function banByUsername(username, reason) { return api('/bans/by-username', { method: 'POST', body: { username, reason } }) }
 
-  // Ticker
+  // Ticker — server uses { text, enabled }, not { items, speed }
   async function getTicker() { return api('/ticker') }
-  async function saveTicker(data) { return api('/ticker', { method: 'PUT', body: data }) }
+  async function saveTicker({ items = [], enabled = true }) {
+    return api('/ticker', { method: 'PUT', body: { text: items.join('\n'), enabled } })
+  }
 
-  // Sermons
+  // Sermons — server POST expects JSON { title, speaker, description, file_path, ... }
+  // Upload the audio via tracks upload first, then register the sermon metadata
   async function getSermons() { return api('/sermons') }
   async function uploadSermon(fd) {
-    const r = await fetch('/api/sermons', { method: 'POST', body: fd })
-    if (!r.ok) throw new Error('Upload failed')
-    return r.json()
+    // Extract fields from FormData, upload audio, then create sermon record
+    const title       = fd.get('title')
+    const speaker     = fd.get('preacher') || fd.get('speaker') || ''
+    const description = fd.get('description') || ''
+    const date        = fd.get('date') || ''
+    const audioFile   = fd.get('audio')
+    if (!audioFile) throw new Error('No audio file')
+    // Upload file via tracks endpoint to get a file_path
+    const uploadFd = new FormData()
+    uploadFd.append('files', audioFile)
+    const upR = await fetch('/api/tracks/upload', { method: 'POST', body: uploadFd })
+    if (!upR.ok) throw new Error('File upload failed')
+    const uploaded = await upR.json()
+    const filePath = uploaded[0]?.file_path || ''
+    // Register sermon metadata
+    return api('/sermons', {
+      method: 'POST',
+      body: {
+        title, speaker, description,
+        file_path: filePath,
+        recorded_at: date ? new Date(date).toISOString() : new Date().toISOString(),
+      },
+    })
   }
   async function updateSermon(id, data) { return api(`/sermons/${id}`, { method: 'PUT', body: data }) }
   async function deleteSermon(id) { return api(`/sermons/${id}`, { method: 'DELETE' }) }

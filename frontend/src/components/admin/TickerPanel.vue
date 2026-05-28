@@ -7,14 +7,6 @@
         <textarea v-model="tickerText" class="f-textarea" rows="8" placeholder="Welcome to LETW Radio!&#10;Tune in every Sunday at 9AM…"></textarea>
         <div class="hint">Each line becomes one ticker item. Leave blank to disable.</div>
       </div>
-      <div class="field">
-        <label class="lbl">Scroll Speed</label>
-        <select v-model="speed" class="f-input">
-          <option value="slow">Slow</option>
-          <option value="normal">Normal</option>
-          <option value="fast">Fast</option>
-        </select>
-      </div>
       <div v-if="msg" class="msg" :class="msgType">{{ msg }}</div>
       <button class="save-btn" @click="save" :disabled="saving">
         {{ saving ? 'Saving…' : '💾 Save Ticker' }}
@@ -36,7 +28,6 @@ import { useAdminStore } from '../../stores/admin.js'
 
 const adminStore = useAdminStore()
 const tickerText = ref('')
-const speed      = ref('normal')
 const saving     = ref(false)
 const msg        = ref('')
 const msgType    = ref('ok')
@@ -46,7 +37,7 @@ const items = computed(() => tickerText.value.split('\n').map(l => l.trim()).fil
 async function save() {
   saving.value = true; msg.value = ''
   try {
-    await adminStore.saveTicker({ items: items.value, speed: speed.value })
+    await adminStore.saveTicker({ items: items.value, enabled: !!items.value.length })
     msg.value = '✓ Ticker saved!'; msgType.value = 'ok'
     setTimeout(() => { msg.value = '' }, 3000)
   } catch (e) { msg.value = e.message; msgType.value = 'err' }
@@ -55,8 +46,8 @@ async function save() {
 
 onMounted(async () => {
   const data = await adminStore.getTicker().catch(() => ({}))
-  tickerText.value = (data.items || []).join('\n')
-  speed.value = data.speed || 'normal'
+  // Server returns { text: 'line1\nline2', enabled: bool }
+  tickerText.value = data.text || ''
 })
 </script>
 

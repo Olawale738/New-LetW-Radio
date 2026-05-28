@@ -127,6 +127,9 @@ router.get('/settings', (req, res) => {
   res.json(settings);
 });
 
+// Admin auth check — 200 if logged in, 403 if not
+router.get('/admin/check', requireAdmin, (req, res) => res.json({ ok: true }));
+
 router.put('/settings', requireAdmin, (req, res) => {
   const update = db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`);
   const updateMany = db.transaction((obj) => {
