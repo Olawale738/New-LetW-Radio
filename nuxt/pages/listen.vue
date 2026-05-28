@@ -874,6 +874,17 @@ onMounted(async () => {
   }
   window.addEventListener('keydown', onKeyDown)
 
+  // Auto-connect: pre-load stream silently so pressing play starts instantly.
+  // No audio plays — user still controls playback via the play button.
+  await nextTick()
+  if (audioEl.value && !radio.isPlaying) {
+    if (!radio.isLive) {
+      audioEl.value.preload = 'auto'
+      audioEl.value.src     = getStreamSrc()
+      audioEl.value.load()
+    }
+  }
+
   // 2-second live buffer stabilizer — runs every 5s
   bufferStabilizer = setInterval(stabilizeBuffer, 5000)
 

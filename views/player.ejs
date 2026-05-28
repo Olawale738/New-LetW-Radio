@@ -2331,6 +2331,19 @@
 
       <!-- Social media follow links (configurable in admin settings) -->
       <div id="social-links-row"></div>
+
+      <!-- Daily Devotion link -->
+      <div style="padding:10px 16px;display:flex;justify-content:center;">
+        <a href="https://devotion.letw.org/" target="_blank" rel="noopener"
+          style="display:inline-flex;align-items:center;gap:8px;padding:10px 20px;border-radius:10px;
+                 background:rgba(212,168,67,0.08);border:1px solid rgba(212,168,67,0.3);
+                 color:#d4a843;font-size:13px;font-weight:600;text-decoration:none;
+                 width:100%;justify-content:center;box-sizing:border-box;"
+          onmouseover="this.style.background='rgba(212,168,67,0.16)'"
+          onmouseout="this.style.background='rgba(212,168,67,0.08)'">
+          📖 Daily Devotion — devotion.letw.org
+        </a>
+      </div>
     </div>
 
     <!-- COMMUNITY PANEL -->
@@ -3762,8 +3775,12 @@ function reconnectAudio(url) {
   clearStallTimer();
   const was = isPlaying;
   audio.pause();
-  audio.src = url;
-  audio.load();
+  // If already pre-loaded with the same URL, skip the reload for instant play
+  const alreadyLoaded = audio.src && audio.src.includes(url) && audio.readyState >= 2;
+  if (!alreadyLoaded) {
+    audio.src = url;
+    audio.load();
+  }
   audio.play().catch(() => {
     if (isLive) scheduleLiveReconnect(1000);
     else if (was) scheduleReconnect();
@@ -4922,6 +4939,15 @@ function esc(s) {
 
   // Embed code — set after channels loaded
   setTimeout(_updateEmbedCode, 500);
+
+  // Auto-connect: pre-load the audio stream so pressing play starts instantly.
+  // The audio element buffers silently in the background — no sound plays
+  // until the user presses the play button.
+  if (!isLive && !isPlaying) {
+    audio.preload = 'auto';
+    audio.src     = _activeStreamUrl;
+    audio.load();
+  }
 })();
 
 // ── NowPlaying poller (DCLM-style) ───────────────────────────────────────────
