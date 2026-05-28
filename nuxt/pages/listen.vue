@@ -28,8 +28,9 @@
         <img src="/logo.png" class="station-logo" alt="" @error="(e:any) => e.target.style.opacity=0" />
         <div>
           <div class="station-name">{{ radio.settings.radio_name || 'LETW Radio' }}</div>
-          <div class="live-pill" :class="{ on: radio.isLive }">
-            <span class="rdot"></span>{{ radio.isLive ? 'LIVE' : 'ON AIR' }}
+          <div class="live-pill" :class="{ on: radio.isLive, connecting: liveConnecting }">
+            <span class="rdot"></span>
+            {{ liveConnecting ? 'CONNECTING…' : radio.isLive ? 'LIVE' : 'ON AIR' }}
           </div>
         </div>
       </div>
@@ -235,6 +236,200 @@ let analyser:  AnalyserNode | null = null
 let source: MediaElementAudioSourceNode | null = null
 let vizRaf: number | null = null
 
+// ── Live WebSocket + MSE state ─────────────────────────────────────────────
+// Uses the binary /live-ws protocol (liveWs.js) for reliable live delivery.
+// Falls back to HTTP /live-stream if MSE is unsupported.
+const T_HELLO = 0x01, T_INIT = 0x02, T_AUDIO = 0x03, T_ENDED = 0x04
+const LIVE_HDR = 13          // frame header size in bytes
+
+let liveWs: WebSocket | null         = null
+let liveMs: MediaSource | null       = null
+let liveSb: SourceBuffer | null      = null
+let liveUrl: string | null           = null   // ObjectURL for the MediaSource
+let liveSbQ: ArrayBuffer[]           = []
+let liveSbBusy                       = false
+let liveWant                         = false  // intent flag: stay connected while true
+let liveDelay                        = 1000   // reconnect backoff (ms)
+let liveRetryT: ReturnType<typeof setTimeout>  | null = null
+let livePingT:  ReturnType<typeof setInterval> | null = null
+let livePendingMime: string | null   = null
+let livePendingInit: ArrayBuffer | null = null
+const liveConnecting = ref(false)
+
+function liveParseFrame(buf: ArrayBuffer) {
+  if (buf.byteLength < 1) return null
+  return {
+    type:    new DataView(buf).getUint8(0),
+    payload: buf.byteLength > LIVE_HDR ? buf.slice(LIVE_HDR) : null,
+  }
+}
+
+function liveFlush() {
+  if (!liveSb || liveSbBusy || liveSb.updating || !liveSbQ.length) return
+  liveSbBusy = true
+  try {
+    liveSb.appendBuffer(liveSbQ.shift()!)
+  } catch (e: any) {
+    liveSbBusy = false
+    if (e?.name === 'QuotaExceededError') liveTrim(true)
+  }
+}
+
+function liveTrim(force = false) {
+  if (!liveSb || liveSb.updating) return
+  const el = audioEl.value
+  if (!el || !liveSb.buffered.length) return
+  const start  = liveSb.buffered.start(0)
+  const trimTo = el.currentTime - (force ? 5 : 30)
+  if (trimTo > start + 2) {
+    try { liveSb.remove(start, trimTo) } catch {}
+  }
+}
+
+function liveSetupSb(mimeType: string) {
+  if (!liveMs || liveMs.readyState !== 'open' || liveSb) return
+  const mime = [mimeType, 'audio/webm;codecs=opus', 'audio/webm']
+    .find(m => { try { return MediaSource.isTypeSupported(m) } catch { return false } })
+  if (!mime) { liveHttpFallback(); return }
+  try {
+    liveSb = liveMs.addSourceBuffer(mime)
+    liveSb.mode = 'sequence'   // required for live streams — no timestamps needed
+    liveSb.onupdateend = () => {
+      liveSbBusy = false
+      liveTrim()
+      liveFlush()
+    }
+    liveSb.onerror = () => { liveSbBusy = false }
+    if (livePendingInit) { liveSbQ.unshift(livePendingInit); livePendingInit = null }
+    liveFlush()
+  } catch { liveHttpFallback() }
+}
+
+function liveConnect() {
+  if (!liveWant || !audioEl.value) return
+
+  // Tear down any existing connection cleanly
+  if (liveWs) { try { liveWs.close() } catch {}; liveWs = null }
+  if (liveUrl) { URL.revokeObjectURL(liveUrl); liveUrl = null }
+  liveSb = null; liveSbQ = []; liveSbBusy = false
+  livePendingMime = null; livePendingInit = null
+  liveConnecting.value = true
+
+  // Fresh MediaSource for this connection attempt
+  liveMs = new MediaSource()
+  liveMs.onsourceopen = () => {
+    if (livePendingMime) { liveSetupSb(livePendingMime); livePendingMime = null }
+  }
+  liveUrl = URL.createObjectURL(liveMs)
+
+  const el = audioEl.value!
+  el.src    = liveUrl
+  el.volume = muted.value ? 0 : Number(volume.value)
+  el.load()
+  el.play().catch(() => {})
+  if (!radio.isPlaying) { radio.setPlaying(true); initAudioCtx() }
+
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  liveWs = new WebSocket(`${proto}//${location.host}/live-ws`)
+  liveWs.binaryType = 'arraybuffer'
+
+  liveWs.onopen = () => {
+    liveDelay = 1000           // reset backoff on success
+    liveConnecting.value = false
+    if (livePingT) clearInterval(livePingT)
+    livePingT = setInterval(() => {
+      if (liveWs?.readyState === WebSocket.OPEN) {
+        const b = new ArrayBuffer(LIVE_HDR)
+        new DataView(b).setUint8(0, 0x05)   // TYPE_PING
+        liveWs.send(b)
+      }
+    }, 15000)  // ping every 15 s to keep the connection through proxies/firewalls
+  }
+
+  liveWs.onmessage = ({ data }) => {
+    if (!(data instanceof ArrayBuffer)) return
+    const frm = liveParseFrame(data)
+    if (!frm) return
+
+    if (frm.type === T_HELLO && frm.payload) {
+      try {
+        const info = JSON.parse(new TextDecoder().decode(frm.payload))
+        if (!info.isLive) return
+        const mt = info.mimeType || 'audio/webm;codecs=opus'
+        if (liveMs?.readyState === 'open') liveSetupSb(mt)
+        else livePendingMime = mt
+      } catch {}
+      return
+    }
+
+    if (frm.type === T_INIT && frm.payload) {
+      // New init segment — reset queue and append
+      liveSbQ = []; liveSbBusy = false
+      if (!liveSb) { livePendingInit = frm.payload }
+      else         { liveSbQ.push(frm.payload); liveFlush() }
+      return
+    }
+
+    if (frm.type === T_AUDIO && frm.payload && liveSb) {
+      liveSbQ.push(frm.payload)
+      liveFlush()
+      return
+    }
+
+    if (frm.type === T_ENDED) {
+      // Broadcast ended — server sent the close signal
+      liveStopAndSwitch()
+    }
+  }
+
+  liveWs.onclose = () => {
+    liveConnecting.value = false
+    if (livePingT) { clearInterval(livePingT); livePingT = null }
+    if (!liveWant) return
+    // Reconnect with exponential backoff (max 16 s)
+    liveRetryT = setTimeout(() => {
+      liveDelay = Math.min(liveDelay * 2, 16000)
+      liveConnect()
+    }, liveDelay)
+  }
+  liveWs.onerror = () => { /* onclose fires next and handles reconnection */ }
+}
+
+function liveDisconnect() {
+  liveWant = false
+  if (liveRetryT)  { clearTimeout(liveRetryT);    liveRetryT = null }
+  if (livePingT)   { clearInterval(livePingT);     livePingT  = null }
+  if (liveWs)      { try { liveWs.close() } catch {}; liveWs = null }
+  liveSb = null; liveSbQ = []; liveSbBusy = false
+  if (liveMs) {
+    try { if (liveMs.readyState === 'open') liveMs.endOfStream() } catch {}
+    liveMs = null
+  }
+  if (liveUrl) { URL.revokeObjectURL(liveUrl); liveUrl = null }
+  liveConnecting.value = false
+}
+
+function liveStopAndSwitch() {
+  // Broadcast ended — disconnect and fall back to regular stream
+  liveDisconnect()
+  const el = audioEl.value
+  if (el && radio.isPlaying) {
+    el.src = getStreamSrc(); el.load(); el.play().catch(() => {})
+  }
+}
+
+function liveHttpFallback() {
+  // MSE unsupported — use HTTP chunked streaming directly
+  liveDisconnect()
+  const el = audioEl.value
+  if (el) { el.src = `/live-stream?t=${Date.now()}`; el.load(); el.play().catch(() => {}) }
+}
+
+function liveMseSupported() {
+  try { return typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('audio/webm') }
+  catch { return false }
+}
+
 // ── Audio engine ───────────────────────────────────────────────────────────
 function initAudioCtx() {
   if (!audioEl.value) return
@@ -273,7 +468,7 @@ function setupCanvas() {
 }
 
 function getStreamSrc() {
-  if (radio.isLive) return `/live-stream?t=${Date.now()}`
+  // Live mode uses WS+MSE (liveConnect) — this returns the regular fallback
   if (activeChannel.value?.url) return `${activeChannel.value.url}?t=${Date.now()}`
   return `/stream?t=${Date.now()}`
 }
@@ -283,13 +478,19 @@ function togglePlay() {
   if (radio.isPlaying) {
     el.pause(); el.src = ''
     radio.setPlaying(false)
+    if (radio.isLive) liveDisconnect()
     if (vizRaf) { cancelAnimationFrame(vizRaf); vizRaf = null }
     updateMediaSession('paused')
   } else {
-    el.src = getStreamSrc()
-    el.volume = muted.value ? 0 : Number(volume.value)
-    el.load(); el.play().catch(() => {})
-    radio.setPlaying(true)
+    if (radio.isLive) {
+      liveWant = true
+      liveMseSupported() ? liveConnect() : liveHttpFallback()
+    } else {
+      el.src = getStreamSrc()
+      el.volume = muted.value ? 0 : Number(volume.value)
+      el.load(); el.play().catch(() => {})
+      radio.setPlaying(true)
+    }
     initAudioCtx()
     updateMediaSession('playing')
   }
@@ -319,13 +520,13 @@ function switchChannel(ch: any) {
 // 2-second live-edge buffer stabilizer
 function stabilizeBuffer() {
   const el = audioEl.value
-  if (!el || !radio.isPlaying) return
+  // Skip in live WS+MSE mode — buffer is managed by liveFlush/liveTrim
+  if (!el || !radio.isPlaying || radio.isLive) return
   try {
     const buf = el.buffered
     if (buf.length > 0) {
       const end = buf.end(buf.length - 1)
       const lag = end - el.currentTime
-      // Stay ~2s behind the live edge; if drift > 8s, catch up
       if (lag > 8) el.currentTime = end - 2
     }
   } catch {}
@@ -333,11 +534,19 @@ function stabilizeBuffer() {
 
 function onAudioError() {
   if (!radio.isPlaying) return
-  setTimeout(() => {
-    if (!radio.isPlaying) return
-    const el = audioEl.value!
-    el.src = getStreamSrc(); el.load(); el.play().catch(() => {})
-  }, 3000)
+  if (radio.isLive) {
+    // Live: WebSocket will reconnect automatically; just restart playback
+    setTimeout(() => {
+      if (!radio.isPlaying || !radio.isLive) return
+      if (liveMseSupported()) { liveConnect() } else { liveHttpFallback() }
+    }, 1500)
+  } else {
+    setTimeout(() => {
+      if (!radio.isPlaying) return
+      const el = audioEl.value!
+      el.src = getStreamSrc(); el.load(); el.play().catch(() => {})
+    }, 3000)
+  }
 }
 
 // ── MediaSession API ───────────────────────────────────────────────────────
@@ -357,14 +566,23 @@ function setupMediaSession() {
 }
 watch(() => radio.trackDisplay, () => updateMediaSession())
 
-// Auto-switch audio source when live status changes
+// Auto-switch when live broadcast starts/ends
 watch(() => radio.isLive, (live) => {
-  if (!audioEl.value || !radio.isPlaying) return
-  const el = audioEl.value
-  el.pause()
-  el.src = getStreamSrc()
-  el.load()
-  el.play().catch(() => {})
+  if (!audioEl.value) return
+  if (live) {
+    // Go live: connect WS+MSE (or HTTP fallback)
+    liveWant = true
+    if (liveMseSupported()) liveConnect()
+    else liveHttpFallback()
+    if (!radio.isPlaying) { radio.setPlaying(true); initAudioCtx() }
+  } else {
+    // Broadcast ended: disconnect and resume regular stream
+    liveDisconnect()
+    if (radio.isPlaying) {
+      const el = audioEl.value
+      el.src = getStreamSrc(); el.load(); el.play().catch(() => {})
+    }
+  }
 })
 
 // ── Keyboard shortcuts ─────────────────────────────────────────────────────
@@ -549,6 +767,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  liveDisconnect()
   if (vizRaf) cancelAnimationFrame(vizRaf)
   if (tickerAnim) cancelAnimationFrame(tickerAnim)
   if (flashTimer) clearTimeout(flashTimer)
@@ -580,6 +799,7 @@ onUnmounted(() => {
 .station-name { font-size: 15px; font-weight: 800; color: #d4a843; }
 .live-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 9px; font-weight: 700; letter-spacing: 1.5px; padding: 2px 8px; border-radius: 10px; background: rgba(224,48,96,0.08); border: 1px solid rgba(224,48,96,0.2); color: rgba(224,48,96,0.5); margin-top: 3px; transition: all 0.3s; }
 .live-pill.on { background: rgba(224,48,96,0.12); border-color: rgba(224,48,96,0.4); color: #ff80a0; }
+.live-pill.connecting { background: rgba(212,168,67,0.1); border-color: rgba(212,168,67,0.35); color: #d4a843; }
 .rdot { width: 5px; height: 5px; border-radius: 50%; background: #e03060; opacity: 0; transition: opacity 0.3s; }
 .live-pill.on .rdot { opacity: 1; animation: pulse 0.9s ease-in-out infinite; }
 .header-right { display: flex; align-items: center; gap: 10px; }
