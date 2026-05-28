@@ -346,7 +346,12 @@ function liveConnect() {
   // Fresh MediaSource for this connection attempt
   liveMs = new MediaSource()
   liveMs.onsourceopen = () => {
-    if (livePendingMime) { liveSetupSb(livePendingMime); livePendingMime = null }
+    // Always set up SourceBuffer immediately — don't wait for HELLO.
+    // HELLO may arrive with isLive:false (race: Socket.IO live:started fires before
+    // the admin's first INIT chunk reaches the WS server), which used to abort setup
+    // and leave liveSb=null forever so incoming INIT/AUDIO frames were silently dropped.
+    liveSetupSb(livePendingMime || 'audio/webm;codecs=opus')
+    livePendingMime = null
   }
   liveUrl = URL.createObjectURL(liveMs)
 
@@ -358,8 +363,16 @@ function liveConnect() {
   if (!radio.isPlaying) { radio.setPlaying(true); initAudioCtx() }
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  liveWs = new WebSocket(`${proto}//${location.host}/live-ws`)
-  liveWs.binaryType = 'arraybuffer'
+  try {
+    liveWs = new WebSocket(`${proto}//${location.host}/live-ws`)
+    liveWs.binaryType = 'arraybuffer'
+  } catch {
+    // URL error or security restriction — release the guard and retry with backoff
+    liveReconnecting = false
+    liveConnecting.value = false
+    liveRetryT = setTimeout(() => { liveDelay = Math.min(liveDelay * 2, 16000); liveConnect() }, liveDelay)
+    return
+  }
 
   liveWs.onopen = () => {
     liveReconnecting = false    // allow future reconnect triggers to proceed
@@ -387,10 +400,14 @@ function liveConnect() {
     if (frm.type === T_HELLO && frm.payload) {
       try {
         const info = JSON.parse(new TextDecoder().decode(frm.payload))
-        if (!info.isLive) return
+        // Never abort on isLive:false — the admin's first INIT may not have reached
+        // the server yet.  SourceBuffer is already set up in onsourceopen; just
+        // re-open with the correct codec if server gives us a better MIME type.
         const mt = info.mimeType || 'audio/webm;codecs=opus'
-        if (liveMs?.readyState === 'open') liveSetupSb(mt)
-        else livePendingMime = mt
+        if (!liveSb) {
+          if (liveMs?.readyState === 'open') liveSetupSb(mt)
+          else livePendingMime = mt
+        }
       } catch {}
       return
     }
