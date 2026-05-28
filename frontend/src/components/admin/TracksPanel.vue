@@ -2,20 +2,21 @@
   <div class="tracks-panel">
     <div class="panel-top">
       <input v-model="search" placeholder="Search tracks…" class="search-input" @input="doSearch" />
-      <label class="upload-btn">
-        {{ uploading ? 'Uploading…' : '⬆ Upload' }}
+      <label class="upload-btn" :class="{ uploading }">
+        {{ uploading ? `Uploading… ${uploadPct}%` : '⬆ Upload' }}
         <input type="file" accept="audio/*" multiple @change="upload" style="display:none" :disabled="uploading" />
       </label>
     </div>
 
-    <div v-if="uploadError" class="error-msg">{{ uploadError }}</div>
-    <div v-if="uploadOk" class="ok-msg">{{ uploadOk }}</div>
+    <div v-if="uploading" class="progress-bar">
+      <div class="progress-fill" :style="{ width: uploadPct + '%' }"></div>
+    </div>
 
     <div class="track-list">
       <div v-if="loading" class="loading">Loading…</div>
       <div v-if="!loading && !tracks.length" class="empty">No tracks found</div>
       <div v-for="t in tracks" :key="t.id" class="track-row">
-        <div class="track-main" @click="editing = editing === t.id ? null : t.id">
+        <div class="track-main" @click="toggleEdit(t)">
           <div class="track-icon">🎵</div>
           <div class="track-info">
             <div class="track-title">{{ t.title }}</div>
@@ -40,17 +41,19 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useAdminStore } from '../../stores/admin.js'
+import { useToastStore }  from '../../stores/toast.js'
 
-const adminStore  = useAdminStore()
-const tracks      = ref([])
-const search      = ref('')
-const loading     = ref(false)
-const uploading   = ref(false)
-const uploadError = ref('')
-const uploadOk    = ref('')
-const editing     = ref(null)
-const editTitle   = ref('')
-const editArtist  = ref('')
+const adminStore = useAdminStore()
+const toast      = useToastStore()
+
+const tracks    = ref([])
+const search    = ref('')
+const loading   = ref(false)
+const uploading = ref(false)
+const uploadPct = ref(0)
+const editing   = ref(null)
+const editTitle  = ref('')
+const editArtist = ref('')
 
 let searchTimer = null
 function doSearch() {
@@ -63,35 +66,52 @@ async function load() {
   try { tracks.value = await adminStore.getTracks(search.value) } catch {} finally { loading.value = false }
 }
 
-async function upload(e) {
+function upload(e) {
   const files = [...e.target.files]
   if (!files.length) return
-  uploading.value = true; uploadError.value = ''; uploadOk.value = ''
-  try {
-    const res = await adminStore.uploadTracks(files)
-    uploadOk.value = `Uploaded ${res.length || files.length} track(s)`
-    await load()
-  } catch (err) { uploadError.value = err.message }
-  finally { uploading.value = false; e.target.value = '' }
+  uploading.value = true; uploadPct.value = 0
+
+  const fd = new FormData()
+  for (const f of files) fd.append('files', f)
+
+  const xhr = new XMLHttpRequest()
+  xhr.open('POST', '/api/tracks/upload')
+  xhr.upload.onprogress = ev => {
+    if (ev.lengthComputable) uploadPct.value = Math.round((ev.loaded / ev.total) * 100)
+  }
+  xhr.onload = async () => {
+    uploading.value = false; uploadPct.value = 0
+    if (xhr.status >= 200 && xhr.status < 300) {
+      let res = []; try { res = JSON.parse(xhr.responseText) } catch {}
+      toast.success(`Uploaded ${res.length || files.length} track(s)`)
+      await load()
+    } else {
+      toast.error('Upload failed')
+    }
+    e.target.value = ''
+  }
+  xhr.onerror = () => { uploading.value = false; toast.error('Upload failed'); e.target.value = '' }
+  xhr.send(fd)
 }
 
-function startEdit(t) {
-  editing.value = t.id
-  editTitle.value = t.title
-  editArtist.value = t.artist || ''
+function toggleEdit(t) {
+  if (editing.value === t.id) { editing.value = null; return }
+  editing.value = t.id; editTitle.value = t.title; editArtist.value = t.artist || ''
 }
 
 async function saveEdit(t) {
   try {
     await adminStore.updateTrack(t.id, { title: editTitle.value, artist: editArtist.value })
+    toast.success('Track updated')
     editing.value = null
     await load()
-  } catch {}
+  } catch (e) { toast.error(e.message) }
 }
 
 async function deleteTrack(id) {
   if (!confirm('Delete this track?')) return
-  try { await adminStore.deleteTrack(id); await load() } catch {}
+  try { await adminStore.deleteTrack(id); toast.success('Track deleted'); await load() }
+  catch (e) { toast.error(e.message) }
 }
 
 function fmtDur(s) {
@@ -115,28 +135,24 @@ onMounted(load)
 .upload-btn {
   padding: 9px 16px; border-radius: 9px; cursor: pointer;
   background: rgba(100,224,100,0.1); border: 1px solid rgba(100,224,100,0.3);
-  color: #64e064; font-size: 13px; font-weight: 600; white-space: nowrap;
+  color: #64e064; font-size: 13px; font-weight: 600; white-space: nowrap; user-select: none;
 }
-.error-msg { color: #ff8080; font-size: 13px; }
-.ok-msg    { color: #80ff80; font-size: 13px; }
-.track-list { display: flex; flex-direction: column; gap: 2px; }
-.track-row  { background: rgba(255,255,255,0.02); border-radius: 8px; overflow: hidden; }
-.track-main { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer; transition: background 0.15s; }
+.upload-btn.uploading { opacity: 0.7; cursor: default; }
+.progress-bar { height: 4px; border-radius: 2px; background: rgba(255,255,255,0.06); overflow: hidden; }
+.progress-fill { height: 100%; background: linear-gradient(90deg, #d4a843, #64e064); border-radius: 2px; transition: width 0.2s; }
+.track-list  { display: flex; flex-direction: column; gap: 2px; }
+.track-row   { background: rgba(255,255,255,0.02); border-radius: 8px; overflow: hidden; }
+.track-main  { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer; transition: background 0.15s; }
 .track-main:hover { background: rgba(212,168,67,0.06); }
-.track-icon { font-size: 18px; flex-shrink: 0; }
-.track-info { flex: 1; min-width: 0; }
+.track-icon  { font-size: 18px; flex-shrink: 0; }
+.track-info  { flex: 1; min-width: 0; }
 .track-title { font-size: 13px; font-weight: 600; color: #f5f0ff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .track-meta  { font-size: 11px; color: #c0a8d8; margin-top: 2px; }
 .track-likes { font-size: 11px; color: #c0a8d8; flex-shrink: 0; }
-.track-edit { padding: 10px 12px; background: rgba(212,168,67,0.04); border-top: 1px solid rgba(212,168,67,0.1); display: flex; flex-direction: column; gap: 8px; }
-.edit-input {
-  padding: 8px 11px; border-radius: 8px; border: 1px solid rgba(212,168,67,0.2);
-  background: rgba(255,255,255,0.04); color: #f5f0ff; font-size: 13px; outline: none; width: 100%;
-}
-.edit-btns { display: flex; gap: 8px; }
-.btn-save, .btn-del, .btn-cancel {
-  padding: 7px 14px; border-radius: 7px; border: none; cursor: pointer; font-size: 12px; font-weight: 600;
-}
+.track-edit  { padding: 10px 12px; background: rgba(212,168,67,0.04); border-top: 1px solid rgba(212,168,67,0.1); display: flex; flex-direction: column; gap: 8px; }
+.edit-input  { padding: 8px 11px; border-radius: 8px; border: 1px solid rgba(212,168,67,0.2); background: rgba(255,255,255,0.04); color: #f5f0ff; font-size: 13px; outline: none; width: 100%; }
+.edit-btns   { display: flex; gap: 8px; }
+.btn-save, .btn-del, .btn-cancel { padding: 7px 14px; border-radius: 7px; border: none; cursor: pointer; font-size: 12px; font-weight: 600; }
 .btn-save   { background: rgba(100,224,100,0.15); color: #64e064; border: 1px solid rgba(100,224,100,0.3); }
 .btn-del    { background: rgba(224,48,96,0.12);   color: #ff80a0; border: 1px solid rgba(224,48,96,0.3); }
 .btn-cancel { background: rgba(255,255,255,0.06); color: #c0a8d8; border: 1px solid rgba(255,255,255,0.1); }

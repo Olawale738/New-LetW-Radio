@@ -15,7 +15,13 @@
           <span class="msg-time">{{ fmtDate(m.createdAt) }}</span>
           <span class="msg-ip">{{ m.ip || '' }}</span>
           <button class="del-btn" @click="deleteMsg(m.id)">✕</button>
-          <button class="ban-btn" @click="banUser(m)" title="Ban this user">🚫</button>
+          <button class="ban-btn" @click="toggleBanForm(m.id)" title="Ban user">🚫</button>
+        </div>
+        <div v-if="banTarget === m.id" class="ban-form">
+          <input v-model="banReason" placeholder="Ban reason…" class="ban-input"
+            @keydown.enter="submitBan(m)" @keydown.esc="banTarget=null" />
+          <button class="ban-submit" @click="submitBan(m)">Ban {{ m.nick }}</button>
+          <button class="ban-cancel" @click="banTarget=null">Cancel</button>
         </div>
       </div>
     </div>
@@ -23,30 +29,51 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useAdminStore } from '../../stores/admin.js'
+import { useRadioStore }  from '../../stores/radio.js'
+import { useToastStore }  from '../../stores/toast.js'
 
 const adminStore = useAdminStore()
-const messages   = ref([])
+const radioStore = useRadioStore()
+const toast      = useToastStore()
+
+const messages  = ref([])
+const banTarget = ref(null)
+const banReason = ref('')
 
 async function load() { messages.value = await adminStore.getChat().catch(() => []) }
 
+function toggleBanForm(id) {
+  if (banTarget.value === id) { banTarget.value = null; return }
+  banTarget.value = id; banReason.value = ''
+}
+
 async function deleteMsg(id) {
-  await adminStore.deleteChat(id)
-  await load()
+  try {
+    await adminStore.deleteChat(id)
+    messages.value = messages.value.filter(m => m.id !== id)
+    toast.success('Message deleted')
+  } catch (e) { toast.error(e.message) }
 }
 
 async function clearAll() {
   if (!confirm('Clear all chat messages?')) return
-  await adminStore.clearChat()
-  await load()
+  try {
+    await adminStore.clearChat()
+    messages.value = []
+    toast.success('Chat cleared')
+  } catch (e) { toast.error(e.message) }
 }
 
-async function banUser(m) {
-  const reason = prompt(`Ban "${m.nick}"? Enter reason (or cancel):`)
-  if (!reason) return
-  await adminStore.banByUsername(m.nick, reason)
-  alert(`${m.nick} has been banned.`)
+async function submitBan(m) {
+  if (!banReason.value.trim()) { toast.warn('Enter a ban reason'); return }
+  try {
+    await adminStore.banByUsername(m.nick, banReason.value.trim())
+    toast.success(`${m.nick} has been banned`)
+    banTarget.value = null; banReason.value = ''
+    await load()
+  } catch (e) { toast.error(e.message) }
 }
 
 function fmtDate(d) {
@@ -54,7 +81,17 @@ function fmtDate(d) {
   return new Date(d).toLocaleString()
 }
 
-onMounted(load)
+function onNewMessage(msg) {
+  if (!messages.value.find(m => m.id === msg.id)) {
+    messages.value.unshift(msg)
+  }
+}
+
+onMounted(() => {
+  load()
+  radioStore.socket.on('chatMessage', onNewMessage)
+})
+onUnmounted(() => { radioStore.socket.off('chatMessage', onNewMessage) })
 </script>
 
 <style scoped>
@@ -73,5 +110,10 @@ onMounted(load)
 .del-btn, .ban-btn { padding: 3px 8px; border-radius: 5px; border: none; cursor: pointer; font-size: 11px; }
 .del-btn { background: rgba(224,48,96,0.1); color: #ff80a0; }
 .ban-btn { background: rgba(255,140,0,0.1); color: #ffaa44; }
+.ban-form { display: flex; gap: 6px; align-items: center; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,140,0,0.15); flex-wrap: wrap; }
+.ban-input { flex: 1; min-width: 0; padding: 7px 10px; border-radius: 7px; border: 1px solid rgba(255,140,0,0.3); background: rgba(255,140,0,0.06); color: #f5f0ff; font-size: 12px; outline: none; }
+.ban-input:focus { border-color: rgba(255,140,0,0.6); }
+.ban-submit { padding: 6px 12px; border-radius: 7px; border: 1px solid rgba(224,48,96,0.4); background: rgba(224,48,96,0.1); color: #ff80a0; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.ban-cancel { padding: 6px 10px; border-radius: 7px; border: 1px solid rgba(255,255,255,0.1); background: transparent; color: #c0a8d8; font-size: 12px; cursor: pointer; }
 .empty { color: #c0a8d8; font-size: 13px; text-align: center; padding: 20px; }
 </style>

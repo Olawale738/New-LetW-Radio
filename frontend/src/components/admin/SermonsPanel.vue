@@ -57,8 +57,10 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useAdminStore } from '../../stores/admin.js'
+import { useToastStore }  from '../../stores/toast.js'
 
 const adminStore  = useAdminStore()
+const toast       = useToastStore()
 const sermons     = ref([])
 const loading     = ref(false)
 const showForm    = ref(false)
@@ -82,19 +84,19 @@ async function upload() {
   fd.append('audio', audioFile.value)
   try {
     await adminStore.uploadSermon(fd)
-    uploadMsg.value = 'Uploaded!'; uploadMsgType.value = 'ok'
+    toast.success('Sermon uploaded')
     showForm.value = false
     form.value = { title: '', preacher: '', date: '', description: '' }
     audioFile.value = null
     await load()
-  } catch (e) { uploadMsg.value = e.message; uploadMsgType.value = 'err' }
+  } catch (e) { uploadMsg.value = e.message; uploadMsgType.value = 'err'; toast.error(e.message) }
   finally { uploading.value = false }
 }
 
 async function remove(id) {
   if (!confirm('Delete sermon?')) return
-  await adminStore.deleteSermon(id)
-  await load()
+  try { await adminStore.deleteSermon(id); toast.success('Sermon deleted'); await load() }
+  catch (e) { toast.error(e.message) }
 }
 
 function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : '' }

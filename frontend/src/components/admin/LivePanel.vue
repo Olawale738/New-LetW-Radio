@@ -56,9 +56,11 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRadioStore } from '../../stores/radio.js'
 import { useAdminStore } from '../../stores/admin.js'
+import { useToastStore }  from '../../stores/toast.js'
 
 const radioStore = useRadioStore()
 const adminStore = useAdminStore()
+const toast      = useToastStore()
 
 const isLive    = ref(false)
 const liveListeners = ref(0)
@@ -89,8 +91,9 @@ async function sendAlert() {
   if (!alertMsg.value.trim()) return
   try {
     await adminStore.flashAlert(alertMsg.value.trim(), '#d4a843')
+    toast.success('Flash alert sent')
     alertMsg.value = ''
-  } catch (e) { errMsg.value = e.message }
+  } catch (e) { toast.error(e.message) }
 }
 
 // Keep live status in sync with the radio store socket events

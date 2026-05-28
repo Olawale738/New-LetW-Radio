@@ -89,6 +89,7 @@ const navItems = [
   { id: 'sermons',    icon: '🎙', label: 'Sermons' },
   { id: 'settings',   icon: '⚙️',  label: 'Settings' },
   { id: 'analytics',  icon: '📈', label: 'Analytics' },
+  { id: 'streams',    icon: '📡', label: 'Streams' },
 ]
 
 const panels = {
@@ -105,6 +106,7 @@ const panels = {
   sermons:   defineAsyncComponent(() => import('../components/admin/SermonsPanel.vue')),
   settings:  defineAsyncComponent(() => import('../components/admin/SettingsPanel.vue')),
   analytics: defineAsyncComponent(() => import('../components/admin/AnalyticsPanel.vue')),
+  streams:   defineAsyncComponent(() => import('../components/admin/StreamsPanel.vue')),
 }
 
 const panelComponent = computed(() => panels[activePanel.value])
