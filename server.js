@@ -27,6 +27,16 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Segun123@';
 
+// Vue 3 SPA build output (cd frontend && npm run build → writes to ../frontend-dist)
+const SPA_DIST  = path.join(__dirname, 'frontend-dist');
+const SPA_INDEX = path.join(SPA_DIST, 'index.html');
+const SPA_BUILT = fs.existsSync(SPA_INDEX);
+
+// Serve SPA static assets at /assets (Vite outputs to assets/ inside dist)
+if (SPA_BUILT) {
+  app.use('/assets', express.static(path.join(SPA_DIST, 'assets'), { maxAge: '1y', immutable: true }));
+}
+
 // Warn operators who haven't set a custom password via environment variable.
 // The hardcoded fallback is only acceptable in local-dev; production deployments
 // must set ADMIN_PASSWORD so the admin dashboard isn't publicly accessible.
@@ -126,9 +136,16 @@ function noCache(res) {
 // ─────────────────────────────────────────────────────────────────────────────
 // NOTE: loginPage() function was removed — login is now rendered via views/login.ejs
 
-// GET / — show dashboard if logged in, otherwise show login page
+// Helper: serve SPA or fall back to EJS
+function serveSPA(res) {
+  if (SPA_BUILT) return res.sendFile(SPA_INDEX);
+  return null; // caller handles fallback
+}
+
+// GET / — SPA (admin dashboard) or EJS fallback
 app.get('/', (req, res) => {
   noCache(res);
+  if (SPA_BUILT) return res.sendFile(SPA_INDEX);
   if (isAdmin(req)) {
     res.render('admin', { settings: getSettings() });
   } else {
@@ -136,29 +153,40 @@ app.get('/', (req, res) => {
   }
 });
 
-// POST /admin-login — HTML form submission
-// Server sets cookie AND sends redirect in one atomic response.
-// No JavaScript timing issues possible with this approach.
+// GET /admin — alias for SPA root
+app.get('/admin', (req, res) => { noCache(res); if (SPA_BUILT) return res.sendFile(SPA_INDEX); res.redirect('/'); });
+
+// GET /admin-login — SPA handles the login UI
+app.get('/admin-login', (req, res) => {
+  noCache(res);
+  if (SPA_BUILT) return res.sendFile(SPA_INDEX);
+  res.render('login', { error: null, settings: getSettings() });
+});
+
+// POST /admin-login — supports both JSON (Vue SPA) and form submission (EJS fallback)
 app.post('/admin-login', (req, res) => {
   noCache(res);
   const submitted = (req.body.password || '').trim();
+  const isJson = req.headers['content-type']?.includes('application/json') ||
+                 req.headers.accept?.includes('application/json');
   if (submitted === ADMIN_PASSWORD) {
-    // Add Secure flag when served over HTTPS (Render / any SSL proxy).
-    // trust proxy (set above) makes req.secure = true when X-Forwarded-Proto: https.
     const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
     const cookieStr = `admin_token=${SESSION_TOKEN}; Path=/; HttpOnly; Max-Age=604800; SameSite=Lax${secure ? '; Secure' : ''}`;
     res.setHeader('Set-Cookie', cookieStr);
+    if (isJson) return res.json({ ok: true });
     res.redirect(302, '/');
   } else {
+    if (isJson) return res.status(401).json({ error: 'Incorrect password' });
     res.render('login', { error: 'Incorrect password. Please try again.', settings: getSettings() });
   }
 });
 
-// GET /admin-logout — clear cookie and redirect to listener page
+// GET /admin-logout — clear cookie
 app.get('/admin-logout', (req, res) => {
   noCache(res);
   const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
   res.setHeader('Set-Cookie', `admin_token=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax${secure ? '; Secure' : ''}`);
+  if (req.headers.accept?.includes('application/json')) return res.json({ ok: true });
   res.redirect(302, '/listen');
 });
 
@@ -166,9 +194,10 @@ app.get('/admin-logout', (req, res) => {
 // PUBLIC ROUTES
 // ─────────────────────────────────────────────────────────────────────────────
 
-// GET /listen — public listener player
+// GET /listen — Vue SPA player (EJS fallback when SPA not built)
 app.get('/listen', (req, res) => {
-  noCache(res); // always serve fresh HTML — never let the browser cache player.ejs
+  noCache(res);
+  if (SPA_BUILT) return res.sendFile(SPA_INDEX);
   res.render('player', { settings: getSettings() });
 });
 
