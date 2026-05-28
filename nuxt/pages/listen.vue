@@ -357,6 +357,16 @@ function setupMediaSession() {
 }
 watch(() => radio.trackDisplay, () => updateMediaSession())
 
+// Auto-switch audio source when live status changes
+watch(() => radio.isLive, (live) => {
+  if (!audioEl.value || !radio.isPlaying) return
+  const el = audioEl.value
+  el.pause()
+  el.src = getStreamSrc()
+  el.load()
+  el.play().catch(() => {})
+})
+
 // ── Keyboard shortcuts ─────────────────────────────────────────────────────
 function onKeyDown(e: KeyboardEvent) {
   const tag = (e.target as HTMLElement).tagName

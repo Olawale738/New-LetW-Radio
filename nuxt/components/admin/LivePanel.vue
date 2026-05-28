@@ -25,12 +25,13 @@
         </label>
         <span class="hint">Saves to uploads/ as a .webm file</span>
       </div>
-      <div class="info-box">
-        <p>Streaming ingest URL: <strong>{{ streamKey }}</strong></p>
-        <p class="hint">Configure OBS / your streaming software to push to the ingest URL above, then click Go Live.</p>
+      <div class="mic-notice">
+        🎙️ Your browser microphone will be used. Allow mic access when prompted.
       </div>
       <div v-if="errMsg" class="err-msg">{{ errMsg }}</div>
-      <button class="go-live-btn" @click="goLive">🔴 Go Live</button>
+      <button class="go-live-btn" :disabled="starting" @click="goLive">
+        {{ starting ? '⏳ Starting…' : '🔴 Go Live' }}
+      </button>
     </div>
 
     <div v-if="isLive" class="live-controls section-card">
@@ -39,6 +40,7 @@
         <label class="lbl">Listeners right now</label>
         <div class="big-num">{{ liveListeners }}</div>
       </div>
+      <div v-if="micActive" class="mic-active">🎙️ Microphone active — broadcasting your audio</div>
       <div class="field">
         <label class="lbl">Send Flash Alert</label>
         <div class="alert-row">
@@ -62,29 +64,74 @@ const radioStore = useRadioStore()
 const adminStore = useAdminStore()
 const toast      = useToastStore()
 
-const isLive    = ref(false)
+const isLive        = ref(false)
 const liveListeners = ref(0)
-const title     = ref('')
-const artist    = ref('')
-const record    = ref(false)
-const alertMsg  = ref('')
-const errMsg    = ref('')
-const streamKey = ref(window.location.origin + '/live-stream')
+const title         = ref('')
+const artist        = ref('')
+const record        = ref(false)
+const alertMsg      = ref('')
+const errMsg        = ref('')
+const starting      = ref(false)
+const micActive     = ref(false)
 
-function goLive() {
+let mediaRecorder = null
+let micStream     = null
+
+async function goLive() {
   errMsg.value = ''
   if (!title.value.trim()) { errMsg.value = 'Broadcast title is required'; return }
-  radioStore.socket.emit('live:start', {
+
+  const socket = radioStore.getSocket()
+  if (!socket?.connected) { errMsg.value = 'Not connected to server — please refresh.'; return }
+
+  starting.value = true
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+  } catch {
+    errMsg.value = 'Microphone access denied. Please allow microphone access and try again.'
+    starting.value = false
+    return
+  }
+
+  const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus']
+    .find(m => MediaRecorder.isTypeSupported(m)) || ''
+
+  socket.emit('live:start', {
     title:    title.value.trim(),
     artist:   artist.value.trim(),
     record:   record.value,
-    mimeType: 'audio/webm',
+    mimeType: mimeType || 'audio/webm;codecs=opus',
   })
+
+  mediaRecorder = new MediaRecorder(micStream, mimeType ? { mimeType } : {})
+  mediaRecorder.ondataavailable = async (e) => {
+    if (!e.data || e.data.size === 0) return
+    const buf = await e.data.arrayBuffer()
+    socket.emit('live:chunk', buf)
+  }
+  mediaRecorder.onerror = () => { errMsg.value = 'Microphone error — broadcast may have dropped.' }
+  mediaRecorder.start(250)
+  micActive.value = true
+  starting.value  = false
+}
+
+function stopMic() {
+  micActive.value = false
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    try { mediaRecorder.stop() } catch {}
+    mediaRecorder = null
+  }
+  if (micStream) {
+    micStream.getTracks().forEach(t => t.stop())
+    micStream = null
+  }
 }
 
 function endLive() {
   if (!confirm('End the live broadcast?')) return
-  radioStore.socket.emit('live:stop')
+  stopMic()
+  const socket = radioStore.getSocket()
+  if (socket) socket.emit('live:stop')
 }
 
 async function sendAlert() {
@@ -96,22 +143,35 @@ async function sendAlert() {
   } catch (e) { toast.error(e.message) }
 }
 
-// Keep live status in sync with the radio store socket events
-radioStore.socket.on('live:started', () => { isLive.value = true })
-radioStore.socket.on('live:ended',   () => { isLive.value = false })
-radioStore.socket.on('status',        (d) => {
-  isLive.value    = !!d.isLive
-  liveListeners.value = d.listeners || 0
-})
-radioStore.socket.on('listenerChange', (c) => { liveListeners.value = c })
+function onLiveStarted() { isLive.value = true; starting.value = false }
+function onLiveEnded()   { isLive.value = false; stopMic() }
+function onStatus(d) { isLive.value = !!d.isLive; liveListeners.value = d.listeners || 0 }
+function onListenerChange(c) { liveListeners.value = c }
 
-let pollTimer = null
 onMounted(async () => {
   const s = await adminStore.getLiveStatus().catch(() => ({}))
-  isLive.value      = !!s.isLive
+  isLive.value       = !!s.isLive
   liveListeners.value = s.listeners || 0
+
+  const socket = radioStore.getSocket()
+  if (socket) {
+    socket.on('live:started',    onLiveStarted)
+    socket.on('live:ended',      onLiveEnded)
+    socket.on('status',          onStatus)
+    socket.on('listenerChange',  onListenerChange)
+  }
 })
-onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
+
+onUnmounted(() => {
+  stopMic()
+  const socket = radioStore.getSocket()
+  if (socket) {
+    socket.off('live:started',   onLiveStarted)
+    socket.off('live:ended',     onLiveEnded)
+    socket.off('status',         onStatus)
+    socket.off('listenerChange', onListenerChange)
+  }
+})
 </script>
 
 <style scoped>
@@ -136,11 +196,13 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
 .record-row .lbl { display: flex; align-items: center; gap: 4px; cursor: pointer; }
 .f-input { padding: 9px 12px; border-radius: 9px; border: 1px solid rgba(212,168,67,0.2); background: rgba(255,255,255,0.04); color: #f5f0ff; font-size: 13px; outline: none; width: 100%; font-family: inherit; }
 .f-input:focus { border-color: rgba(212,168,67,0.5); }
-.info-box { background: rgba(212,168,67,0.05); border: 1px solid rgba(212,168,67,0.15); border-radius: 9px; padding: 12px; font-size: 12px; color: #d4a843; }
+.mic-notice { font-size: 12px; color: #c0a8d8; background: rgba(212,168,67,0.05); border: 1px solid rgba(212,168,67,0.12); border-radius: 8px; padding: 10px 12px; }
+.mic-active { font-size: 12px; color: #80ff80; background: rgba(100,224,100,0.06); border: 1px solid rgba(100,224,100,0.2); border-radius: 8px; padding: 10px 12px; }
 .hint { color: #c0a8d8; margin-top: 4px; font-size: 11px; }
 .err-msg { color: #ff8080; font-size: 12px; }
 .go-live-btn { padding: 13px; border-radius: 10px; border: none; cursor: pointer; background: linear-gradient(135deg, #a00828, #e03060); color: #fff; font-size: 15px; font-weight: 800; transition: opacity 0.15s; }
-.go-live-btn:hover { opacity: 0.85; }
+.go-live-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.go-live-btn:hover:not(:disabled) { opacity: 0.85; }
 .end-live-btn { padding: 11px; border-radius: 10px; border: 1px solid rgba(224,48,96,0.4); background: rgba(224,48,96,0.1); color: #ff80a0; font-size: 14px; font-weight: 700; cursor: pointer; }
 .alert-row { display: flex; gap: 8px; }
 .alert-btn { padding: 9px 16px; border-radius: 8px; border: 1px solid rgba(212,168,67,0.3); background: rgba(212,168,67,0.1); color: #d4a843; font-size: 13px; cursor: pointer; white-space: nowrap; }
