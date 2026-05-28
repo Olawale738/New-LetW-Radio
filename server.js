@@ -32,9 +32,11 @@ const SPA_DIST  = path.join(__dirname, 'frontend-dist');
 const SPA_INDEX = path.join(SPA_DIST, 'index.html');
 const SPA_BUILT = fs.existsSync(SPA_INDEX);
 
-// Serve SPA static assets at /assets (Vite outputs to assets/ inside dist)
+// Serve SPA static assets — hashed chunks get long cache, root files (manifest.json etc) get no-cache
 if (SPA_BUILT) {
   app.use('/assets', express.static(path.join(SPA_DIST, 'assets'), { maxAge: '1y', immutable: true }));
+  // Serve manifest.json and other root-level SPA assets (logo copy, etc.) without caching
+  app.use(express.static(SPA_DIST, { maxAge: 0, index: false }));
 }
 
 // Warn operators who haven't set a custom password via environment variable.
