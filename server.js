@@ -568,7 +568,10 @@ io.on('connection', (socket) => {
             const duration = Math.floor(stat.size / 16000); // ~16 KB/s at 128 kbps Opus
             db.prepare(`INSERT INTO tracks (id, title, artist, duration, file_path, file_size, bitrate, tray) VALUES (?,?,?,?,?,?,?,?)`)
               .run(id, rtitle, rartist, duration, file, stat.size, 128, 'recordings');
-            console.log(`[Live] Recording saved to library: "${rtitle}" (${duration}s)`);
+            // Also save to sermons table so it appears on the public listener page
+            db.prepare(`INSERT INTO sermons (id, title, speaker, description, file_path, duration, file_size) VALUES (?,?,?,?,?,?,?)`)
+              .run(id, rtitle, rartist || '', 'Live broadcast recording', file, duration, stat.size);
+            console.log(`[Live] Recording saved to library + sermons: "${rtitle}" (${duration}s)`);
           } else {
             try { fs.unlinkSync(file); } catch(e) {}
             console.log('[Live] Recording too small, discarded');
@@ -643,6 +646,8 @@ audioEngine.on('liveStart', async (info) => {
               const duration = Math.floor(stat.size / 16000);
               db.prepare(`INSERT INTO tracks (id,title,artist,duration,file_path,file_size,bitrate,tray) VALUES (?,?,?,?,?,?,?,?)`)
                 .run(id, rtitle, rartist, duration, file, stat.size, 128, 'recordings');
+              db.prepare(`INSERT INTO sermons (id, title, speaker, description, file_path, duration, file_size) VALUES (?,?,?,?,?,?,?)`)
+                .run(id, rtitle, rartist || '', 'Live broadcast recording', file, duration, stat.size);
             } else { try { fs.unlinkSync(file); } catch(_) {} }
           } catch(e) { console.error('[Live] Recording save error (timeout):', e.message); }
         });
