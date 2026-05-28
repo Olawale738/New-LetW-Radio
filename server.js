@@ -379,6 +379,80 @@ app.get('/stream.xspf', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 📊  ICECAST-COMPATIBLE STATUS ENDPOINTS
+// Required by SAM Broadcaster, Rocket Broadcaster, and other automation
+// software that validate the Listener URL against these patterns:
+//   status-json.xsl  |  7.xsl  |  7.html  |  stats?sid=
+// ─────────────────────────────────────────────────────────────────────────────
+function _icecastStats(req) {
+  const settings = getSettings();
+  const base     = `${req.protocol}://${req.get('host')}`;
+  const status   = audioEngine.getStatus();
+  const track    = status.currentTrack;
+  const nowPlaying = status.isLive
+    ? `${status.liveTitle || 'Live Broadcast'} - ${status.liveArtist || ''}`
+    : (track ? `${track.title} - ${track.artist}` : '');
+  const listeners = (audioEngine._listenerCount || 0) + _webListeners;
+  return {
+    icestats: {
+      host:      req.get('host'),
+      location:  settings.radio_name || 'LETW Radio',
+      server_id: 'LETW Radio',
+      server_start: new Date().toUTCString(),
+      source: [{
+        listenurl:   `${base}/stream`,
+        server_name: settings.radio_name || 'LETW Radio',
+        server_description: settings.radio_description || '',
+        genre:       settings.radio_genre || 'Gospel / Christian',
+        bitrate:     parseInt(settings.stream_bitrate || '128', 10),
+        samplerate:  44100,
+        channels:    2,
+        listeners,
+        listener_peak: listeners,
+        audio_info:  `bitrate=${settings.stream_bitrate || 128};samplerate=44100;channels=2`,
+        title:       nowPlaying,
+        stream_start: new Date().toUTCString(),
+      }],
+    },
+  };
+}
+
+// SAM Broadcaster / Rocket Broadcaster listener URL validation targets
+app.get('/status-json.xsl', (req, res) => {
+  res.set('Content-Type', 'application/json');
+  res.json(_icecastStats(req));
+});
+
+app.get('/7.xsl', (req, res) => {
+  const s   = _icecastStats(req).icestats;
+  const src = Array.isArray(s.source) ? s.source[0] : {};
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!DOCTYPE html><html><head><title>${s.server_id}</title></head><body>
+<table><tr><th>Stream Name</th><th>Listeners</th><th>Genre</th><th>Bit Rate</th><th>Current Song</th></tr>
+<tr><td>${src.server_name||''}</td><td>${src.listeners||0}</td><td>${src.genre||''}</td><td>${src.bitrate||128}</td><td>${src.title||''}</td></tr>
+</table></body></html>`);
+});
+
+app.get('/7.html', (req, res) => {
+  res.redirect(301, '/7.xsl');
+});
+
+// SHOUTcast-style stats?sid= endpoint (some clients use this format)
+app.get('/stats', (req, res) => {
+  const s   = _icecastStats(req).icestats;
+  const src = Array.isArray(s.source) ? s.source[0] : {};
+  res.set('Content-Type', 'text/xml; charset=utf-8');
+  res.send(`<?xml version="1.0"?><SHOUTCASTSERVER>
+<CURRENTLISTENERS>${src.listeners||0}</CURRENTLISTENERS>
+<PEAKLISTENERS>${src.listener_peak||0}</PEAKLISTENERS>
+<MAXLISTENERS>100</MAXLISTENERS>
+<BITRATE>${src.bitrate||128}</BITRATE>
+<CONTENT>${src.listenurl||''}</CONTENT>
+<VERSION>2.0.0</VERSION>
+</SHOUTCASTSERVER>`);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 📡  TUNE-IN PAGE — all ways to listen
 // Share with congregation: radio.letw.org/tune-in
 // ─────────────────────────────────────────────────────────────────────────────
