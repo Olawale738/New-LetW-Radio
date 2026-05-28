@@ -3444,6 +3444,11 @@ function stopLiveTimer() {
 }
 
 function switchToLiveMode(info) {
+  // Propagate mimeType immediately so startLiveViaMS() uses the correct codec.
+  // Without this, MP3 streams (from butt/Icecast) would attempt MediaSource with
+  // the default 'audio/webm;codecs=opus' before the HELLO frame arrives.
+  if (info && info.mimeType) liveMimeType = info.mimeType;
+
   document.getElementById('player-card').classList.add('live-mode');
   document.getElementById('play-btn').classList.add('live-mode');
   document.getElementById('player-shimmer').classList.add('live');

@@ -539,6 +539,10 @@ io.on('connection', (socket) => {
     if (!isAdminSocket()) return;
     console.log('[Live] Admin stopped live broadcast');
     audioEngine.stopLive();
+    // Force-disconnect any active Icecast encoder so butt/ffmpeg stops sending
+    // data.  Without this, the encoder keeps the TCP connection open indefinitely
+    // after the admin clicks Stop.
+    if (icecastIngest.isActive) icecastIngest.forceStop();
     io.emit('live:ended');
     io.emit('status', audioEngine.getStatus());
     // Clear live-quality state
@@ -708,6 +712,26 @@ db.init().then(() => {
     // liveWs as live immediately so the first injected chunk is broadcast.
     const needsInitSegment = mimeType.includes('webm') || mimeType.includes('ogg');
     if (!needsInitSegment) liveWs.setLive();
+
+    // Auto-record Icecast broadcasts when the setting is enabled.
+    // Browser-mic broadcasts use the opt-in "Record" checkbox; for external encoders
+    // there is no UI checkbox, so we record automatically when configured to do so.
+    try {
+      const setting = db.prepare('SELECT value FROM settings WHERE key = ?').get('auto_record_icecast');
+      if (setting && setting.value === '1') {
+        const ext     = mimeType.includes('ogg') ? 'ogg' : mimeType.includes('webm') ? 'webm' : 'mp3';
+        const recFile = path.join(__dirname, 'uploads', `icecast-${Date.now()}.${ext}`);
+        fs.mkdirSync(path.join(__dirname, 'uploads'), { recursive: true });
+        liveRecordingStream  = fs.createWriteStream(recFile);
+        liveRecordingFile    = recFile;
+        liveRecordingTitle   = title  || 'Live Broadcast';
+        liveRecordingArtist  = artist || 'LETW Radio';
+        liveRecordingEnabled = true;
+        console.log(`[IcecastIngest] Auto-recording to: ${recFile}`);
+      }
+    } catch(e) {
+      console.error('[IcecastIngest] Could not start auto-recording:', e.message);
+    }
   });
 
   icecastIngest.on('chunk', (buf, isFirst) => {
@@ -721,7 +745,47 @@ db.init().then(() => {
     // chunks are standalone so isInit is always false.
     const needsInitSegment = _iceMimeType.includes('webm') || _iceMimeType.includes('ogg');
     liveWs.injectChunk(buf, needsInitSegment && isFirst);
+
+    // Populate the Socket.IO ring buffer so late-joining listeners receive ~6 s
+    // of audio catchup via live:catchup on connect (same as browser-mic path).
+    if (!isFirst || !needsInitSegment) {
+      _liveRingBuffer.push(buf);
+      if (_liveRingBuffer.length > LIVE_RING_SIZE) _liveRingBuffer.shift();
+    }
+
+    // Write to recording file if auto-recording is active.
+    if (liveRecordingEnabled && liveRecordingStream) {
+      try { liveRecordingStream.write(buf); } catch(e) {}
+    }
   });
+
+  function _finaliseIcecastRecording() {
+    if (!liveRecordingEnabled || !liveRecordingStream) return;
+    liveRecordingEnabled = false;
+    const stream  = liveRecordingStream;
+    const file    = liveRecordingFile;
+    const rtitle  = liveRecordingTitle;
+    const rartist = liveRecordingArtist;
+    liveRecordingStream = null;
+    liveRecordingFile   = '';
+    stream.end(() => {
+      try {
+        const stat = fs.statSync(file);
+        if (stat.size > 50000) {
+          const id = uuidv4();
+          const duration = Math.floor(stat.size / 16000);
+          db.prepare(`INSERT INTO tracks (id,title,artist,duration,file_path,file_size,bitrate,tray) VALUES (?,?,?,?,?,?,?,?)`)
+            .run(id, rtitle, rartist, duration, file, stat.size, 128, 'recordings');
+          db.prepare(`INSERT INTO sermons (id,title,speaker,description,file_path,duration,file_size) VALUES (?,?,?,?,?,?,?)`)
+            .run(id, rtitle, rartist || '', 'Live broadcast recording', file, duration, stat.size);
+          console.log(`[IcecastIngest] Recording saved: "${rtitle}" (${duration}s)`);
+        } else {
+          try { fs.unlinkSync(file); } catch(_) {}
+          console.log('[IcecastIngest] Recording too short, discarded');
+        }
+      } catch(e) { console.error('[IcecastIngest] Recording save error:', e.message); }
+    });
+  }
 
   icecastIngest.on('stop', () => {
     if (!audioEngine.isLive) return;
@@ -735,6 +799,7 @@ db.init().then(() => {
     _liveAdminLastPing = 0;
     if (_liveHeartbeatTimer) { clearInterval(_liveHeartbeatTimer); _liveHeartbeatTimer = null; }
     liveWs.injectEnded();
+    _finaliseIcecastRecording();
     _iceMimeType = '';
   });
 

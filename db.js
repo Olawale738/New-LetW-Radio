@@ -199,6 +199,8 @@ function initSchema(sqlDb) {
     // Chat / request moderation
     chat_ban_enabled: '1',
     banned_words: 'fuck,shit,bitch,cunt,nigger,nigga,bastard,whore,slut,cock,dick,pussy,faggot,retard,asshole,motherfucker,bullshit',
+    // Automatically record Icecast/external encoder broadcasts (butt, ffmpeg, etc.)
+    auto_record_icecast: '1',
   };
   for (const [k, v] of Object.entries(defaults)) {
     sqlDb.run(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`, [k, v]);

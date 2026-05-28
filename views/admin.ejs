@@ -2262,7 +2262,9 @@ async function api(method, path, body = null) {
 // =================== STATUS ===================
 function updateStatusUI(s) {
   const pill = document.getElementById('status-pill');
-  const isLive = s.isPlaying;
+  // isLive covers both normal queue playback (isPlaying) and live broadcasts (isLive).
+  // audioEngine.startLive() resets isPlaying=false, so we must check both flags.
+  const isLive = !!(s.isPlaying || s.isLive);
   pill.className = `status-pill ${isLive ? 'live' : 'offline'}`;
   pill.innerHTML = `<div class="dot ${isLive ? 'pulse' : ''}"></div><span>${isLive ? 'LIVE' : 'Offline'}</span>`;
 
@@ -3956,6 +3958,19 @@ socket.on('ban:new', () => {
 
 socket.on('live:ended', () => {
   logActivity('⏹ Live broadcast ended');
+  // Reset the Go Live UI if the broadcast was stopped externally (e.g. Icecast encoder
+  // disconnected or admin heartbeat timeout) rather than by this browser's Stop button.
+  if (!liveMediaRecorder || liveMediaRecorder.state === 'inactive') {
+    setLiveUIState(false);
+  }
+});
+
+// Icecast / external encoder started a broadcast not initiated from this browser.
+socket.on('live:started', (info) => {
+  if (!liveMediaRecorder || liveMediaRecorder.state === 'inactive') {
+    logActivity(`📡 Encoder broadcast started: "${info.title || 'Live Broadcast'}"`);
+    setLiveUIState(true);
+  }
 });
 
 // ── Live quality / health socket events ──────────────────────────────────────
