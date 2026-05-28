@@ -111,7 +111,7 @@ class IcecastIngest {
         try { req.socket.write('HTTP/1.0 200 OK\r\n\r\n'); } catch {}
       } else {
         // PUT uses HTTP/1.1 — use the normal response object
-        res.writeHead(200, { 'Connection': 'close', 'Content-Type': 'application/octet-stream' });
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
         res.flushHeaders();
       }
 
