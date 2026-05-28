@@ -158,7 +158,8 @@ class LiveWsServer {
     this._isLive     = false;
     this._initFrame  = null;
     this._ringBuffer = [];
-    this._seq        = 0;
+    // _seq intentionally kept monotonic — resetting causes duplicate seq numbers
+    // if a listener reconnects before the ENDED frame arrives.
     this._broadcast(makeFrame(TYPE_ENDED, 0, null));
   }
 
@@ -188,10 +189,15 @@ class LiveWsServer {
     ws._hbMissed = 0;
     ws._isAlive  = true;
 
-    // ── Check for admin token in query string ──────────────────────────
-    const urlObj = new URL(req.url, 'http://localhost');
-    const token  = urlObj.searchParams.get('token') ||
-                   (req.headers['x-admin-token'] || '');
+    // ── Authenticate admin — token in query string OR admin_token cookie ──
+    // Browser WebSocket connections automatically send same-origin cookies,
+    // so the admin dashboard can connect without exposing the token in the URL.
+    const urlObj     = new URL(req.url, 'http://localhost');
+    const urlToken   = urlObj.searchParams.get('token') || (req.headers['x-admin-token'] || '');
+    const cookieHdr  = req.headers.cookie || '';
+    const cookieMatch = cookieHdr.match(/(?:^|;)\s*admin_token=([^;]+)/);
+    const cookieToken = cookieMatch ? (() => { try { return decodeURIComponent(cookieMatch[1]).trim(); } catch { return ''; } })() : '';
+    const token      = urlToken || cookieToken;
     if (token === this._sessionToken) {
       ws._role      = 'admin';
       this._adminWs = ws;
@@ -312,7 +318,10 @@ class LiveWsServer {
     if (ws.bufferedAmount > MAX_BACKPRESSURE) return;
 
     ws.send(frame, { binary: true, compress: false }, (err) => {
-      if (err) this._listeners.delete(ws);
+      if (err) {
+        this._listeners.delete(ws);
+        try { ws.terminate(); } catch (_) {}  // evict zombie — close() is graceful but may stall
+      }
     });
   }
 }

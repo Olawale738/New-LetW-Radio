@@ -74,8 +74,48 @@ const errMsg        = ref('')
 const starting      = ref(false)
 const micActive     = ref(false)
 
+// ── Binary WebSocket audio delivery (low-overhead fast path) ──────────────
+// The admin browser connects to /live-ws as an authenticated admin
+// (cookie auth added to liveWs.js — no token in URL needed).
+// Falls back to Socket.IO live:chunk if WS fails.
+const ADMIN_HDR  = 13
+const ADMIN_INIT = 0x02
+const ADMIN_AUD  = 0x03
+
 let mediaRecorder = null
 let micStream     = null
+let adminWs       = null
+let adminWsSeq    = 0
+let chunkCount    = 0     // first chunk = WebM init segment
+let useWsFastPath = false
+
+function makeAdminFrame(type, payload) {
+  const frame = new ArrayBuffer(ADMIN_HDR + payload.byteLength)
+  const v     = new DataView(frame)
+  v.setUint8(0, type)
+  v.setUint32(1, ++adminWsSeq >>> 0, true)
+  const now = Date.now()
+  v.setUint32(5, now >>> 0, true)
+  v.setUint32(9, Math.floor(now / 0x100000000) >>> 0, true)
+  new Uint8Array(frame, ADMIN_HDR).set(new Uint8Array(payload))
+  return frame
+}
+
+function connectAdminWs() {
+  return new Promise((resolve) => {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+    adminWs = new WebSocket(`${proto}//${location.host}/live-ws`)
+    adminWs.binaryType = 'arraybuffer'
+    adminWs.onopen    = () => resolve(true)
+    adminWs.onerror   = () => resolve(false)   // will fall back to Socket.IO
+    adminWs.onclose   = () => { adminWs = null }
+  })
+}
+
+function disconnectAdminWs() {
+  if (adminWs) { try { adminWs.close() } catch {}; adminWs = null }
+  adminWsSeq = 0; chunkCount = 0; useWsFastPath = false
+}
 
 async function goLive() {
   errMsg.value = ''
@@ -96,6 +136,7 @@ async function goLive() {
   const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus']
     .find(m => MediaRecorder.isTypeSupported(m)) || ''
 
+  // Signal server first, then open binary WS in parallel
   socket.emit('live:start', {
     title:    title.value.trim(),
     artist:   artist.value.trim(),
@@ -103,20 +144,35 @@ async function goLive() {
     mimeType: mimeType || 'audio/webm;codecs=opus',
   })
 
+  chunkCount    = 0
+  adminWsSeq    = 0
+  useWsFastPath = await connectAdminWs()   // cookie auth — no token in URL
+
   mediaRecorder = new MediaRecorder(micStream, mimeType ? { mimeType } : {})
   mediaRecorder.ondataavailable = async (e) => {
     if (!e.data || e.data.size === 0) return
-    const buf = await e.data.arrayBuffer()
-    socket.emit('live:chunk', buf)
+    chunkCount++
+    const buf  = await e.data.arrayBuffer()
+    const type = chunkCount === 1 ? ADMIN_INIT : ADMIN_AUD
+    if (useWsFastPath && adminWs?.readyState === WebSocket.OPEN) {
+      adminWs.send(makeAdminFrame(type, buf))   // binary WS fast path
+    } else {
+      socket.emit('live:chunk', buf)             // Socket.IO fallback
+    }
   }
-  mediaRecorder.onerror = () => { errMsg.value = 'Microphone error — broadcast may have dropped.' }
-  mediaRecorder.start(250)
+  mediaRecorder.onerror = (e) => {
+    errMsg.value = 'Microphone error — stopping broadcast.'
+    console.error('[Live] MediaRecorder error:', e)
+    endLive()   // stop cleanly so listeners aren't left with a dead stream
+  }
+  mediaRecorder.start(100)   // 100 ms chunks — lower latency than 250 ms
   micActive.value = true
   starting.value  = false
 }
 
 function stopMic() {
   micActive.value = false
+  disconnectAdminWs()
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     try { mediaRecorder.stop() } catch {}
     mediaRecorder = null

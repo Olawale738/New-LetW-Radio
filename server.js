@@ -476,7 +476,7 @@ io.on('connection', (socket) => {
     // Primary audio delivery path — do NOT also emit via Socket.IO live:audio
     // or every chunk will be appended twice to the listener's SourceBuffer.
     const isInit = audioEngine._liveChunkCount === 1;
-    liveWs.injectChunk(buf, isInit);
+    try { liveWs.injectChunk(buf, isInit); } catch(e) { console.error('[Live] injectChunk error:', e.message); }
 
     // ── Socket.IO ring buffer: keep last ~3 s for late Socket.IO joiners ──
     // IMPORTANT: skip chunk 1 (the WebM EBML header / init segment).
@@ -674,6 +674,8 @@ db.init().then(() => {
   liveWs._audioEngine = audioEngine;
   liveWs._onAdminChunk = (buf) => {
     // Called when admin uploads via binary WS fast path (in addition to Socket.IO)
+    _liveAdminLastPing = Date.now();   // feed the heartbeat watchdog
+    _liveBytesSent    += buf.length;
     if (liveRecordingEnabled && liveRecordingStream) {
       try { liveRecordingStream.write(buf); } catch(e) {}
     }

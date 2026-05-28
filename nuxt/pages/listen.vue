@@ -250,8 +250,10 @@ let liveSbQ: ArrayBuffer[]           = []
 let liveSbBusy                       = false
 let liveWant                         = false  // intent flag: stay connected while true
 let liveDelay                        = 1000   // reconnect backoff (ms)
-let liveRetryT: ReturnType<typeof setTimeout>  | null = null
-let livePingT:  ReturnType<typeof setInterval> | null = null
+let liveRetryT:    ReturnType<typeof setTimeout>  | null = null
+let livePingT:     ReturnType<typeof setInterval> | null = null
+let liveWatchdogT: ReturnType<typeof setInterval> | null = null
+let liveLastAudio  = 0              // epoch ms of last T_AUDIO frame received
 let livePendingMime: string | null   = null
 let livePendingInit: ArrayBuffer | null = null
 const liveConnecting = ref(false)
@@ -299,10 +301,29 @@ function liveSetupSb(mimeType: string) {
       liveTrim()
       liveFlush()
     }
-    liveSb.onerror = () => { liveSbBusy = false }
+    liveSb.onerror = (e) => {
+      liveSbBusy = false
+      console.warn('[Live] SourceBuffer error — will reconnect', e)
+      liveDelay = 1000
+      liveConnect()      // reset and reconnect on SourceBuffer error
+    }
     if (livePendingInit) { liveSbQ.unshift(livePendingInit); livePendingInit = null }
     liveFlush()
   } catch { liveHttpFallback() }
+}
+
+function liveStartWatchdog() {
+  if (liveWatchdogT) clearInterval(liveWatchdogT)
+  liveLastAudio = Date.now()  // initialise so first window doesn't false-fire
+  liveWatchdogT = setInterval(() => {
+    if (!liveWant || !radio.isLive) return
+    const silence = Date.now() - liveLastAudio
+    if (silence > 10_000) {     // 10 s without a T_AUDIO frame → reconnect
+      console.warn('[Live] Watchdog: 10 s silence, reconnecting…')
+      liveDelay = 1000
+      liveConnect()
+    }
+  }, 5000)
 }
 
 function liveConnect() {
@@ -336,6 +357,8 @@ function liveConnect() {
   liveWs.onopen = () => {
     liveDelay = 1000           // reset backoff on success
     liveConnecting.value = false
+    // Tell server we're actively listening (for listener-count tracking)
+    radio.getSocket()?.emit('live:join')
     if (livePingT) clearInterval(livePingT)
     livePingT = setInterval(() => {
       if (liveWs?.readyState === WebSocket.OPEN) {
@@ -344,6 +367,7 @@ function liveConnect() {
         liveWs.send(b)
       }
     }, 15000)  // ping every 15 s to keep the connection through proxies/firewalls
+    liveStartWatchdog()
   }
 
   liveWs.onmessage = ({ data }) => {
@@ -363,7 +387,10 @@ function liveConnect() {
     }
 
     if (frm.type === T_INIT && frm.payload) {
-      // New init segment — reset queue and append
+      // New init segment — abort any in-flight append, reset queue, then push init
+      if (liveSb) {
+        try { if (liveSb.updating) liveSb.abort() } catch {}
+      }
       liveSbQ = []; liveSbBusy = false
       if (!liveSb) { livePendingInit = frm.payload }
       else         { liveSbQ.push(frm.payload); liveFlush() }
@@ -371,6 +398,7 @@ function liveConnect() {
     }
 
     if (frm.type === T_AUDIO && frm.payload && liveSb) {
+      liveLastAudio = Date.now()   // feed the watchdog
       liveSbQ.push(frm.payload)
       liveFlush()
       return
@@ -397,10 +425,20 @@ function liveConnect() {
 
 function liveDisconnect() {
   liveWant = false
-  if (liveRetryT)  { clearTimeout(liveRetryT);    liveRetryT = null }
-  if (livePingT)   { clearInterval(livePingT);     livePingT  = null }
-  if (liveWs)      { try { liveWs.close() } catch {}; liveWs = null }
-  liveSb = null; liveSbQ = []; liveSbBusy = false
+  if (liveRetryT)    { clearTimeout(liveRetryT);    liveRetryT    = null }
+  if (livePingT)     { clearInterval(livePingT);    livePingT     = null }
+  if (liveWatchdogT) { clearInterval(liveWatchdogT); liveWatchdogT = null }
+  radio.getSocket()?.emit('live:leave')      // decrement server listener count
+  if (liveWs) {
+    liveWs.onclose = null                    // suppress reconnect loop in onclose
+    try { liveWs.close() } catch {}
+    liveWs = null
+  }
+  if (liveSb) {
+    try { if (liveSb.updating) liveSb.abort() } catch {}
+    liveSb = null
+  }
+  liveSbQ = []; liveSbBusy = false
   if (liveMs) {
     try { if (liveMs.readyState === 'open') liveMs.endOfStream() } catch {}
     liveMs = null
@@ -535,10 +573,10 @@ function stabilizeBuffer() {
 function onAudioError() {
   if (!radio.isPlaying) return
   if (radio.isLive) {
-    // Live: WebSocket will reconnect automatically; just restart playback
     setTimeout(() => {
       if (!radio.isPlaying || !radio.isLive) return
-      if (liveMseSupported()) { liveConnect() } else { liveHttpFallback() }
+      liveDelay = 1000
+      if (liveMseSupported()) liveConnect() else liveHttpFallback()
     }, 1500)
   } else {
     setTimeout(() => {
@@ -547,6 +585,20 @@ function onAudioError() {
       el.src = getStreamSrc(); el.load(); el.play().catch(() => {})
     }, 3000)
   }
+}
+
+let _stallT: ReturnType<typeof setTimeout> | null = null
+function onAudioStall() {
+  if (!radio.isPlaying || !radio.isLive) return
+  // Debounce — brief stalls are normal during buffering; reconnect only if it persists
+  if (_stallT) return
+  _stallT = setTimeout(() => {
+    _stallT = null
+    if (!radio.isPlaying || !radio.isLive) return
+    console.warn('[Live] Audio stalled — reconnecting WS')
+    liveDelay = 1000
+    if (liveMseSupported()) liveConnect() else liveHttpFallback()
+  }, 4000)
 }
 
 // ── MediaSession API ───────────────────────────────────────────────────────
@@ -749,7 +801,12 @@ onMounted(async () => {
   setupMediaSession()
   setupPush()
 
-  if (audioEl.value) audioEl.value.addEventListener('error', onAudioError)
+  if (audioEl.value) {
+    audioEl.value.addEventListener('error', onAudioError)
+    // Stall/waiting while live → reconnect the WebSocket (not just retry the URL)
+    audioEl.value.addEventListener('stalled', onAudioStall)
+    audioEl.value.addEventListener('waiting', onAudioStall)
+  }
   window.addEventListener('keydown', onKeyDown)
 
   // 2-second live buffer stabilizer — runs every 5s
@@ -768,12 +825,17 @@ onMounted(async () => {
 
 onUnmounted(() => {
   liveDisconnect()
+  if (_stallT) { clearTimeout(_stallT); _stallT = null }
   if (vizRaf) cancelAnimationFrame(vizRaf)
   if (tickerAnim) cancelAnimationFrame(tickerAnim)
   if (flashTimer) clearTimeout(flashTimer)
   if (bufferStabilizer) clearInterval(bufferStabilizer)
   window.removeEventListener('keydown', onKeyDown)
-  if (audioEl.value) audioEl.value.removeEventListener('error', onAudioError)
+  if (audioEl.value) {
+    audioEl.value.removeEventListener('error', onAudioError)
+    audioEl.value.removeEventListener('stalled', onAudioStall)
+    audioEl.value.removeEventListener('waiting', onAudioStall)
+  }
   const socket = radio.getSocket()
   if (socket) socket.off('flash:alert')
 })
