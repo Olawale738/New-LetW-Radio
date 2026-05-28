@@ -18,8 +18,11 @@
             <span v-if="b.ip" class="tag ip">IP: {{ b.ip }}</span>
             <span v-if="b.username" class="tag user">{{ b.username }}</span>
           </div>
-          <div class="ban-reason">{{ b.reason || 'No reason' }}</div>
-          <div class="ban-date">{{ fmtDate(b.createdAt) }}</div>
+          <div class="ban-reason">
+            {{ b.reason || 'No reason' }}
+            <span v-if="b.banned_by === 'auto'" class="tag auto">auto</span>
+          </div>
+          <div class="ban-date">{{ fmtDate(b.banned_at) }}</div>
         </div>
         <button class="unban-btn" @click="unban(b.id)">Unban</button>
       </div>
@@ -28,16 +31,20 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useAdminStore } from '~/stores/admin'
+import { useRadioStore } from '~/stores/radio'
 
 const adminStore = useAdminStore()
+const radioStore = useRadioStore()
 const bans = ref([])
 const form = ref({ ip: '', username: '', reason: '' })
 const msg  = ref('')
 const msgType = ref('ok')
 
 async function load() { bans.value = await adminStore.getBans().catch(() => []) }
+
+function onAutoBan() { load() }
 
 async function addBan() {
   if (!form.value.ip && !form.value.username) { msg.value = 'IP or username required'; msgType.value = 'err'; return }
@@ -56,7 +63,16 @@ async function unban(id) {
 
 function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : '' }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  const socket = radioStore.getSocket()
+  if (socket) socket.on('ban:new', onAutoBan)
+})
+
+onUnmounted(() => {
+  const socket = radioStore.getSocket()
+  if (socket) socket.off('ban:new', onAutoBan)
+})
 </script>
 
 <style scoped>
@@ -77,6 +93,7 @@ onMounted(load)
 .tag { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; }
 .tag.ip   { background: rgba(255,140,0,0.12); color: #ffaa44; border: 1px solid rgba(255,140,0,0.2); }
 .tag.user { background: rgba(212,168,67,0.1);  color: #d4a843; border: 1px solid rgba(212,168,67,0.2); }
+.tag.auto { background: rgba(224,48,96,0.12); color: #ff80a0; border: 1px solid rgba(224,48,96,0.25); margin-left: 6px; }
 .ban-reason { font-size: 12px; color: #f5f0ff; }
 .ban-date   { font-size: 11px; color: #c0a8d8; margin-top: 2px; }
 .unban-btn { padding: 7px 14px; border-radius: 7px; border: 1px solid rgba(100,224,100,0.3); background: rgba(100,224,100,0.08); color: #64e064; font-size: 12px; cursor: pointer; white-space: nowrap; }

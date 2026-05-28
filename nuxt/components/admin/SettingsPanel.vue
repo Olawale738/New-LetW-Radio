@@ -7,6 +7,10 @@
         <div v-for="field in group.fields" :key="field.key" class="field">
           <label class="lbl">{{ field.label }}</label>
           <textarea v-if="field.type === 'textarea'" v-model="form[field.key]" :placeholder="field.placeholder" class="f-textarea" rows="3"></textarea>
+          <select v-else-if="field.type === 'select'" v-model="form[field.key]" class="f-input">
+            <option value="1">Enabled — ban on abuse words</option>
+            <option value="0">Disabled — allow all content</option>
+          </select>
           <input v-else v-model="form[field.key]" :type="field.type || 'text'" :placeholder="field.placeholder" class="f-input" />
           <div v-if="field.hint" class="hint">{{ field.hint }}</div>
         </div>
@@ -59,6 +63,16 @@ const groups = [
       { key: 'push_vapid_public',  label: 'VAPID Public Key',  placeholder: 'VAPID public key' },
       { key: 'push_vapid_private', label: 'VAPID Private Key', placeholder: 'VAPID private key', type: 'password',
         hint: 'Generate with: npx web-push generate-vapid-keys' },
+    ],
+  },
+  {
+    label: 'Content Moderation',
+    fields: [
+      { key: 'chat_ban_enabled', label: 'Auto-ban on abuse words', type: 'select',
+        hint: 'Automatically ban users who send abusive words in chat, song requests, or prayer requests.' },
+      { key: 'banned_words', label: 'Banned Words (comma-separated)', type: 'textarea',
+        placeholder: 'fuck,shit,bitch,…',
+        hint: 'Users sending any of these words will be instantly banned by IP and username.' },
     ],
   },
 ]
