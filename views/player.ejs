@@ -2614,6 +2614,7 @@ let _liveSB       = null;     // SourceBuffer
 let _livePending  = [];       // chunks queued before SourceBuffer is ready
 let _liveUseMS    = false;    // true = using MediaSource; false = HTTP /live-stream fallback
 let _liveMSObjUrl = null;     // ObjectURL to revoke on cleanup
+let _liveFailTO   = null;     // timeout for startLiveViaMS sourceopen watchdog
 
 // ── Binary WebSocket live transport ──────────────────────────
 // Frame protocol: [type:1][seq:4 LE][ts:8 LE][payload...]
@@ -2732,10 +2733,13 @@ const socket = io({ transports: ['websocket', 'polling'] });
 
 socket.on('connect', () => {
   setSignal('Connected');
-  // If already playing, reconnect to the right URL (live or regular stream).
-  // Note: isLive may be false here if the status hasn't arrived yet; it will
-  // be corrected when the 'status' event arrives and applyStatus() runs.
-  if (isPlaying) reconnectAudio(getStreamUrl());
+  // For live streams: don't call reconnectAudio() here. The server immediately
+  // sends a 'status' event on connect, which calls applyStatus() → switchToLiveMode().
+  // switchToLiveMode() sets up the binary WebSocket + MediaSource pipeline properly.
+  // Calling reconnectAudio(LIVE_URL) here would start the HTTP fallback path, then
+  // switchToLiveMode() would tear it down a frame later — causing a brief audio glitch
+  // and sometimes a spurious scheduleLiveReconnect loop.
+  if (isPlaying && !isLive) reconnectAudio(getStreamUrl());
   // Stop polling fallback now that socket is connected
   _stopStatusPoll();
 });
@@ -2807,7 +2811,12 @@ socket.on('live:audio', (data) => {
 // Init chunk (WebM EBML header) sent by the server when the client
 // requests it (live:request-init) or when it first connects mid-broadcast.
 socket.on('live:init', (data) => {
-  if (!isLive || !_liveUseMS || !_liveSB) return;
+  if (!isLive) return;
+  // Buffer even before the SourceBuffer is ready: sourceopen may not have fired
+  // yet when this arrives (server sends status + live:init in the same tick).
+  // _liveFlush() is a no-op until _liveSB exists, but the data will be drained
+  // the moment sourceopen fires and calls _liveFlush().
+  if (!_liveMS && !_liveUseMS) return; // not using MediaSource path — skip
   const buf = _toAB(data);
   if (!buf) return;
   // Prepend so the EBML header is the very first thing appended to the SourceBuffer
@@ -2815,11 +2824,12 @@ socket.on('live:init', (data) => {
   _liveFlush();
 });
 
-// Catchup buffer: a burst of the last ~3 s of audio sent to late-joining listeners
+// Catchup buffer: a burst of the last ~6 s of audio sent to late-joining listeners
 // so MediaSource has enough data to begin decoding without waiting for the next keyframe.
 socket.on('live:catchup', (chunks) => {
-  if (!isLive || !_liveUseMS) return;
+  if (!isLive) return;
   if (!Array.isArray(chunks)) return;
+  if (!_liveMS && !_liveUseMS) return; // not using MediaSource path — skip
   let added = 0;
   for (const chunk of chunks) {
     const buf = _toAB(chunk);
@@ -2972,6 +2982,9 @@ function cleanupLiveMS() {
     try { _liveSB.abort(); } catch(_) {}
     _liveSB = null;
   }
+  // Cancel the sourceopen watchdog so it doesn't fire after cleanup and
+  // trigger a spurious HTTP fallback on the newly-created MediaSource.
+  if (_liveFailTO) { clearTimeout(_liveFailTO); _liveFailTO = null; }
   // Do NOT call endOfStream() — it would fire 'ended' on the audio element
   // and kick off a second competing reconnect loop.  Just orphan the object
   // and let GC collect it.
@@ -2984,6 +2997,10 @@ function cleanupLiveMS() {
 /** Drain one pending chunk into the SourceBuffer (called after each updateend). */
 function _liveFlush() {
   if (!_liveSB || _liveSB.updating || _livePending.length === 0) return;
+  // Guard against stale/closed MediaSource — appendBuffer throws InvalidStateError
+  // if the MediaSource is not in 'open' state (e.g. after cleanupLiveMS was called
+  // on the previous session but sourceopen fired late on the orphaned object).
+  if (!_liveMS || _liveMS.readyState !== 'open') return;
   try {
     // Keep buffer lean: max 3 s total, keep only last 1 s.
     // Tighter limits = less latency between admin voice and listener ear.
@@ -3317,28 +3334,37 @@ function startLiveViaMS() {
     return;
   }
 
-  cleanupLiveMS();
+  cleanupLiveMS(); // clears _liveMS, _liveSB, _liveFailTO, _livePending
 
-  _liveMS = new MediaSource();
+  // Capture in a local variable so the sourceopen callback can verify it is
+  // still the current session.  If cleanupLiveMS() is called before sourceopen
+  // fires (e.g. the user presses Stop or a reconnect cycle starts), the callback
+  // checks `_liveMS !== ms` and exits cleanly instead of throwing on a null ref.
+  const ms = new MediaSource();
+  _liveMS = ms;
 
   // Revoke the OLD ObjectURL now that audio.src is about to change.
-  // Revoking before setting audio.src to the new URL ensures the element
-  // never points to the dead blob for even one tick.
   if (_liveMSObjUrl) {
     try { URL.revokeObjectURL(_liveMSObjUrl); } catch(_) {}
   }
-  _liveMSObjUrl = URL.createObjectURL(_liveMS);
+  _liveMSObjUrl = URL.createObjectURL(ms);
 
-  // Fall back to HTTP if sourceopen doesn't fire within 5 s
-  const failTO = setTimeout(() => {
+  // Watchdog: fall back to HTTP if sourceopen doesn't fire within 5 s.
+  // Tracked in _liveFailTO so cleanupLiveMS() can cancel it if called first.
+  _liveFailTO = setTimeout(() => {
+    _liveFailTO = null;
+    if (_liveMS !== ms) return; // already replaced by a newer session
     cleanupLiveMS();
     if (isLive) reconnectAudio(LIVE_URL);
   }, 5000);
 
-  _liveMS.addEventListener('sourceopen', () => {
-    clearTimeout(failTO);
+  ms.addEventListener('sourceopen', () => {
+    if (_liveFailTO) { clearTimeout(_liveFailTO); _liveFailTO = null; }
+    // Stale-session guard: if cleanupLiveMS() replaced _liveMS before this
+    // callback fired, the reference no longer matches — bail out silently.
+    if (_liveMS !== ms) return;
     try {
-      _liveSB      = _liveMS.addSourceBuffer(mime);
+      _liveSB      = ms.addSourceBuffer(mime);
       _liveSB.mode = 'sequence'; // browser handles timestamps automatically
       _liveSB.addEventListener('updateend', _liveFlush);
       _liveUseMS   = true;
@@ -3350,11 +3376,9 @@ function startLiveViaMS() {
       // Connect live-stream-processor for dropout fade concealment
       _connectLiveWorklet();
 
-      _liveFlush(); // drain any chunks that arrived before sourceopen
+      _liveFlush(); // drain any chunks buffered before sourceopen
     } catch(e) {
-      clearTimeout(failTO);
-      cleanupLiveMS();
-      if (isLive) reconnectAudio(LIVE_URL);
+      if (_liveMS === ms) { cleanupLiveMS(); if (isLive) reconnectAudio(LIVE_URL); }
     }
   }, { once: true });
 
@@ -3911,9 +3935,11 @@ function setJoiningBadge() {
 function startStallTimer() {
   clearStallTimer();
   stallTimer = setTimeout(() => {
-    // If still buffering after 4 s on the REGULAR stream, force a reconnect.
-    // (Live streams use startLiveStallTimer which has a longer grace period.)
-    if (isPlaying && !isLive) {
+    // Only reconnect if the stall is genuine — readyState < 3 (HAVE_FUTURE_DATA)
+    // means the browser truly doesn't have enough data to continue playing.
+    // If readyState recovered to 3 or 4 while the timer was pending, the stall
+    // resolved itself and we must NOT tear down a working stream.
+    if (isPlaying && !isLive && audio.readyState < 3) {
       audio.src = getStreamUrl();
       audio.load();
       audio.play().catch(() => scheduleReconnect());
@@ -3921,15 +3947,17 @@ function startStallTimer() {
   }, 4000);
 }
 
-// Live-stream stall watchdog — 8 s grace period.
+// Live-stream stall watchdog — 5 s grace period.
 // The normal decoder-init gap between the WebM header and the first audio
-// cluster is ~100–300 ms.  8 s is safely above that while still catching
-// genuine network stalls quickly.
+// cluster is ~100–300 ms.  5 s catches genuine network stalls faster than the
+// previous 8 s while still being well above the normal buffering gap.
+// The MediaSource race conditions that used to cause false positives here have
+// been fixed (stale-session guard in startLiveViaMS), so 5 s is safe.
 function startLiveStallTimer() {
   clearStallTimer();
   stallTimer = setTimeout(() => {
     if (isLive) scheduleLiveReconnect(0);
-  }, 8000);
+  }, 5000);
 }
 
 function clearStallTimer() {

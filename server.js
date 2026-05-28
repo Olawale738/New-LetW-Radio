@@ -18,9 +18,12 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*', methods: ['GET', 'POST'] },
-  // Tighter timeouts: detect dead connections 4× faster than the default
-  pingTimeout: 10000,
-  pingInterval: 5000,
+  // Ping every 20 s; allow 15 s for a pong before declaring the socket dead.
+  // This tolerates 15-second mobile network gaps (3G, subway, elevators) without
+  // dropping the connection.  Dead sockets are still evicted within ~35 s which
+  // is accurate enough for the listener-count display.
+  pingInterval: 20000,
+  pingTimeout:  15000,
   // Prefer WebSocket transport — skip the long-polling handshake round-trip
   transports: ['websocket', 'polling'],
 });
@@ -239,9 +242,13 @@ app.get('/stream', (req, res) => {
   console.log(`[Stream] Client connected: ${clientId} | ICY: ${wantsIcy}`);
   audioEngine.addClient(clientId, res, wantsIcy, settings);
 
-  // Send keep-alive comment every 15s to prevent proxy/CDN timeouts
+  // Keep-alive: write a single null byte every 15 s so Render's 30 s idle proxy
+  // timeout never fires during the brief gap between tracks.  Buffer.alloc(0) sends
+  // no TCP data in chunked mode (zero-length chunk = end-of-stream signal), so
+  // we must write at least one byte to actually flush a packet.  A null byte
+  // between MP3 frames is discarded by all standard decoders.
   const kaTimer = setInterval(() => {
-    try { res.write(Buffer.alloc(0)); } catch(e) { clearInterval(kaTimer); }
+    try { res.write(Buffer.alloc(1)); } catch(e) { clearInterval(kaTimer); }
   }, 15000);
   res.on('close', () => clearInterval(kaTimer));
 });

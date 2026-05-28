@@ -2149,6 +2149,11 @@ const socket = io({ auth: { token: getAdminToken() } });
 // We do NOT re-start recording (record:false) because liveRecordingStream on the
 // server side is still open from the original session.
 socket.on('connect', () => {
+  // When _liveWasReconnecting is true, the second connect handler (near the Go Live
+  // section) will re-announce with the correct mimeType.  Skip here to avoid
+  // emitting live:start twice on reconnect, which resets the server's init chunk
+  // and confuses listeners who are already streaming.
+  if (typeof _liveWasReconnecting !== 'undefined' && _liveWasReconnecting) return;
   if (liveMediaRecorder && liveMediaRecorder.state === 'recording') {
     const title       = document.getElementById('live-title').value.trim()  || 'Live Broadcast';
     const artist      = document.getElementById('live-artist').value.trim() || 'Light Encounter Tabernacle Worldwide';
