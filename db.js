@@ -4,7 +4,9 @@ const initSqlJs = require('sql.js');
 const path = require('path');
 const fs = require('fs');
 
-const DATA_DIR = path.join(__dirname, 'data');
+// Store DB inside uploads/ so it lives on Render's persistent disk.
+// uploads/ is the only directory that survives redeploys on Render.
+const DATA_DIR = path.join(__dirname, 'uploads', '.db');
 const DB_FILE = path.join(DATA_DIR, 'radio.db');
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });

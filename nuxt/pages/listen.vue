@@ -178,6 +178,13 @@
       </a>
     </div>
 
+    <!-- Devotion banner -->
+    <div class="devotion-row">
+      <a href="https://devotion.letw.org/" target="_blank" rel="noopener" class="devotion-btn">
+        📖 Daily Devotion — devotion.letw.org
+      </a>
+    </div>
+
     <!-- Share drawer -->
     <Transition name="fade"><div v-if="shareOpen" class="share-backdrop" @click="closeShare"></div></Transition>
     <Transition name="slide-up">
@@ -986,6 +993,9 @@ onUnmounted(() => {
 .social-row { padding: 10px 16px; display: flex; justify-content: center; }
 .yt-btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; border-radius: 10px; background: rgba(255,0,0,0.08); border: 1px solid rgba(255,0,0,0.25); color: #ff4444; font-size: 13px; font-weight: 600; text-decoration: none; transition: background 0.2s; }
 .yt-btn:hover { background: rgba(255,0,0,0.16); }
+.devotion-row { padding: 10px 16px; display: flex; justify-content: center; }
+.devotion-btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; border-radius: 10px; background: rgba(212,168,67,0.08); border: 1px solid rgba(212,168,67,0.3); color: #d4a843; font-size: 13px; font-weight: 600; text-decoration: none; transition: background 0.2s; width: 100%; justify-content: center; }
+.devotion-btn:hover { background: rgba(212,168,67,0.16); }
 .share-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; }
 .share-drawer { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 520px; background: #1a1020; border-radius: 20px 20px 0 0; border: 1px solid rgba(212,168,67,0.2); padding: 20px; z-index: 101; }
 .share-header { display: flex; justify-content: space-between; align-items: center; font-size: 15px; font-weight: 700; color: #f5f0ff; margin-bottom: 16px; }
