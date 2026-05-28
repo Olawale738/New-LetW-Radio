@@ -44,6 +44,8 @@ export const useRadioStore = defineStore('radio', () => {
     socket.on('live:started', (info: any) => { isLive.value = true; liveInfo.value = info })
     socket.on('live:ended', () => { isLive.value = false; liveInfo.value = null })
     socket.on('listenerChange', (c: number) => { listeners.value = c })
+    // live:listener-count is emitted by the server specifically for active live viewers
+    socket.on('live:listener-count', (c: number) => { if (isLive.value) listeners.value = c })
 
     socket.on('chatMessage', (msg: any) => {
       chatMessages.value.push(msg)

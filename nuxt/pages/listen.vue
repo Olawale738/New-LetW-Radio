@@ -241,6 +241,7 @@ let vizRaf: number | null = null
 // Falls back to HTTP /live-stream if MSE is unsupported.
 const T_HELLO = 0x01, T_INIT = 0x02, T_AUDIO = 0x03, T_ENDED = 0x04, T_PONG = 0x06
 const LIVE_HDR = 13          // frame header size in bytes
+const PING_PAYLOAD = 8       // 8 bytes of ms timestamp embedded in ping payload
 
 let liveWs: WebSocket | null         = null
 let liveMs: MediaSource | null       = null
@@ -260,6 +261,7 @@ let livePendingMime: string | null   = null
 let livePendingInit: ArrayBuffer | null = null
 const liveConnecting     = ref(false)
 const liveReconnectCount = ref(0)
+const liveLatencyMs      = ref(0)   // round-trip ms from ping/pong (0 = not yet measured)
 
 function liveParseFrame(buf: ArrayBuffer) {
   if (buf.byteLength < 1) return null
@@ -383,12 +385,18 @@ function liveConnect() {
     if (livePingT) clearInterval(livePingT)
     livePingT = setInterval(() => {
       if (liveWs?.readyState === WebSocket.OPEN) {
-        const b = new ArrayBuffer(LIVE_HDR)
-        new DataView(b).setUint8(0, 0x05)   // TYPE_PING
-        livePingTime = Date.now()
+        // Embed send-time in ping payload so pong echo gives accurate RTT.
+        // Old code left bytes 1-12 as zeros → echo decoded as ts=0 → latency=Date.now().
+        const now = Date.now()
+        const b   = new ArrayBuffer(LIVE_HDR + PING_PAYLOAD)
+        const v   = new DataView(b)
+        v.setUint8(0, 0x05)                                    // TYPE_PING
+        v.setUint32(LIVE_HDR,     now >>> 0,                         true)  // lo32
+        v.setUint32(LIVE_HDR + 4, Math.floor(now / 0x100000000) >>> 0, true)  // hi32
+        livePingTime = now
         liveWs.send(b)
       }
-    }, 15000)  // ping every 15 s to keep the connection through proxies/firewalls
+    }, 15000)  // ping every 15 s to keep the connection alive through proxies
     liveStartWatchdog()
   }
 
@@ -431,13 +439,14 @@ function liveConnect() {
     }
 
     if (frm.type === T_PONG) {
-      // Clamp RTT to valid range — prevents bogus latency values (server epoch leak)
+      // Payload is the echo of our ping payload (bytes 1-onward from the PING frame).
+      // The first PING_PAYLOAD bytes of that echo are our embedded ms timestamp.
+      // frm.payload starts at LIVE_HDR offset, so our ts is at payload[LIVE_HDR-1 .. LIVE_HDR+7].
+      // Simpler: just use livePingTime which we saved when we sent the ping.
       if (livePingTime > 0) {
         const rtt = Date.now() - livePingTime
-        if (rtt < 0 || rtt > 30000) {
-          console.warn('[Live] Ignoring out-of-range PONG RTT:', rtt, 'ms')
-        }
         livePingTime = 0
+        if (rtt >= 0 && rtt <= 30000) liveLatencyMs.value = rtt
       }
       return
     }
@@ -488,6 +497,7 @@ function liveDisconnect() {
   liveConnecting.value     = false
   liveReconnectCount.value = 0
   liveLastAudio            = 0
+  liveLatencyMs.value      = 0
 }
 
 function liveStopAndSwitch() {

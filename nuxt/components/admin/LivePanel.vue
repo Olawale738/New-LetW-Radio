@@ -78,9 +78,10 @@ const micActive     = ref(false)
 // The admin browser connects to /live-ws as an authenticated admin
 // (cookie auth added to liveWs.js — no token in URL needed).
 // Falls back to Socket.IO live:chunk if WS fails.
-const ADMIN_HDR  = 13
-const ADMIN_INIT = 0x02
-const ADMIN_AUD  = 0x03
+const ADMIN_HDR      = 13
+const ADMIN_INIT     = 0x02
+const ADMIN_AUD      = 0x03
+const TYPE_ADMIN_ACK = 0x07   // server sends to confirm cookie auth succeeded
 
 let mediaRecorder = null
 let micStream     = null
@@ -104,11 +105,28 @@ function makeAdminFrame(type, payload) {
 function connectAdminWs() {
   return new Promise((resolve) => {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    adminWs = new WebSocket(`${proto}//${location.host}/live-ws`)
+    try { adminWs = new WebSocket(`${proto}//${location.host}/live-ws`) }
+    catch { return resolve(false) }
     adminWs.binaryType = 'arraybuffer'
-    adminWs.onopen    = () => resolve(true)
-    adminWs.onerror   = () => resolve(false)   // will fall back to Socket.IO
-    adminWs.onclose   = () => { adminWs = null }
+
+    // Wait for server's TYPE_ADMIN_ACK confirming cookie auth.
+    // Without ACK the connection was accepted as a listener, not admin —
+    // audio frames sent via this socket would be silently dropped.
+    const ackTimeout = setTimeout(() => {
+      // No ACK in 3 s → not authenticated as admin → use Socket.IO fallback
+      resolve(false)
+    }, 3000)
+
+    adminWs.onopen = () => {}  // don't resolve yet; wait for ACK
+    adminWs.onmessage = (e) => {
+      if (!(e.data instanceof ArrayBuffer) || e.data.byteLength < 1) return
+      if (new DataView(e.data).getUint8(0) === TYPE_ADMIN_ACK) {
+        clearTimeout(ackTimeout)
+        resolve(true)           // confirmed as admin — safe to use fast path
+      }
+    }
+    adminWs.onerror = () => { clearTimeout(ackTimeout); resolve(false) }
+    adminWs.onclose = () => { clearTimeout(ackTimeout); adminWs = null }
   })
 }
 

@@ -49,12 +49,13 @@
 const WebSocket = require('ws');
 
 // ─── Frame type constants ───────────────────────────────────────────────────
-const TYPE_HELLO = 0x01;
-const TYPE_INIT  = 0x02;
-const TYPE_AUDIO = 0x03;
-const TYPE_ENDED = 0x04;
-const TYPE_PING  = 0x05;
-const TYPE_PONG  = 0x06;
+const TYPE_HELLO     = 0x01;
+const TYPE_INIT      = 0x02;
+const TYPE_AUDIO     = 0x03;
+const TYPE_ENDED     = 0x04;
+const TYPE_PING      = 0x05;
+const TYPE_PONG      = 0x06;
+const TYPE_ADMIN_ACK = 0x07;  // server→admin: confirms cookie auth succeeded
 
 const HEADER_SIZE = 13; // type(1) + seq(4) + ts(8)
 
@@ -201,6 +202,10 @@ class LiveWsServer {
     if (token === this._sessionToken) {
       ws._role      = 'admin';
       this._adminWs = ws;
+      // Confirm successful auth so the admin browser knows to use the fast path.
+      // Without this ACK the client can't distinguish "connected as admin" from
+      // "connected as listener" — it would silently drop all audio frames.
+      this._safeSend(ws, makeFrame(TYPE_ADMIN_ACK, 0, null));
       console.log('[LiveWS] Admin connected via binary WebSocket');
     } else {
       this._listeners.add(ws);
@@ -337,5 +342,6 @@ module.exports = {
   TYPE_ENDED,
   TYPE_PING,
   TYPE_PONG,
+  TYPE_ADMIN_ACK,
   HEADER_SIZE,
 };
