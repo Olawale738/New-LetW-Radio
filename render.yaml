@@ -3,7 +3,7 @@ services:
     name: online-radio
     env: node
     plan: starter
-    buildCommand: npm install && npm run build
+    buildCommand: npm install && mkdir -p bin && curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux" -o bin/yt-dlp && chmod +x bin/yt-dlp && npm run build
     startCommand: npm start
     healthCheckPath: /api/status
     envVars:
@@ -16,6 +16,8 @@ services:
         # Set this to your admin password in the Render dashboard.
         # If not set, the app falls back to the default password.
         value: Segun123@
+      - key: YTDLP_PATH
+        value: /opt/render/project/src/bin/yt-dlp
     disk:
       name: radio-data
       mountPath: /opt/render/project/src/uploads

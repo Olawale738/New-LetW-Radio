@@ -2320,12 +2320,15 @@ const COLORS = ['#00e5ff','#ff6d3b','#00e676','#d500f9','#ffea00','#ff1744','#7c
 
 // =================== SOCKET ===================
 const socket = io({
-  auth: { token: getAdminToken() },
-  reconnection: true,
+  auth:                 { token: getAdminToken() },
+  transports:           ['websocket', 'polling'],  // WebSocket first — skip polling handshake
+  upgrade:              true,
+  rememberUpgrade:      true,   // go straight to WS on subsequent connects
+  reconnection:         true,
   reconnectionAttempts: Infinity,  // never give up — admin may run for hours
-  reconnectionDelay: 1000,         // first retry after 1 s
-  reconnectionDelayMax: 5000,      // cap backoff at 5 s so recovery stays snappy
-  timeout: 20000,
+  reconnectionDelay:    1000,      // first retry after 1 s
+  reconnectionDelayMax: 3000,      // cap at 3 s so live broadcast gaps are tiny
+  timeout:              20000,
 });
 
 // Force an immediate reconnect the moment connectivity returns (network switch,

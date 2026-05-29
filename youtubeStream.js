@@ -43,14 +43,15 @@ process.env.YTDL_NO_UPDATE = process.env.YTDL_NO_UPDATE || '1';
 
 const { EventEmitter } = require('events');
 const { spawn, execFile } = require('child_process');
-const fs = require('fs');
+const fs   = require('fs');
+const path = require('path');
 const ffmpegPath = require('ffmpeg-static');
 
 const OUTPUT_MIME   = 'audio/webm;codecs=opus';
 const FLUSH_MS      = 100;          // coalesce stdout into ~100 ms frames
 const MAX_BACKOFF   = 15000;        // cap reconnect delay at 15 s
 const RESOLVE_TMO   = 30000;        // yt-dlp / ytdl resolve timeout
-const NO_DATA_TMO   = parseInt(process.env.YT_NODATA_MS, 10) || 25000; // recycle if ffmpeg connects but sends no audio
+const NO_DATA_TMO   = parseInt(process.env.YT_NODATA_MS, 10) || 35000; // recycle if ffmpeg connects but sends no audio
 
 class YouTubeStream extends EventEmitter {
   constructor() {
@@ -177,23 +178,28 @@ class YouTubeStream extends EventEmitter {
     this._buf = []; this._bufLen = 0;
 
     // Input flags:
-    //   • -reconnect*  keep plain HTTPS media streams alive through brief drops
-    //                  (HLS reconnects natively via the playlist, so skip there).
-    //   • -re          for a finite VOD, read the input at its native rate so it
-    //                  plays in realtime like a normal track instead of being
-    //                  transcoded (and thus broadcast) at download speed.
-    const reconnect = isHls ? [] : ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5'];
+    //   • HLS live: reconnect at EOF (playlist refresh stalls), on network errors;
+    //     long timeouts tolerate slow segment CDNs without spurious disconnects.
+    //   • Plain HTTPS: reconnect on drops; shorter timeout is fine for non-HLS.
+    //   • -re: for finite VODs only, pace at realtime to avoid instant rebroadcast.
+    const reconnect = isHls
+      ? ['-reconnect', '1', '-reconnect_at_eof', '1', '-reconnect_streamed', '1',
+         '-reconnect_on_network_error', '1', '-reconnect_delay_max', '5',
+         '-timeout', '60000000', '-rw_timeout', '30000000']
+      : ['-reconnect', '1', '-reconnect_streamed', '1',
+         '-reconnect_delay_max', '5', '-timeout', '30000000'];
     const realtime  = this._isLiveSource ? [] : ['-re'];
     const inputArgs = [...reconnect, ...realtime, '-i', mediaUrl];
 
     const args = [
       '-hide_banner', '-loglevel', 'error',
-      '-user_agent', 'Mozilla/5.0 (LETW Radio Relay)',
+      '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       ...inputArgs,
-      '-vn',                              // drop any video
-      '-c:a', 'libopus', '-b:a', '128k',
+      '-vn',                                // drop any video
+      '-c:a', 'libopus', '-b:a', '160k',   // 160 kbps → broadcast-grade audio quality
       '-ar', '48000', '-ac', '2',
-      '-application', 'audio',            // libopus: optimise for music quality
+      '-application', 'audio',              // libopus: optimise for music
+      '-frame_drop_threshold', '999.0',     // never drop frames; tolerate timing jitter
       '-f', 'webm',
       '-flush_packets', '1',
       'pipe:1',
@@ -418,8 +424,10 @@ class YouTubeStream extends EventEmitter {
       const resp = await fetch(url, {
         redirect: 'follow',
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+          'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           'Accept-Language': 'en-US,en;q=0.9',
+          'Cookie':          'CONSENT=YES+1; SOCS=CAI',
         },
         signal,
       });
@@ -447,9 +455,9 @@ class YouTubeStream extends EventEmitter {
   _findYtDlp() {
     const cand = process.env.YTDLP_PATH;
     if (cand && fs.existsSync(cand)) return cand;
-    // Common drop-in locations on the persistent disk.
     for (const p of [
-      '/opt/render/project/src/uploads/bin/yt-dlp',
+      path.join(__dirname, 'bin', 'yt-dlp'),          // downloaded during Render build
+      '/opt/render/project/src/uploads/bin/yt-dlp',   // Render persistent disk
       '/opt/render/project/src/yt-dlp',
     ]) { try { if (fs.existsSync(p)) return p; } catch {} }
     return null;

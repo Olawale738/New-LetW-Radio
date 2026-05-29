@@ -20,15 +20,26 @@ const youtubeStream = require('./youtubeStream');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: '*', methods: ['GET', 'POST'] },
-  // Ping every 20 s; allow 15 s for a pong before declaring the socket dead.
-  // This tolerates 15-second mobile network gaps (3G, subway, elevators) without
-  // dropping the connection.  Dead sockets are still evicted within ~35 s which
-  // is accurate enough for the listener-count display.
-  pingInterval: 20000,
-  pingTimeout:  15000,
-  // Prefer WebSocket transport — skip the long-polling handshake round-trip
-  transports: ['websocket', 'polling'],
+  cors:                { origin: '*', methods: ['GET', 'POST'] },
+  // Ping every 20 s; allow 20 s for a pong before declaring the socket dead.
+  // 20+20 = 40 s total tolerance — covers mobile network hand-offs, subway gaps,
+  // and Render's own keep-alive window without false-positive evictions.
+  pingInterval:        20000,
+  pingTimeout:         20000,
+  // Large buffer for binary audio chunks (default 1 MB is too small for
+  // high-quality webm frames sent in a burst on reconnect).
+  maxHttpBufferSize:   10 * 1024 * 1024,  // 10 MB
+  upgradeTimeout:      10000,
+  connectTimeout:      45000,
+  // Prefer WebSocket — skip the long-polling handshake round-trip.
+  transports:          ['websocket', 'polling'],
+  // Session recovery: if admin or listener reconnects within 2 min, the server
+  // replays missed events (status, trackStart, live:started etc.) automatically.
+  // The client socket ID stays the same so no extra client-side logic is needed.
+  connectionStateRecovery: {
+    maxDisconnectionDuration: 2 * 60 * 1000,
+    skipMiddlewares:          true,
+  },
 });
 
 const PORT = process.env.PORT || 3000;

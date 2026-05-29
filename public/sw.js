@@ -34,8 +34,13 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // Never cache the stream — always fetch live
-  if (url.pathname === '/stream') {
+  // Never cache any live or streaming endpoints
+  if (
+    url.pathname === '/stream' ||
+    url.pathname === '/live-stream' ||
+    url.pathname.startsWith('/live-ws') ||
+    url.pathname.startsWith('/socket.io/')
+  ) {
     event.respondWith(fetch(event.request));
     return;
   }
