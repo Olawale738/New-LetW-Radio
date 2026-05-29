@@ -866,6 +866,9 @@
   <div class="nav-item" data-page="streams">
     <span class="nav-icon">📡</span><span>Streams</span>
   </div>
+  <div class="nav-item" data-page="sermons">
+    <span class="nav-icon">🎧</span><span>Sermons</span>
+  </div>
   <div class="nav-item" data-page="history">
     <span class="nav-icon">📜</span><span>History</span>
   </div>
@@ -1247,6 +1250,77 @@
     </div>
 
     <!-- ===== HISTORY ===== -->
+    <!-- ===== SERMONS / RECORDINGS ===== -->
+    <div class="page" id="page-sermons">
+      <div class="card" style="margin-bottom:16px;">
+        <div style="display:flex;gap:14px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:120px;text-align:center;">
+            <div id="serm-stat-total" style="font-size:26px;font-weight:900;color:var(--accent,#00e5ff);">0</div>
+            <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;">Total Recordings</div>
+          </div>
+          <div style="flex:1;min-width:120px;text-align:center;">
+            <div id="serm-stat-published" style="font-size:26px;font-weight:900;color:#00e676;">0</div>
+            <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;">Published</div>
+          </div>
+          <div style="flex:1;min-width:120px;text-align:center;">
+            <div id="serm-stat-hidden" style="font-size:26px;font-weight:900;color:#d4a843;">0</div>
+            <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;">Unpublished</div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">🎧 Sermons &amp; Recordings</div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input class="form-control" id="serm-search" placeholder="Search title or speaker…"
+                   oninput="renderSermons()" style="width:200px;height:34px;font-size:13px;">
+            <a class="btn btn-secondary btn-sm" href="/api/sermons/rss" target="_blank" title="Podcast RSS feed">🔗 RSS</a>
+            <button class="btn btn-secondary btn-sm" onclick="loadSermons()">Refresh</button>
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:12px;">
+          Recorded live broadcasts appear here automatically. Publish them to show on the public
+          <strong>Sermons</strong> tab and the podcast RSS feed.
+        </div>
+        <div id="sermons-list">
+          <div class="empty-state"><div class="empty-icon">🎧</div><div class="empty-title">No recordings yet</div>
+            <div style="font-size:12px;color:var(--text3);margin-top:6px;">Recordings of live broadcasts will show up here.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sermon edit modal -->
+    <div class="modal-overlay" id="sermon-modal">
+      <div class="modal">
+        <div class="modal-title"><span>Edit Recording</span> <span class="modal-close" onclick="closeModal('sermon-modal')">✕</span></div>
+        <input type="hidden" id="serm-edit-id">
+        <div class="form-group">
+          <label class="form-label">Title</label>
+          <input class="form-control" id="serm-title" placeholder="Sunday Service — 25 May">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Speaker / Minister</label>
+          <input class="form-control" id="serm-speaker" placeholder="Pastor …">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Description</label>
+          <textarea class="form-control" id="serm-desc" rows="3" placeholder="Short summary of the message…"></textarea>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Tags <span style="color:var(--text3);font-weight:400;">(comma-separated)</span></label>
+          <input class="form-control" id="serm-tags" placeholder="faith, healing, sunday">
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin-bottom:6px;">
+          <input type="checkbox" id="serm-active" style="width:16px;height:16px;"> Published (visible to listeners)
+        </label>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px;">
+          <button class="btn btn-secondary" onclick="closeModal('sermon-modal')">Cancel</button>
+          <button class="btn btn-primary" onclick="saveSermon()">Save</button>
+        </div>
+      </div>
+    </div>
+
     <div class="page" id="page-history">
       <div class="card">
         <div class="card-header">
@@ -2238,7 +2312,8 @@ function navigate(page) {
     dailygen: 'Daily Generation', history: 'History', settings: 'Settings',
     golive: '🎙️ Go Live — Browser Broadcast',
     community: '💬 Community',
-    streams: '📡 Radio Channels'
+    streams: '📡 Radio Channels',
+    sermons: '🎧 Sermons & Recordings'
   };
   document.getElementById('topbar-title').textContent = titles[page] || page;
 
@@ -2259,7 +2334,8 @@ function navigate(page) {
     dailygen: () => { document.getElementById('dailygen-date').valueAsDate = new Date(); loadDailyGen(); },
     golive: initGoLivePage,
     community: loadCommunity,
-    streams: loadAdminStreams
+    streams: loadAdminStreams,
+    sermons: loadSermons
   };
   if (loaders[page]) loaders[page]();
 }
@@ -3003,6 +3079,143 @@ async function loadHistory() {
         <div class="history-artist">${esc(r.artist)}</div>
       </div>
     </div>`).join('');
+}
+
+// =================== SERMONS / RECORDINGS ===================
+let _sermonsCache = [];      // full archive (incl. unpublished) from the API
+let _sermPreviewId = null;    // id currently previewing (or null)
+
+function _fmtBytes(b) {
+  if (!b) return '';
+  if (b < 1024*1024) return (b/1024).toFixed(0) + ' KB';
+  return (b/1024/1024).toFixed(1) + ' MB';
+}
+
+async function loadSermons() {
+  try {
+    // ?all=1 returns unpublished recordings too (admin-only on the server).
+    _sermonsCache = await api('GET', '/sermons?all=1');
+  } catch (e) {
+    _sermonsCache = [];
+    toast('Could not load recordings: ' + e.message, 'error');
+  }
+  // Update the summary counters
+  const total = _sermonsCache.length;
+  const pub   = _sermonsCache.filter(s => s.active == 1).length;
+  document.getElementById('serm-stat-total').textContent     = total;
+  document.getElementById('serm-stat-published').textContent = pub;
+  document.getElementById('serm-stat-hidden').textContent    = total - pub;
+  renderSermons();
+}
+
+function renderSermons() {
+  const el = document.getElementById('sermons-list');
+  if (!el) return;
+  const q = (document.getElementById('serm-search')?.value || '').trim().toLowerCase();
+  let list = _sermonsCache;
+  if (q) list = list.filter(s =>
+    (s.title || '').toLowerCase().includes(q) ||
+    (s.speaker || '').toLowerCase().includes(q));
+
+  if (!list.length) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">🎧</div>
+      <div class="empty-title">${q ? 'No matching recordings' : 'No recordings yet'}</div>
+      <div style="font-size:12px;color:var(--text3);margin-top:6px;">${q ? 'Try a different search.' : 'Recordings of live broadcasts will show up here.'}</div></div>`;
+    return;
+  }
+
+  el.innerHTML = list.map(s => {
+    const date = s.recorded_at ? new Date(s.recorded_at).toLocaleString([], {month:'short',day:'numeric',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
+    const dur  = s.duration ? formatDuration(s.duration) : '';
+    const size = _fmtBytes(s.file_size);
+    const meta = [date, dur, size].filter(Boolean).join(' · ');
+    const published = s.active == 1;
+    const isPreviewing = _sermPreviewId === s.id;
+    const tagHtml = (s.tags || '').split(',').map(t => t.trim()).filter(Boolean)
+      .map(t => `<span style="background:rgba(124,77,255,0.15);color:#b39dff;font-size:10px;padding:2px 7px;border-radius:8px;">${esc(t)}</span>`).join(' ');
+    return `
+    <div class="history-item" style="align-items:flex-start;gap:12px;">
+      <button class="btn btn-secondary btn-sm" onclick="previewSermon('${s.id}')" title="Preview"
+        style="min-width:38px;">${isPreviewing ? '⏸' : '▶'}</button>
+      <div style="flex:1;min-width:0;">
+        <div class="history-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          ${esc(s.title)}
+          <span style="font-size:10px;font-weight:800;padding:2px 8px;border-radius:10px;${published
+            ? 'background:rgba(0,230,118,0.15);color:#00e676;'
+            : 'background:rgba(212,168,67,0.15);color:#d4a843;'}">${published ? 'PUBLISHED' : 'HIDDEN'}</span>
+        </div>
+        <div class="history-artist">${esc(s.speaker || '—')}${meta ? ' · ' + meta : ''}</div>
+        ${tagHtml ? `<div style="margin-top:5px;display:flex;gap:5px;flex-wrap:wrap;">${tagHtml}</div>` : ''}
+        ${isPreviewing ? `<audio id="serm-audio-${s.id}" controls autoplay style="width:100%;margin-top:8px;height:36px;" src="${esc(s.file_path)}"></audio>` : ''}
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0;">
+        <button class="btn btn-secondary btn-sm" onclick="editSermon('${s.id}')" title="Edit">✏️</button>
+        <button class="btn btn-secondary btn-sm" onclick="toggleSermonPublish('${s.id}')" title="${published ? 'Unpublish' : 'Publish'}">${published ? '🙈' : '📢'}</button>
+        <button class="btn btn-secondary btn-sm" onclick="deleteSermon('${s.id}')" title="Delete permanently" style="color:#ff5b73;">🗑</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function previewSermon(id) {
+  // Toggle off if already previewing this one
+  if (_sermPreviewId === id) { _sermPreviewId = null; renderSermons(); return; }
+  _sermPreviewId = id;
+  renderSermons();  // re-render so the inline <audio autoplay> appears for this row
+}
+
+function editSermon(id) {
+  const s = _sermonsCache.find(x => x.id === id);
+  if (!s) return;
+  document.getElementById('serm-edit-id').value = s.id;
+  document.getElementById('serm-title').value   = s.title || '';
+  document.getElementById('serm-speaker').value = s.speaker || '';
+  document.getElementById('serm-desc').value    = s.description || '';
+  document.getElementById('serm-tags').value    = s.tags || '';
+  document.getElementById('serm-active').checked = s.active == 1;
+  openModal('sermon-modal');
+}
+
+async function saveSermon() {
+  const id = document.getElementById('serm-edit-id').value;
+  const title = document.getElementById('serm-title').value.trim();
+  if (!title) { toast('Title is required', 'error'); return; }
+  const body = {
+    title,
+    speaker:     document.getElementById('serm-speaker').value.trim(),
+    description: document.getElementById('serm-desc').value.trim(),
+    tags:        document.getElementById('serm-tags').value.trim(),
+    active:      document.getElementById('serm-active').checked
+  };
+  try {
+    await api('PUT', '/sermons/' + id, body);
+    closeModal('sermon-modal');
+    toast('Recording saved', 'success');
+    loadSermons();
+  } catch (e) { toast('Save failed: ' + e.message, 'error'); }
+}
+
+async function toggleSermonPublish(id) {
+  const s = _sermonsCache.find(x => x.id === id);
+  if (!s) return;
+  const next = !(s.active == 1);
+  try {
+    await api('PUT', '/sermons/' + id, { active: next });
+    toast(next ? 'Published to listeners' : 'Hidden from listeners', 'success');
+    loadSermons();
+  } catch (e) { toast('Update failed: ' + e.message, 'error'); }
+}
+
+async function deleteSermon(id) {
+  const s = _sermonsCache.find(x => x.id === id);
+  if (!s) return;
+  if (!confirm(`Permanently remove "${s.title}" from the sermon archive?\n\nThe audio file itself is kept on disk.`)) return;
+  try {
+    await api('DELETE', '/sermons/' + id + '?hard=1');
+    if (_sermPreviewId === id) _sermPreviewId = null;
+    toast('Recording removed', 'success');
+    loadSermons();
+  } catch (e) { toast('Delete failed: ' + e.message, 'error'); }
 }
 
 // =================== SETTINGS ===================

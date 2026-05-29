@@ -16,13 +16,16 @@ function setIo(ioInstance) { _io = ioInstance; }
 const _ADMIN_PW    = process.env.ADMIN_PASSWORD || 'Segun123@';
 const _ADMIN_TOKEN = Buffer.from(_ADMIN_PW).toString('base64');
 
-function requireAdmin(req, res, next) {
+function _isAdminReq(req) {
   const cookieHeader = req.headers.cookie || '';
   const match = cookieHeader.match(/admin_token=([^;]+)/);
   const fromCookie = match ? (() => { try { return decodeURIComponent(match[1]); } catch { return ''; } })() : '';
-  const fromHeader = req.headers['x-admin-token'] || '';
-  const token = fromCookie || fromHeader;
-  if (token === _ADMIN_TOKEN || token === _ADMIN_PW) return next();
+  const token = fromCookie || req.headers['x-admin-token'] || '';
+  return token === _ADMIN_TOKEN || token === _ADMIN_PW;
+}
+
+function requireAdmin(req, res, next) {
+  if (_isAdminReq(req)) return next();
   res.status(403).json({ error: 'Unauthorized' });
 }
 
@@ -809,8 +812,13 @@ router.get('/nowplaying', (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 router.get('/sermons', (req, res) => {
   try {
-    const rows = db.prepare(`SELECT * FROM sermons WHERE active = 1 ORDER BY recorded_at DESC`).all();
-    res.json(rows);
+    // Admins can request the FULL archive (including unpublished) with ?all=1 so
+    // the recording manager can re-publish or edit hidden recordings.
+    const wantAll = req.query.all === '1' && _isAdminReq(req);
+    const sql = wantAll
+      ? `SELECT * FROM sermons ORDER BY recorded_at DESC`
+      : `SELECT * FROM sermons WHERE active = 1 ORDER BY recorded_at DESC`;
+    res.json(db.prepare(sql).all());
   } catch { res.json([]); }
 });
 
@@ -879,18 +887,35 @@ router.post('/sermons', requireAdmin, (req, res) => {
 });
 
 router.put('/sermons/:id', requireAdmin, (req, res) => {
-  const { title, speaker, description, tags, active } = req.body;
+  const body = req.body || {};
   try {
+    // Partial update: only overwrite fields actually present in the request body.
+    // This lets the publish toggle send just { active } without wiping metadata.
+    const cur = db.prepare(`SELECT * FROM sermons WHERE id = ?`).get(req.params.id);
+    if (!cur) return res.status(404).json({ error: 'Sermon not found' });
+    const title       = body.title       !== undefined ? body.title       : cur.title;
+    const speaker     = body.speaker     !== undefined ? body.speaker     : cur.speaker;
+    const description = body.description !== undefined ? body.description : cur.description;
+    const tags        = body.tags        !== undefined ? body.tags        : cur.tags;
+    const active      = body.active      !== undefined ? (body.active ? 1 : 0) : cur.active;
     db.prepare(`UPDATE sermons SET title=?, speaker=?, description=?, tags=?, active=? WHERE id=?`)
-      .run((title||'').slice(0,200), (speaker||'').slice(0,100), (description||'').slice(0,500),
-           (tags||'').slice(0,200), active !== false ? 1 : 0, req.params.id);
+      .run(String(title||'').slice(0,200), String(speaker||'').slice(0,100),
+           String(description||'').slice(0,500), String(tags||'').slice(0,200),
+           active, req.params.id);
     res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 router.delete('/sermons/:id', requireAdmin, (req, res) => {
+  // ?hard=1 permanently removes the archive row (the audio file is kept on disk
+  // because the same recording is also referenced by the tracks table — deleting
+  // it would break playback there).  Default is a soft unpublish (active = 0).
   try {
-    db.prepare(`UPDATE sermons SET active = 0 WHERE id = ?`).run(req.params.id);
+    if (req.query.hard === '1') {
+      db.prepare(`DELETE FROM sermons WHERE id = ?`).run(req.params.id);
+    } else {
+      db.prepare(`UPDATE sermons SET active = 0 WHERE id = ?`).run(req.params.id);
+    }
     res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
