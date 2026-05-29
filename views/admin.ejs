@@ -3460,8 +3460,9 @@ async function loadSettings() {
   const ytEl = document.getElementById('set-social-youtube');
   if (ytEl) ytEl.value = s.social_youtube || 'https://www.youtube.com/watch?v=8wTuN77RZJ4';
   // YouTube live relay (server-side broadcast source)
+  // Defaults to the LETW channel /live feed so it works out of the box.
   const ytRelayEl = document.getElementById('set-youtube-relay-url');
-  if (ytRelayEl) ytRelayEl.value = s.youtube_relay_url || '';
+  if (ytRelayEl) ytRelayEl.value = s.youtube_relay_url || 'https://www.youtube.com/channel/UCehHnYcFV4AqGSWu29ib_Pw/live';
   const ytRecEl = document.getElementById('set-auto-record-relay');
   if (ytRecEl) ytRecEl.checked = s.auto_record_icecast === '1';
   // Moderation
@@ -4630,7 +4631,9 @@ socket.on('youtube:status', (st) => {
   _ytRelayLocalActive = true;
   if (statusEl)  statusEl.style.display = 'block';
   if (statusTxt) {
-    if (st.retry > 0) {
+    if (st.waiting) {
+      statusTxt.innerHTML = '⏳ Waiting for the channel to go live — the broadcast will start automatically.';
+    } else if (st.retry > 0) {
       statusTxt.innerHTML = `📡 Reconnecting to YouTube… (attempt ${st.retry})`;
     } else {
       const up = st.uptime ? ` · ${Math.floor(st.uptime/60)}m ${st.uptime%60}s` : '';

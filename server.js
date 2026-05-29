@@ -254,6 +254,10 @@ app.get('/api/server-health', (req, res) => {
 // it into the live broadcast pipeline.  Works from ANY admin device — desktop
 // app, web or phone — because no browser tab-capture is involved.
 // ─────────────────────────────────────────────────────────────────────────────
+// Built-in default: the Light Encounter Tabernacle Worldwide channel /live feed.
+// The relay follows whatever this channel is currently broadcasting. Admins can
+// override it in Settings → LETW YouTube Live Relay.
+const LETW_YOUTUBE_LIVE_URL = 'https://www.youtube.com/channel/UCehHnYcFV4AqGSWu29ib_Pw/live';
 app.post('/api/youtube/start', (req, res) => {
   if (!isAdmin(req)) return res.status(403).json({ error: 'Forbidden' });
   // Block double-sourcing: a browser-mic / Icecast broadcast must stop first.
@@ -261,7 +265,9 @@ app.post('/api/youtube/start', (req, res) => {
     return res.status(409).json({ error: 'A broadcast is already live. Stop it first.' });
   }
   const s = getSettings();
-  const url = (req.body && req.body.url ? String(req.body.url) : '').trim() || (s.youtube_relay_url || '').trim();
+  const url = (req.body && req.body.url ? String(req.body.url) : '').trim()
+            || (s.youtube_relay_url || '').trim()
+            || LETW_YOUTUBE_LIVE_URL;   // built-in default: the LETW channel /live feed
   if (!url) return res.status(400).json({ error: 'No YouTube/stream URL set. Add one in Settings → YouTube Live Relay.' });
   const title  = (req.body && req.body.title  ? String(req.body.title)  : '').trim();
   const artist = s.radio_name || 'Light Encounter Tabernacle Worldwide';
@@ -1058,6 +1064,11 @@ db.init().then(() => {
 
   youtubeStream.on('reconnecting', (n) => {
     console.log(`[YouTube] Source dropped — reconnecting (attempt ${n})…`);
+    io.emit('youtube:status', youtubeStream.getStatus());
+  });
+
+  youtubeStream.on('waiting', () => {
+    console.log('[YouTube] Channel armed but not live yet — waiting…');
     io.emit('youtube:status', youtubeStream.getStatus());
   });
 

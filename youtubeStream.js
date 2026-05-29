@@ -50,6 +50,7 @@ const OUTPUT_MIME   = 'audio/webm;codecs=opus';
 const FLUSH_MS      = 100;          // coalesce stdout into ~100 ms frames
 const MAX_BACKOFF   = 15000;        // cap reconnect delay at 15 s
 const RESOLVE_TMO   = 30000;        // yt-dlp / ytdl resolve timeout
+const NO_DATA_TMO   = parseInt(process.env.YT_NODATA_MS, 10) || 25000; // recycle if ffmpeg connects but sends no audio
 
 class YouTubeStream extends EventEmitter {
   constructor() {
@@ -71,6 +72,9 @@ class YouTubeStream extends EventEmitter {
     this._lastError   = '';
     this._stderrTail  = '';      // last bit of ffmpeg stderr for diagnostics
     this._announced   = false;   // emitted 'start' yet?
+    this._waiting     = false;   // armed on a channel that is not live yet
+    this._dataWatchdog = null;   // detects "connected but silent" sources
+    this._gotData     = false;   // any chunk seen since the current spawn?
   }
 
   get isActive() { return this._active; }
@@ -80,6 +84,7 @@ class YouTubeStream extends EventEmitter {
   getStatus() {
     return {
       active:    this._active,
+      waiting:   this._waiting,
       url:       this._url,
       title:     this._title,
       mimeType:  OUTPUT_MIME,
@@ -100,7 +105,9 @@ class YouTubeStream extends EventEmitter {
     if (this._active) { return true; } // already running — idempotent
 
     this._active     = true;
-    this._url        = String(url).trim();
+    // A bare channel / @handle URL is normalised to its /live endpoint so the
+    // relay always follows whatever that channel is currently broadcasting.
+    this._url        = this._normalizeUrl(String(url).trim());
     this._title      = (title  && title.trim())  || 'LETW Live';
     this._artist     = (artist && artist.trim()) || 'Light Encounter Tabernacle Worldwide';
     this._retry      = 0;
@@ -115,8 +122,10 @@ class YouTubeStream extends EventEmitter {
   stop() {
     if (!this._active && !this._ff) return;
     this._active = false;
+    this._waiting = false;
     if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; }
     this._stopFlush();
+    this._clearDataWatchdog();
     this._killFf();
     this._buf = []; this._bufLen = 0;
     this._startedAt = 0;
@@ -135,6 +144,16 @@ class YouTubeStream extends EventEmitter {
       return this._scheduleReconnect();
     }
     if (!this._active) return;
+    // Channel is armed but not broadcasting yet — wait and re-check at a steady
+    // cadence (not exponential backoff) so it starts automatically once live.
+    if (resolved && resolved.waiting) {
+      this._waiting = true;
+      this.emit('waiting');
+      if (this._retryTimer) clearTimeout(this._retryTimer);
+      this._retryTimer = setTimeout(() => { this._retryTimer = null; this._connect(); }, 20000);
+      return;
+    }
+    this._waiting = false;
     if (!resolved || !resolved.url) {
       this._lastError = this._lastError || 'Could not extract audio from that URL';
       return this._scheduleReconnect();
@@ -199,6 +218,7 @@ class YouTubeStream extends EventEmitter {
     ff.on('close', (code) => {
       if (this._ff === ff) this._ff = null;
       this._stopFlush();
+      this._clearDataWatchdog();
       this._flush(); // emit any tail bytes
       if (!this._active) return;
       // A finite VOD that reached its natural end (clean exit 0) → stop, do not
@@ -213,7 +233,9 @@ class YouTubeStream extends EventEmitter {
 
     // Successful spawn — reset backoff and start the flush cadence.
     this._retry = 0;
+    this._gotData = false;
     this._startFlush();
+    this._armDataWatchdog();
 
     if (!this._announced) {
       this._announced = true;
@@ -240,9 +262,25 @@ class YouTubeStream extends EventEmitter {
     if (this._bufLen === 0) return;
     const out = this._buf.length === 1 ? this._buf[0] : Buffer.concat(this._buf, this._bufLen);
     this._buf = []; this._bufLen = 0;
+    if (!this._gotData) { this._gotData = true; this._clearDataWatchdog(); }
     const isFirst = this._firstChunk;
     this._firstChunk = false;
     try { this.emit('chunk', out, isFirst); } catch (e) { /* listener error must not kill ffmpeg */ }
+  }
+
+  // Recycle the connection if ffmpeg attaches but no audio arrives (stale/expired
+  // manifest, stalled segment CDN, or the live stream ended). Killing ffmpeg fires
+  // 'close', which reconnects and re-resolves a fresh URL — never broadcasts silence.
+  _armDataWatchdog() {
+    this._clearDataWatchdog();
+    this._dataWatchdog = setTimeout(() => {
+      if (!this._active || this._gotData) return;
+      this._lastError = 'No audio received from source — reconnecting';
+      this._killFf(); // → 'close' → _scheduleReconnect (this._active stays true)
+    }, NO_DATA_TMO);
+  }
+  _clearDataWatchdog() {
+    if (this._dataWatchdog) { clearTimeout(this._dataWatchdog); this._dataWatchdog = null; }
   }
 
   _scheduleReconnect() {
@@ -257,7 +295,11 @@ class YouTubeStream extends EventEmitter {
   _killFf() {
     if (this._ff) {
       const ff = this._ff; this._ff = null;
-      try { ff.stdout.removeAllListeners(); } catch {}
+      // Destroy (don't just unlisten) the stdio streams: an un-consumed, paused
+      // stdout pipe blocks the child's 'close' event, which would stop the
+      // reconnect cycle from ever firing. Destroying drains and closes them.
+      try { if (ff.stdout) { ff.stdout.removeAllListeners('data'); ff.stdout.destroy(); } } catch {}
+      try { if (ff.stderr) ff.stderr.destroy(); } catch {}
       try { ff.kill('SIGKILL'); } catch {}
     }
   }
@@ -273,7 +315,22 @@ class YouTubeStream extends EventEmitter {
     // A direct media / playlist URL needs no extraction — hand straight to ffmpeg.
     if (/\.(m3u8|mp3|aac|ogg|opus|webm|m4a)(\?|$)/i.test(pageUrl) ||
         (!/youtube\.com|youtu\.be/i.test(pageUrl) && /^https?:\/\//i.test(pageUrl) && pageUrl.includes('stream'))) {
-      return { url: pageUrl, title: this._title, isHls: /\.m3u8(\?|$)/i.test(pageUrl) };
+      const isHls = /\.m3u8(\?|$)/i.test(pageUrl);
+      return { url: pageUrl, title: this._title, isHls, isLive: isHls };
+    }
+
+    // Channel / @handle / /live URL → resolve the channel's CURRENT live stream
+    // straight from the page. This gets the HLS manifest with no dependency on
+    // ytdl-core, and tells us when the channel simply isn't broadcasting yet.
+    if (this._isChannelUrl(pageUrl) || /\/live\/?(\?|$)/i.test(pageUrl)) {
+      const ch = await this._resolveChannelLiveVideo(pageUrl);
+      if (ch && ch.url)   return ch;             // direct HLS manifest — most robust
+      if (ch && ch.watch) pageUrl = ch.watch;    // resolved the live video URL
+      else {
+        // Channel exists but is not live right now. With yt-dlp we can still let
+        // it try the /live URL; otherwise tell the caller to wait and re-check.
+        if (!this._findYtDlp()) return { waiting: true };
+      }
     }
 
     // 1) yt-dlp binary — most robust, handles age-gates and 24-7 live HLS.
@@ -315,6 +372,76 @@ class YouTubeStream extends EventEmitter {
       }
     }
     return null;
+  }
+
+  // True for a YouTube channel / @handle / c/ / user/ URL (not a specific video).
+  _isChannelUrl(u) {
+    return /youtube\.com\/(channel\/|c\/|user\/|@)/i.test(u) && !/[?&]v=/i.test(u);
+  }
+
+  // Append /live to a bare channel URL so the relay follows its current broadcast.
+  _normalizeUrl(u) {
+    u = String(u || '').trim();
+    if (this._isChannelUrl(u) &&
+        !/\/(live|streams|videos|featured|playlists|community|about|shorts)\/?(\?|$)/i.test(u)) {
+      u = u.replace(/\/+$/, '') + '/live';
+    }
+    return u;
+  }
+
+  _decodeEntities(s) {
+    return String(s || '')
+      .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
+      .replace(/&#x27;/gi, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  }
+
+  _extractTitle(html) {
+    const m = html.match(/<meta property="og:title" content="([^"]+)"/);
+    return m ? this._decodeEntities(m[1]) : this._title;
+  }
+
+  /**
+   * Fetch a channel's /live page and extract the CURRENT live broadcast:
+   *   • { url, isHls, isLive, title }  — direct HLS manifest (preferred)
+   *   • { watch, title }               — live video URL for the extractor
+   *   • null                           — channel is not broadcasting right now
+   */
+  async _resolveChannelLiveVideo(url) {
+    if (!/\/live\/?(\?|$)/i.test(url)) url = url.replace(/\/+$/, '') + '/live';
+    let html = '';
+    try {
+      let signal, timer;
+      if (typeof AbortController !== 'undefined') {
+        const ac = new AbortController(); signal = ac.signal;
+        timer = setTimeout(() => { try { ac.abort(); } catch {} }, RESOLVE_TMO);
+      }
+      const resp = await fetch(url, {
+        redirect: 'follow',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+        signal,
+      });
+      html = await resp.text();
+      if (timer) clearTimeout(timer);
+    } catch (e) {
+      this._lastError = 'channel fetch: ' + (e && e.message ? e.message : e);
+      return null;
+    }
+
+    // Live signal #1 — embedded HLS manifest: feed it straight to ffmpeg.
+    let m = html.match(/"hlsManifestUrl":"(https:[^"]+?\.m3u8[^"]*)"/);
+    if (m) {
+      const hls = m[1].replace(/\\u0026/gi, '&').replace(/\\\//g, '/');
+      return { url: hls, isHls: true, isLive: true, title: this._extractTitle(html) };
+    }
+    // Live signal #2 — canonical points to a watch URL only while live.
+    m = html.match(/<link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=([A-Za-z0-9_-]{11})"/);
+    if (m && /"isLive"\s*:\s*true/i.test(html)) {
+      return { watch: 'https://www.youtube.com/watch?v=' + m[1], title: this._extractTitle(html) };
+    }
+    return null; // not currently live
   }
 
   _findYtDlp() {
