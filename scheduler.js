@@ -5,6 +5,7 @@ const audioEngine = require('./audioEngine');
 const DAY_MAP = { 0: 'sun', 1: 'mon', 2: 'tue', 3: 'wed', 4: 'thu', 5: 'fri', 6: 'sat' };
 
 let scheduledJobs = [];
+let _cfTimer = null; // crossfade timer — stored so it can be cancelled on track skip
 
 function getDateString(date = new Date()) {
   return date.toISOString().split('T')[0];
@@ -183,13 +184,15 @@ function startScheduler(io) {
       }
 
       // Crossfade: emit trackWillEnd event N seconds before the track ends
+      if (_cfTimer) { clearTimeout(_cfTimer); _cfTimer = null; }
       const durationSecs = track.duration || 0;
       if (durationSecs > 8) {
         const cfRow  = db.prepare(`SELECT value FROM settings WHERE key = 'crossfade_time'`).get();
         const cfSecs = Math.max(1, parseInt(cfRow ? cfRow.value : '3', 10));
         const delayMs = Math.max(0, (durationSecs - cfSecs) * 1000);
         const trackId = track.id;
-        setTimeout(() => {
+        _cfTimer = setTimeout(() => {
+          _cfTimer = null;
           if (audioEngine.currentTrack && audioEngine.currentTrack.id === trackId && audioEngine.isPlaying) {
             if (io) io.emit('trackWillEnd', { secondsLeft: cfSecs });
           }

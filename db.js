@@ -13,14 +13,21 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 let _sqlDb = null;
 let _saveTimer = null;
+let _saving    = false;   // guard: only one async write at a time
 
 function saveToDisk() {
   if (!_sqlDb) return;
   if (_saveTimer) clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
-    const data = _sqlDb.export();
-    fs.writeFileSync(DB_FILE, Buffer.from(data));
-  }, 300);
+    _saveTimer = null;
+    if (_saving) { saveToDisk(); return; } // previous write still in progress — re-queue
+    _saving = true;
+    const data = Buffer.from(_sqlDb.export());
+    fs.writeFile(DB_FILE, data, (err) => {
+      _saving = false;
+      if (err) console.error('[DB] Save error:', err.message);
+    });
+  }, 500); // debounce: flush 500 ms after the last write burst
 }
 
 function initSchema(sqlDb) {
@@ -124,6 +131,15 @@ function initSchema(sqlDb) {
       banned_by TEXT DEFAULT 'auto',
       banned_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE INDEX IF NOT EXISTS idx_playlist_tracks_playlist ON playlist_tracks(playlist_id);
+    CREATE INDEX IF NOT EXISTS idx_playlist_tracks_track    ON playlist_tracks(track_id);
+    CREATE INDEX IF NOT EXISTS idx_daily_queue_date         ON daily_queue(date, played);
+    CREATE INDEX IF NOT EXISTS idx_history_played_at        ON history(played_at);
+    CREATE INDEX IF NOT EXISTS idx_history_track            ON history(track_id);
+    CREATE INDEX IF NOT EXISTS idx_tracks_tray              ON tracks(tray);
+    CREATE INDEX IF NOT EXISTS idx_tracks_play_count        ON tracks(play_count);
+    CREATE INDEX IF NOT EXISTS idx_banned_ips_ip            ON banned_ips(ip);
   `);
 
   // Migrations for existing databases

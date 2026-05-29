@@ -3304,7 +3304,7 @@ function _lwsConnect() {
     _lws = null;
     if (isLive) _lwsTimer = setTimeout(_lwsConnect, 1000);
   };
-  _lws.onerror = () => {};
+  _lws.onerror = (ev) => { console.warn('[LiveWS] WebSocket error', ev.message || ''); };
 }
 
 function _lwsDisconnect() {

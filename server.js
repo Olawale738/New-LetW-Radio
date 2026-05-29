@@ -1205,4 +1205,12 @@ app.use((req, res) => {
   }
 });
 
-process.on('SIGTERM', () => { audioEngine.stop(); server.close(); });
+process.on('SIGTERM', () => {
+  console.log('[LETW] SIGTERM — graceful shutdown');
+  audioEngine.stop();
+  server.close(() => {
+    try { db.close(); } catch (e) {}
+    process.exit(0);
+  });
+  setTimeout(() => { console.error('[LETW] Hard exit after 10s'); process.exit(1); }, 10000).unref();
+});

@@ -124,7 +124,19 @@ class IcecastIngest {
         console.error('[IcecastIngest] onStart error:', e.message);
       }
 
+      // Idle timeout: disconnect encoder if no data arrives within 60 s
+      let _idleTimer = null;
+      const resetIdleTimer = () => {
+        if (_idleTimer) clearTimeout(_idleTimer);
+        _idleTimer = setTimeout(() => {
+          console.warn('[IcecastIngest] Encoder idle >60s — disconnecting');
+          try { req.destroy(); } catch {}
+        }, 60000);
+      };
+      resetIdleTimer();
+
       req.on('data', (chunk) => {
+        resetIdleTimer();
         if (!this._isActive) return;
         const isFirst    = this._firstChunk;
         this._firstChunk = false;
@@ -132,6 +144,7 @@ class IcecastIngest {
       });
 
       const cleanup = () => {
+        if (_idleTimer) { clearTimeout(_idleTimer); _idleTimer = null; }
         if (!this._isActive) return;
         this._isActive = false;
         this._req      = null;

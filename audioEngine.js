@@ -280,15 +280,19 @@ class AudioEngine extends EventEmitter {
   setQueue(tracks) { this.queue = [...tracks]; }
 
   async playNext() {
-    if (this.isLive) return; // don't start file playback during live mode
-    if (this.queue.length === 0) {
-      this.isPlaying        = false;
-      this.currentTrack     = null;
-      this.currentTrackInfo = null;
-      this.emit('queueEmpty');
-      return;
+    try {
+      if (this.isLive) return; // don't start file playback during live mode
+      if (this.queue.length === 0) {
+        this.isPlaying        = false;
+        this.currentTrack     = null;
+        this.currentTrackInfo = null;
+        this.emit('queueEmpty');
+        return;
+      }
+      await this.playTrack(this.queue.shift());
+    } catch (e) {
+      console.error('[AudioEngine] playNext error:', e.message);
     }
-    await this.playTrack(this.queue.shift());
   }
 
   async playTrack(track) {

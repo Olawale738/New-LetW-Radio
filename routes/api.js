@@ -127,6 +127,9 @@ router.get('/settings', (req, res) => {
   const rows = db.prepare(`SELECT key, value FROM settings`).all();
   const settings = {};
   rows.forEach(r => settings[r.key] = r.value);
+  // Never expose the VAPID private key to unauthenticated clients.
+  // The public key is intentionally shared (used by push subscription).
+  if (!_isAdminReq(req)) delete settings.vapid_private;
   res.json(settings);
 });
 
@@ -530,6 +533,7 @@ router.delete('/chat/all', requireAdmin, (req, res) => {
 
 router.delete('/chat/:id', requireAdmin, (req, res) => {
   const id = parseInt(req.params.id, 10);
+  if (isNaN(id) || id <= 0) return res.status(400).json({ error: 'Invalid id' });
   db.prepare(`DELETE FROM chat_messages WHERE id = ?`).run(id);
   if (_io) _io.emit('chat:deleted', { id });
   res.json({ success: true });
@@ -587,7 +591,9 @@ router.post('/bans', requireAdmin, (req, res) => {
 });
 
 router.delete('/bans/:id', requireAdmin, (req, res) => {
-  db.prepare(`DELETE FROM banned_ips WHERE id = ?`).run(req.params.id);
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id) || id <= 0) return res.status(400).json({ error: 'Invalid id' });
+  db.prepare(`DELETE FROM banned_ips WHERE id = ?`).run(id);
   res.json({ success: true });
 });
 

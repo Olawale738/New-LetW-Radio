@@ -1,7 +1,7 @@
 // LETW Radio Service Worker
 // Handles caching, offline fallback, background audio notifications, and push messages
 
-const CACHE_NAME = 'letw-radio-v2';
+const CACHE_NAME = 'letw-radio-v3';
 const STATIC_ASSETS = [
   '/listen',
   '/logo.png',
