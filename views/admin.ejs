@@ -911,6 +911,11 @@
     <div class="listeners-badge">
       👤 <span id="listener-count">0</span> listeners
     </div>
+    <div id="admin-conn-pill" style="display:flex;align-items:center;gap:5px;padding:5px 10px;border-radius:20px;background:var(--panel);border:1px solid var(--border);font-size:11px;color:var(--text3);font-family:var(--mono);cursor:default;" title="Admin socket connection quality">
+      <span id="admin-conn-dot" style="width:7px;height:7px;border-radius:50%;background:#4caf82;display:inline-block;flex-shrink:0;"></span>
+      <span id="admin-conn-label">—</span>
+      <button id="admin-reconn-btn" onclick="reconnectAdmin()" style="display:none;margin-left:2px;font-size:10px;padding:2px 6px;border:1px solid rgba(212,168,67,0.4);border-radius:4px;background:rgba(212,168,67,0.08);color:#d4a843;cursor:pointer;font-family:inherit;">Reconnect</button>
+    </div>
   </div>
 
   <!-- PAGE CONTENT -->
@@ -1079,6 +1084,52 @@
           <div style="padding:20px;text-align:center;font-size:13px;color:var(--text3);">Loading...</div>
         </div>
       </div>
+
+      <!-- STATION & CONNECTION HEALTH (SAM Broadcaster-equivalent stability panel) -->
+      <div class="card" style="margin-top:20px;">
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+          <div class="card-title">🖥 Station & Connection Health</div>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-secondary" style="padding:3px 10px;font-size:11px;" onclick="loadServerHealth()">Refresh</button>
+            <button class="btn btn-secondary" style="padding:3px 10px;font-size:11px;" onclick="reconnectAdmin()">🔄 Force Reconnect</button>
+          </div>
+        </div>
+        <!-- Metric tiles -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;padding:4px 0 12px;">
+          <div style="text-align:center;padding:12px 8px;background:rgba(74,127,212,0.06);border:1px solid rgba(74,127,212,0.2);border-radius:10px;">
+            <div id="sh-uptime" style="font-size:17px;font-weight:700;color:var(--blue3);font-family:var(--mono);">—</div>
+            <div style="font-size:9px;color:var(--text3);letter-spacing:1px;margin-top:3px;text-transform:uppercase;">Server Uptime</div>
+          </div>
+          <div style="text-align:center;padding:12px 8px;background:rgba(76,175,130,0.06);border:1px solid rgba(76,175,130,0.2);border-radius:10px;">
+            <div id="sh-mem" style="font-size:17px;font-weight:700;color:#4caf82;font-family:var(--mono);">—</div>
+            <div style="font-size:9px;color:var(--text3);letter-spacing:1px;margin-top:3px;text-transform:uppercase;">Heap Used</div>
+          </div>
+          <div style="text-align:center;padding:12px 8px;background:rgba(212,168,67,0.06);border:1px solid rgba(212,168,67,0.2);border-radius:10px;">
+            <div id="sh-rtt" style="font-size:17px;font-weight:700;color:var(--gold);font-family:var(--mono);">—</div>
+            <div style="font-size:9px;color:var(--text3);letter-spacing:1px;margin-top:3px;text-transform:uppercase;">Latency (RTT)</div>
+          </div>
+          <div style="text-align:center;padding:12px 8px;background:rgba(107,79,174,0.06);border:1px solid rgba(107,79,174,0.2);border-radius:10px;">
+            <div id="sh-watchdog" style="font-size:17px;font-weight:700;color:var(--purple);font-family:var(--mono);">—</div>
+            <div style="font-size:9px;color:var(--text3);letter-spacing:1px;margin-top:3px;text-transform:uppercase;">Watchdog</div>
+          </div>
+          <div style="text-align:center;padding:12px 8px;background:rgba(224,80,112,0.06);border:1px solid rgba(224,80,112,0.2);border-radius:10px;">
+            <div id="sh-rss" style="font-size:17px;font-weight:700;color:#e05070;font-family:var(--mono);">—</div>
+            <div style="font-size:9px;color:var(--text3);letter-spacing:1px;margin-top:3px;text-transform:uppercase;">RSS Memory</div>
+          </div>
+        </div>
+        <!-- Socket status bar -->
+        <div style="padding:10px 14px;background:rgba(0,0,0,0.2);border-radius:8px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+          <div style="font-size:11px;color:var(--text3);">Admin Socket:</div>
+          <div id="sh-socket-status" style="font-size:12px;font-weight:700;color:#4caf82;">● Connected</div>
+          <div style="font-size:11px;color:var(--text3);">Auto-Reconnect:</div>
+          <div style="font-size:12px;font-weight:700;color:#4caf82;">Always On</div>
+          <div style="font-size:11px;color:var(--text3);">Reconnect Attempts:</div>
+          <div id="sh-reconn-count" style="font-size:12px;font-weight:700;color:var(--text2);">0</div>
+          <div style="flex:1;"></div>
+          <div style="font-size:10px;color:var(--text3);">Watchdog auto-stops dead broadcasts after 20 s of silence · Admin socket reconnects automatically on any network interruption</div>
+        </div>
+      </div>
+
     </div>
 
     <!-- ===== LIBRARY ===== -->
@@ -2267,6 +2318,87 @@ socket.on('disconnect', (reason) => {
     logActivity('⚠ Server connection lost — reconnecting… (broadcast may be interrupted)');
   }
 });
+
+// ── Station & Connection Health ───────────────────────────────────────────────
+let _adminRtt    = 0;
+let _reconnCount = 0;
+
+// Generic latency probe result
+socket.on('admin:pong', ({ clientTs }) => {
+  _adminRtt = Date.now() - clientTs;
+  const rttEl  = document.getElementById('sh-rtt');
+  const topLbl = document.getElementById('admin-conn-label');
+  const dot    = document.getElementById('admin-conn-dot');
+  if (rttEl)  rttEl.textContent  = _adminRtt + ' ms';
+  if (topLbl) topLbl.textContent = _adminRtt + ' ms';
+  if (dot) dot.style.background  = _adminRtt < 150 ? '#4caf82' : _adminRtt < 400 ? '#d4a843' : '#e05070';
+});
+
+// Track every (re)connect for status bar
+socket.on('connect', () => {
+  const statusEl  = document.getElementById('sh-socket-status');
+  const dot       = document.getElementById('admin-conn-dot');
+  const topLbl    = document.getElementById('admin-conn-label');
+  const reconnBtn = document.getElementById('admin-reconn-btn');
+  if (statusEl)  { statusEl.textContent = '● Connected';  statusEl.style.color = '#4caf82'; }
+  if (dot)       dot.style.background = '#4caf82';
+  if (reconnBtn) reconnBtn.style.display = 'none';
+  // Immediately probe latency after reconnect
+  socket.emit('admin:ping', Date.now());
+});
+
+socket.on('disconnect', (reason) => {
+  const statusEl  = document.getElementById('sh-socket-status');
+  const dot       = document.getElementById('admin-conn-dot');
+  const topLbl    = document.getElementById('admin-conn-label');
+  const reconnBtn = document.getElementById('admin-reconn-btn');
+  if (statusEl)  { statusEl.textContent = '● Disconnected'; statusEl.style.color = '#e05070'; }
+  if (dot)       dot.style.background = '#e05070';
+  if (topLbl)    topLbl.textContent = '---';
+  if (reconnBtn) reconnBtn.style.display = '';
+});
+
+socket.on('reconnect_attempt', (n) => {
+  _reconnCount++;
+  const statusEl  = document.getElementById('sh-socket-status');
+  const countEl   = document.getElementById('sh-reconn-count');
+  const dot       = document.getElementById('admin-conn-dot');
+  const topLbl    = document.getElementById('admin-conn-label');
+  if (statusEl)  { statusEl.textContent = `● Reconnecting… (${n})`; statusEl.style.color = '#d4a843'; }
+  if (countEl)   countEl.textContent = _reconnCount;
+  if (dot)       dot.style.background = '#d4a843';
+  if (topLbl)    topLbl.textContent = 'reconnecting…';
+});
+
+function reconnectAdmin() {
+  if (socket) { try { socket.disconnect(); socket.connect(); } catch {} }
+  logActivity('🔄 Manual reconnect triggered');
+}
+
+async function loadServerHealth() {
+  try {
+    const data = await fetch('/api/server-health').then(r => r.json());
+    const s = data.uptime || 0;
+    const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+    const uptimeStr = (d ? d + 'd ' : '') + (h ? h + 'h ' : '') + m + 'm';
+    const uptimeEl = document.getElementById('sh-uptime');
+    const memEl    = document.getElementById('sh-mem');
+    const rssEl    = document.getElementById('sh-rss');
+    const wdEl     = document.getElementById('sh-watchdog');
+    if (uptimeEl) uptimeEl.textContent = uptimeStr;
+    if (memEl)    memEl.textContent    = (data.memUsed  || 0) + ' MB';
+    if (rssEl)    rssEl.textContent    = (data.rss      || 0) + ' MB';
+    if (wdEl) {
+      wdEl.textContent   = data.watchdogActive ? '● ON' : '⊘ OFF';
+      wdEl.style.color   = data.watchdogActive ? '#4caf82' : 'var(--text3)';
+    }
+  } catch {}
+}
+
+// Periodic ping (every 5 s) + health poll (every 30 s)
+setInterval(() => { if (socket && socket.connected) socket.emit('admin:ping', Date.now()); }, 5000);
+setInterval(loadServerHealth, 30000);
+setTimeout(() => { loadServerHealth(); socket.emit('admin:ping', Date.now()); }, 1500);
 
 socket.on('status', (s) => {
   state.status = s;

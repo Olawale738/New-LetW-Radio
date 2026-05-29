@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
+const { execFile } = require('child_process');
 
 const db = require('./db');
 const audioEngine = require('./audioEngine');
@@ -206,6 +207,42 @@ app.post('/api/flash-alert', (req, res) => {
   io.emit('flash:alert', alert);
   console.log(`[Flash Alert] Sent: "${alert.message}"`);
   res.json({ success: true });
+});
+
+// ── WebM / OGG → MP3 converter ────────────────────────────────────────────────
+// Called after a live recording finishes so it plays on iPhones / iPads
+// (Apple WebKit rejects WebM containers).  Resolves to the MP3 path on success
+// or null if ffmpeg is not installed — caller keeps the original file.
+function _convertToMp3(src) {
+  return new Promise((resolve) => {
+    const dst = src.replace(/\.(webm|ogg|oga)$/i, '.mp3');
+    execFile('ffmpeg', ['-y', '-i', src, '-vn', '-ar', '44100', '-ac', '2', '-b:a', '128k', dst],
+      (err) => {
+        if (err) { resolve(null); return; }
+        try { fs.unlinkSync(src); } catch {}
+        resolve(dst);
+      }
+    );
+  });
+}
+
+// ── Server health endpoint (admin only) ──────────────────────────────────────
+app.get('/api/server-health', (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ error: 'Forbidden' });
+  const mem = process.memoryUsage();
+  const status = audioEngine.getStatus();
+  res.json({
+    uptime:         Math.floor(process.uptime()),
+    memUsed:        Math.round(mem.heapUsed  / 1024 / 1024),
+    memTotal:       Math.round(mem.heapTotal / 1024 / 1024),
+    rss:            Math.round(mem.rss       / 1024 / 1024),
+    nodeVer:        process.version,
+    isPlaying:      !!status.isPlaying,
+    isLive:         !!status.isLive,
+    listeners:      (audioEngine._listenerCount || 0) + _webListeners,
+    liveBytes:      _liveBytesSent,
+    watchdogActive: !!_liveHeartbeatTimer,
+  });
 });
 
 // Auto-fill with random tracks when queue runs dry (Smart no-repeat: skip recently played)
@@ -594,6 +631,12 @@ io.on('connection', (socket) => {
     socket.emit('live:pong', { clientTs, serverTs: Date.now(), bytesSent: _liveBytesSent });
   });
 
+  // Generic admin latency probe (always active, not just during live broadcasts)
+  socket.on('admin:ping', (clientTs) => {
+    if (!isAdminSocket()) return;
+    socket.emit('admin:pong', { clientTs, serverTs: Date.now() });
+  });
+
   // Public client tracks whether it is actively receiving live audio
   // (used for the live-listener count shown in the admin On-Air panel)
   socket.on('live:join', () => {
@@ -652,17 +695,27 @@ io.on('connection', (socket) => {
       liveRecordingStream = null;
       liveRecordingFile   = '';
 
-      stream.end(() => {
+      stream.end(async () => {
         try {
           const stat = fs.statSync(file);
-          if (stat.size > 50000) { // must be at least 50 KB (~3 s at 128 kbps) to be worth keeping
-            const id       = uuidv4();
-            const duration = Math.floor(stat.size / 16000); // ~16 KB/s at 128 kbps Opus
+          if (stat.size > 50000) {
+            let finalFile = file;
+            if (/\.(webm|ogg|oga)$/i.test(file)) {
+              const mp3 = await _convertToMp3(file);
+              if (mp3) {
+                finalFile = mp3;
+                console.log(`[Live] Converted to MP3: ${path.basename(finalFile)}`);
+              } else {
+                console.log('[Live] ffmpeg not found — keeping WebM (iPhones may not play it)');
+              }
+            }
+            const fstat = fs.statSync(finalFile);
+            const id = uuidv4();
+            const duration = Math.floor(fstat.size / 16000);
             db.prepare(`INSERT INTO tracks (id, title, artist, duration, file_path, file_size, bitrate, tray) VALUES (?,?,?,?,?,?,?,?)`)
-              .run(id, rtitle, rartist, duration, file, stat.size, 128, 'recordings');
-            // Also save to sermons table so it appears on the public listener page
+              .run(id, rtitle, rartist, duration, finalFile, fstat.size, 128, 'recordings');
             db.prepare(`INSERT INTO sermons (id, title, speaker, description, file_path, duration, file_size) VALUES (?,?,?,?,?,?,?)`)
-              .run(id, rtitle, rartist || '', 'Live broadcast recording', file, duration, stat.size);
+              .run(id, rtitle, rartist || '', 'Live broadcast recording', finalFile, duration, fstat.size);
             console.log(`[Live] Recording saved to library + sermons: "${rtitle}" (${duration}s)`);
           } else {
             try { fs.unlinkSync(file); } catch(e) {}
@@ -730,16 +783,22 @@ audioEngine.on('liveStart', async (info) => {
         const rartist = liveRecordingArtist;
         liveRecordingStream = null;
         liveRecordingFile   = '';
-        stream.end(() => {
+        stream.end(async () => {
           try {
             const stat = fs.statSync(file);
             if (stat.size > 50000) {
+              let finalFile = file;
+              if (/\.(webm|ogg|oga)$/i.test(file)) {
+                const mp3 = await _convertToMp3(file);
+                if (mp3) finalFile = mp3;
+              }
+              const fstat = fs.statSync(finalFile);
               const id = uuidv4();
-              const duration = Math.floor(stat.size / 16000);
+              const duration = Math.floor(fstat.size / 16000);
               db.prepare(`INSERT INTO tracks (id,title,artist,duration,file_path,file_size,bitrate,tray) VALUES (?,?,?,?,?,?,?,?)`)
-                .run(id, rtitle, rartist, duration, file, stat.size, 128, 'recordings');
+                .run(id, rtitle, rartist, duration, finalFile, fstat.size, 128, 'recordings');
               db.prepare(`INSERT INTO sermons (id, title, speaker, description, file_path, duration, file_size) VALUES (?,?,?,?,?,?,?)`)
-                .run(id, rtitle, rartist || '', 'Live broadcast recording', file, duration, stat.size);
+                .run(id, rtitle, rartist || '', 'Live broadcast recording', finalFile, duration, fstat.size);
             } else { try { fs.unlinkSync(file); } catch(_) {} }
           } catch(e) { console.error('[Live] Recording save error (timeout):', e.message); }
         });
@@ -856,16 +915,25 @@ db.init().then(() => {
     const rartist = liveRecordingArtist;
     liveRecordingStream = null;
     liveRecordingFile   = '';
-    stream.end(() => {
+    stream.end(async () => {
       try {
         const stat = fs.statSync(file);
         if (stat.size > 50000) {
+          let finalFile = file;
+          if (/\.(webm|ogg|oga)$/i.test(file)) {
+            const mp3 = await _convertToMp3(file);
+            if (mp3) {
+              finalFile = mp3;
+              console.log(`[IcecastIngest] Converted to MP3: ${path.basename(finalFile)}`);
+            }
+          }
+          const fstat = fs.statSync(finalFile);
           const id = uuidv4();
-          const duration = Math.floor(stat.size / 16000);
+          const duration = Math.floor(fstat.size / 16000);
           db.prepare(`INSERT INTO tracks (id,title,artist,duration,file_path,file_size,bitrate,tray) VALUES (?,?,?,?,?,?,?,?)`)
-            .run(id, rtitle, rartist, duration, file, stat.size, 128, 'recordings');
+            .run(id, rtitle, rartist, duration, finalFile, fstat.size, 128, 'recordings');
           db.prepare(`INSERT INTO sermons (id,title,speaker,description,file_path,duration,file_size) VALUES (?,?,?,?,?,?,?)`)
-            .run(id, rtitle, rartist || '', 'Live broadcast recording', file, duration, stat.size);
+            .run(id, rtitle, rartist || '', 'Live broadcast recording', finalFile, duration, fstat.size);
           console.log(`[IcecastIngest] Recording saved: "${rtitle}" (${duration}s)`);
         } else {
           try { fs.unlinkSync(file); } catch(_) {}
