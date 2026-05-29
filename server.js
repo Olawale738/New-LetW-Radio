@@ -6,6 +6,7 @@ const fs = require('fs');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const { execFile } = require('child_process');
+const ffmpegPath    = require('ffmpeg-static');
 
 const db = require('./db');
 const audioEngine = require('./audioEngine');
@@ -215,8 +216,9 @@ app.post('/api/flash-alert', (req, res) => {
 // or null if ffmpeg is not installed — caller keeps the original file.
 function _convertToMp3(src) {
   return new Promise((resolve) => {
+    if (!ffmpegPath) { resolve(null); return; }
     const dst = src.replace(/\.(webm|ogg|oga)$/i, '.mp3');
-    execFile('ffmpeg', ['-y', '-i', src, '-vn', '-ar', '44100', '-ac', '2', '-b:a', '128k', dst],
+    execFile(ffmpegPath, ['-y', '-i', src, '-vn', '-ar', '44100', '-ac', '2', '-b:a', '128k', dst],
       (err) => {
         if (err) { resolve(null); return; }
         try { fs.unlinkSync(src); } catch {}
