@@ -876,13 +876,16 @@ audioEngine.on('liveStart', async (info) => {
 
   const subs = db.prepare('SELECT * FROM push_subscriptions').all();
   const payload = JSON.stringify({ title: 'LETW Radio — LIVE', body: info.title || 'Live broadcast started', icon: '/logo.png', url: '/listen' });
+  let pushCount = 0;
   for (const sub of subs) {
     try {
       await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, payload);
+      pushCount++;
     } catch (e) {
       if (e.statusCode === 410) db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(sub.endpoint);
     }
   }
+  if (pushCount > 0) io.emit('live:push-sent', { count: pushCount });
 });
 audioEngine.on('liveStop',       ()      => { io.emit('live:ended');          io.emit('status', audioEngine.getStatus()); });
 

@@ -1011,6 +1011,9 @@
             <a href="/listen" target="_blank" class="btn btn-secondary" style="justify-content:flex-start;text-decoration:none;">
               🔗 Share Radio Link
             </a>
+            <button class="btn" style="justify-content:flex-start;background:rgba(200,30,50,0.1);border:1px solid rgba(200,30,50,0.35);color:#ff6b8a;font-weight:700;" onclick="emergencyStop()">
+              🛑 Emergency Stop All
+            </button>
           </div>
         </div>
       </div>
@@ -1533,6 +1536,29 @@
             <div style="font-size:10px;color:rgba(212,168,67,0.45);margin-top:8px;letter-spacing:0.3px;">
               ⚠ Use headphones when monitoring — speakers will cause feedback echo.
             </div>
+          </div>
+
+          <!-- Encoder quality selector -->
+          <div style="margin-bottom:16px;padding:12px 14px;background:rgba(74,127,212,0.05);border:1px solid rgba(74,127,212,0.2);border-radius:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <div style="font-size:11px;font-weight:700;color:var(--text);letter-spacing:0.5px;">📡 Broadcast Quality</div>
+              <span id="live-bitrate-label" style="font-size:11px;color:#4a9fd4;font-family:var(--mono);font-weight:700;">128 kbps</span>
+            </div>
+            <select class="form-control" id="live-bitrate-select" style="margin-bottom:6px;"
+              onchange="document.getElementById('live-bitrate-label').textContent=this.options[this.selectedIndex].dataset.label;localStorage.setItem('letw_bitrate',this.value)">
+              <option value="64000"  data-label="64 kbps" >64 kbps — Mobile (saves data)</option>
+              <option value="96000"  data-label="96 kbps" >96 kbps — Standard</option>
+              <option value="128000" data-label="128 kbps" selected>128 kbps — Studio (recommended)</option>
+              <option value="192000" data-label="192 kbps" >192 kbps — Hi-Fi</option>
+              <option value="256000" data-label="256 kbps" >256 kbps — Ultra HD</option>
+            </select>
+            <div style="font-size:10px;color:rgba(74,127,212,0.55);line-height:1.5;">Higher quality uses more upload bandwidth. 128 kbps gives broadcast-quality voice on most connections. Use 64 kbps on weak mobile data.</div>
+          </div>
+
+          <!-- Connection pre-check -->
+          <div style="margin-bottom:14px;display:flex;align-items:center;gap:10px;">
+            <button onclick="runPreBroadcastCheck()" style="font-size:11px;padding:5px 13px;border-radius:8px;border:1px solid rgba(212,168,67,0.35);background:rgba(212,168,67,0.07);color:var(--gold);cursor:pointer;font-family:inherit;font-weight:700;white-space:nowrap;transition:all 0.2s;">🔍 Check Connection</button>
+            <div id="precheck-result" style="font-size:11px;color:var(--text3);"></div>
           </div>
 
           <!-- Go Live / Stop buttons -->
@@ -2349,9 +2375,11 @@ socket.on('admin:pong', ({ clientTs }) => {
   const rttEl  = document.getElementById('sh-rtt');
   const topLbl = document.getElementById('admin-conn-label');
   const dot    = document.getElementById('admin-conn-dot');
-  if (rttEl)  rttEl.textContent  = _adminRtt + ' ms';
-  if (topLbl) topLbl.textContent = _adminRtt + ' ms';
-  if (dot) dot.style.background  = _adminRtt < 150 ? '#4caf82' : _adminRtt < 400 ? '#d4a843' : '#e05070';
+  const rttColor = _adminRtt < 80 ? '#4caf82' : _adminRtt < 200 ? '#8bc34a' : _adminRtt < 400 ? '#d4a843' : _adminRtt < 700 ? '#ff9800' : '#e05070';
+  const rttGrade = _adminRtt < 80 ? '⚡ Excellent' : _adminRtt < 200 ? '✓ Good' : _adminRtt < 400 ? '△ Fair' : _adminRtt < 700 ? '⚠ Poor' : '✗ Critical';
+  if (rttEl)  { rttEl.textContent = _adminRtt + ' ms'; rttEl.style.color = rttColor; }
+  if (topLbl) { topLbl.textContent = _adminRtt + ' ms · ' + rttGrade; topLbl.style.color = rttColor; }
+  if (dot)    dot.style.background = rttColor;
 });
 
 // ── Single consolidated connect handler ───────────────────────────────────────
@@ -2610,6 +2638,51 @@ function startProgressUpdate() {
 }
 
 // =================== PLAYER CONTROLS ===================
+
+async function playTrackNow(id) {
+  try {
+    await api('POST', `/player/play-track/${id}`);
+    toast('▶ Track queued for immediate play', 'success');
+    logActivity(`▶ Track played immediately from Library`);
+  } catch (e) { toast(e.message || 'Could not play track', 'error'); }
+}
+
+async function emergencyStop() {
+  if (!confirm('EMERGENCY STOP\n\nThis will immediately stop:\n• All live broadcasts\n• YouTube relay\n• Scheduled playback\n\nContinue?')) return;
+  try {
+    // Stop live mic/tab broadcast
+    if (liveMediaRecorder && liveMediaRecorder.state !== 'inactive') stopLiveBroadcast();
+    // Stop scheduled playback
+    await api('POST', '/player/stop').catch(() => {});
+    // Stop YouTube relay
+    await api('DELETE', '/youtube-relay').catch(() => {});
+    toast('🛑 All broadcasts stopped', 'info');
+    logActivity('🛑 Emergency stop: all broadcasts stopped by admin');
+  } catch (e) { toast('Emergency stop partial: ' + e.message, 'error'); }
+}
+
+// Run 3 ping-pong cycles and return average RTT; shows result in #precheck-result
+async function runPreBroadcastCheck() {
+  const el = document.getElementById('precheck-result');
+  if (el) { el.textContent = '⏳ Testing…'; el.style.color = 'var(--text3)'; }
+  const rtts = [];
+  for (let i = 0; i < 3; i++) {
+    await new Promise((resolve) => {
+      const ts = Date.now();
+      const handler = ({ clientTs }) => { rtts.push(Date.now() - clientTs); resolve(); };
+      socket.once('admin:pong', handler);
+      socket.emit('admin:ping', ts);
+      setTimeout(() => { socket.off('admin:pong', handler); resolve(); }, 2000);
+    });
+    if (i < 2) await new Promise(r => setTimeout(r, 250));
+  }
+  const avg = rtts.length ? Math.round(rtts.reduce((a, b) => a + b, 0) / rtts.length) : 9999;
+  const grade = avg < 80 ? '⚡ Excellent — great for live streaming' : avg < 200 ? '✓ Good' : avg < 400 ? '△ Fair — may have minor audio gaps' : avg < 700 ? '⚠ Poor — expect interruptions' : '✗ Critical — do not go live on this connection';
+  const color = avg < 80 ? '#4caf82' : avg < 200 ? '#8bc34a' : avg < 400 ? '#d4a843' : avg < 700 ? '#ff9800' : '#e05070';
+  if (el) { el.textContent = `${avg} ms · ${grade}`; el.style.color = color; }
+  return avg;
+}
+
 async function playRadio() {
   try {
     await api('POST', '/player/play');
@@ -2714,6 +2787,7 @@ function renderTracks(tracks) {
       <td><span class="badge badge-cyan">${t.tray}</span></td>
       <td>
         <div style="display:flex;gap:4px;">
+          <button class="btn btn-secondary btn-sm" title="Play this track now" onclick="playTrackNow('${t.id}')" style="color:#4caf82;border-color:rgba(76,175,130,0.4);">▶</button>
           <button class="btn btn-secondary btn-sm" onclick="editTrack('${t.id}')">✏</button>
           <button class="btn btn-secondary btn-sm" onclick="addToPlaylistModal('${t.id}')">📂</button>
           <button class="btn btn-danger btn-sm" onclick="deleteTrack('${t.id}')">🗑</button>
@@ -3792,6 +3866,17 @@ function restoreLiveSettings() {
   }
   const noiseThresh = set('live-noise-threshold', 'letw_live_noise_thresh', '30');
   document.getElementById('live-noise-level').textContent = noiseThresh + '%';
+  // Bitrate selector
+  const savedBitrate = localStorage.getItem('letw_bitrate');
+  if (savedBitrate) {
+    const brSel = document.getElementById('live-bitrate-select');
+    if (brSel) {
+      brSel.value = savedBitrate;
+      const opt = brSel.options[brSel.selectedIndex];
+      const lbl = document.getElementById('live-bitrate-label');
+      if (lbl && opt) lbl.textContent = opt.dataset.label || (Math.round(parseInt(savedBitrate,10)/1000) + ' kbps');
+    }
+  }
 }
 
 // EQ quick presets
@@ -3838,6 +3923,16 @@ async function startLiveBroadcast() {
   const micId  = document.getElementById('live-mic-select').value;
 
   if (!micId) { alert('Please select a microphone first.'); return; }
+
+  // Pre-broadcast connection quality check
+  const preRtt = await runPreBroadcastCheck();
+  if (preRtt > 700) {
+    const ok = confirm(`⚠ Connection quality is CRITICAL (${preRtt} ms latency).\n\nListeners will likely hear constant interruptions. It is strongly recommended to fix your internet connection first.\n\nGo live anyway?`);
+    if (!ok) return;
+  } else if (preRtt > 400) {
+    const ok = confirm(`⚠ Connection quality is POOR (${preRtt} ms latency).\n\nListeners may experience some audio gaps. Continue?`);
+    if (!ok) return;
+  }
 
   try {
     liveMicStream = await navigator.mediaDevices.getUserMedia({
@@ -4052,14 +4147,17 @@ registerProcessor('letw-noise-gate', NoiseGateProcessor);
   animateMicLevel();
 
   // ── MediaRecorder ─────────────────────────────────────────────────────────
-  // Prefer Opus codec at 128 kbps — noticeably better voice clarity vs 96 kbps
+  // Prefer Opus codec — quality controlled by the admin's bitrate selector
   const mimeType = ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/ogg']
     .find(m => MediaRecorder.isTypeSupported(m)) || '';
+  const bitrateEl = document.getElementById('live-bitrate-select');
+  const audioBitsPerSecond = bitrateEl ? parseInt(bitrateEl.value, 10) : 128000;
 
   liveMediaRecorder = new MediaRecorder(dest.stream, {
     mimeType,
-    audioBitsPerSecond: 128000,  // 128 kbps Opus: broadcast-quality voice
+    audioBitsPerSecond,
   });
+  logActivity(`🎚 Encoding at ${Math.round(audioBitsPerSecond / 1000)} kbps Opus`);
 
   liveMediaRecorder.addEventListener('dataavailable', e => {
     if (e.data && e.data.size > 0) {
@@ -4199,11 +4297,14 @@ async function startTabBroadcast() {
   // ── MediaRecorder — identical to the mic path so the server flow is unchanged ──
   const mimeType = ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/ogg']
     .find(m => MediaRecorder.isTypeSupported(m)) || '';
+  const tabBitrateEl = document.getElementById('live-bitrate-select');
+  const audioBitsPerSecond = tabBitrateEl ? parseInt(tabBitrateEl.value, 10) : 128000;
 
   liveMediaRecorder = new MediaRecorder(dest.stream, {
     mimeType,
-    audioBitsPerSecond: 128000,
+    audioBitsPerSecond,
   });
+  logActivity(`🎚 Tab audio encoding at ${Math.round(audioBitsPerSecond / 1000)} kbps Opus`);
 
   liveMediaRecorder.addEventListener('dataavailable', e => {
     if (e.data && e.data.size > 0) {
@@ -4620,6 +4721,13 @@ socket.on('live:started', (info) => {
   if (!liveMediaRecorder || liveMediaRecorder.state === 'inactive') {
     logActivity(`📡 Encoder broadcast started: "${info.title || 'Live Broadcast'}"`);
     setLiveUIState(true);
+  }
+});
+
+socket.on('live:push-sent', ({ count }) => {
+  if (count > 0) {
+    logActivity(`📱 Push notification sent to ${count} subscriber${count !== 1 ? 's' : ''}`);
+    toast(`📱 ${count} subscriber${count !== 1 ? 's' : ''} notified`, 'success');
   }
 });
 

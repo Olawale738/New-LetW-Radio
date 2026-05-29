@@ -499,6 +499,14 @@ router.post('/player/skip', requireAdmin, (req, res) => {
   res.json({ success: true });
 });
 
+router.post('/player/play-track/:id', requireAdmin, (req, res) => {
+  const track = db.prepare('SELECT * FROM tracks WHERE id = ?').get(req.params.id);
+  if (!track) return res.status(404).json({ error: 'Track not found' });
+  audioEngine.setQueue([track]);
+  audioEngine.playNext();
+  res.json({ success: true, track: { id: track.id, title: track.title, artist: track.artist } });
+});
+
 // ==================== CHAT ====================
 router.get('/chat', (req, res) => {
   res.json(db.prepare(`SELECT * FROM chat_messages ORDER BY id ASC LIMIT 80`).all());
