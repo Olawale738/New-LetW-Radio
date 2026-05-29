@@ -1541,10 +1541,23 @@
               style="background:linear-gradient(135deg,#8b1a35,#e05070);color:#fff;border:none;font-weight:700;padding:12px 28px;font-size:14px;letter-spacing:1px;">
               🔴 GO LIVE
             </button>
+            <button class="btn" id="btn-go-live-tab" onclick="startTabBroadcast()"
+              style="background:linear-gradient(135deg,#7a1fa2,#c2185b);color:#fff;border:none;font-weight:700;padding:12px 22px;font-size:14px;letter-spacing:0.5px;"
+              title="Stream audio from a YouTube tab or any other browser tab to all listeners">
+              📺 Stream Tab Audio
+            </button>
             <button class="btn btn-secondary" id="btn-stop-live" onclick="stopLiveBroadcast()" disabled style="opacity:0.4;">
               ⏹ Stop Broadcast
             </button>
             <button class="btn btn-secondary" onclick="refreshMics()">🔄 Refresh Mics</button>
+          </div>
+
+          <!-- Tab-audio how-to (Chrome / Edge desktop only) -->
+          <div style="margin-top:10px;padding:10px 12px;background:rgba(122,31,162,0.07);border:1px solid rgba(194,24,91,0.25);border-radius:8px;font-size:11px;color:var(--text2);line-height:1.6;">
+            <strong style="color:#e07ab8;">📺 Stream YouTube / Tab Audio:</strong>
+            Open YouTube (or any site) in another tab, click <strong>Stream Tab Audio</strong>, pick that tab in the browser picker, and
+            <strong>tick “Share tab audio”</strong>. Listeners hear it instantly.
+            <span style="color:var(--text3);">Works on Chrome / Edge desktop. Stream your own church videos to stay within copyright.</span>
           </div>
 
           <!-- Live duration counter + quality stats -->
@@ -4015,6 +4028,133 @@ registerProcessor('letw-noise-gate', NoiseGateProcessor);
   liveTimerInterval = setInterval(updateLiveTimer, 1000);
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// STREAM BROWSER TAB AUDIO (YouTube etc.) → all public listeners
+// Reuses the exact same socket pipeline as the mic broadcast (live:start /
+// live:chunk / live:stop) so the server needs no changes.  The audio chain is
+// MUSIC-optimised (stereo, no noise gate, no voice EQ) instead of voice-optimised.
+// Capture uses getDisplayMedia with "share tab audio"; Chrome / Edge desktop only.
+// ════════════════════════════════════════════════════════════════════════════
+async function startTabBroadcast() {
+  // Guard: refuse if a broadcast (mic or tab) is already running
+  if (liveMediaRecorder && liveMediaRecorder.state !== 'inactive') {
+    alert('A broadcast is already live. Stop it first before starting another.');
+    return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+    alert('Tab audio capture is not supported in this browser.\nPlease use Chrome or Edge on a desktop computer.');
+    return;
+  }
+
+  const title  = document.getElementById('live-title').value.trim()  || 'Live Broadcast';
+  const artist = document.getElementById('live-artist').value.trim() || 'Light Encounter Tabernacle Worldwide';
+
+  let captureStream;
+  try {
+    // video:true is REQUIRED for the browser to offer the "share tab audio" option.
+    // We discard the video track immediately and only stream the audio.
+    captureStream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: {
+        echoCancellation: false,  // music — keep the audio pristine
+        noiseSuppression: false,
+        autoGainControl:  false,
+      },
+    });
+  } catch (err) {
+    // User cancelled the picker, or permission denied — not a real error
+    if (err && err.name === 'NotAllowedError') { logActivity('📺 Tab capture cancelled'); return; }
+    alert('Could not capture tab audio:\n' + (err.message || err.name || 'unknown error'));
+    return;
+  }
+
+  // Drop the video track — we only need audio
+  captureStream.getVideoTracks().forEach(t => t.stop());
+
+  const audioTracks = captureStream.getAudioTracks();
+  if (audioTracks.length === 0) {
+    captureStream.getTracks().forEach(t => t.stop());
+    alert('No tab audio was shared.\n\nWhen the picker appears you must:\n1. Choose the "Chrome Tab" option\n2. Select your YouTube tab\n3. Tick the "Share tab audio" checkbox (bottom-left)\n\nThen try again.');
+    return;
+  }
+
+  // Store in the same vars the mic path uses so stopLiveBroadcast(), the reconnect
+  // handler, the monitor, and the level meter all work unchanged.
+  liveMicStream = captureStream;
+
+  // ── Music-optimised audio chain: source → gain → limiter → analyser → dest ──
+  liveMicCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+  if (liveMicCtx.state === 'suspended') await liveMicCtx.resume();
+
+  const src = liveMicCtx.createMediaStreamSource(captureStream);
+
+  // Gain — default 1.0 (100%); YouTube audio is already at full level.
+  // Tied to liveGainNode so the existing gain slider can still nudge it if needed.
+  liveGainNode = liveMicCtx.createGain();
+  liveGainNode.gain.value = 1.0;
+
+  // Safety limiter — brickwall at -0.5 dB so a loud track can never clip the encoder
+  const limiter           = liveMicCtx.createDynamicsCompressor();
+  limiter.threshold.value = -0.5;
+  limiter.knee.value      = 0;
+  limiter.ratio.value     = 20;
+  limiter.attack.value    = 0.001;
+  limiter.release.value   = 0.05;
+
+  liveMicAnalyser         = liveMicCtx.createAnalyser();
+  liveMicAnalyser.fftSize = 256;
+
+  const dest = liveMicCtx.createMediaStreamDestination();
+  liveDestStream = dest.stream;
+
+  src.connect(liveGainNode);
+  liveGainNode.connect(limiter);
+  limiter.connect(liveMicAnalyser);
+  liveMicAnalyser.connect(dest);
+
+  animateMicLevel();
+
+  // ── MediaRecorder — identical to the mic path so the server flow is unchanged ──
+  const mimeType = ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/ogg']
+    .find(m => MediaRecorder.isTypeSupported(m)) || '';
+
+  liveMediaRecorder = new MediaRecorder(dest.stream, {
+    mimeType,
+    audioBitsPerSecond: 128000,
+  });
+
+  liveMediaRecorder.addEventListener('dataavailable', e => {
+    if (e.data && e.data.size > 0) {
+      _liveChunksSent++;
+      e.data.arrayBuffer().then(buf => { socket.emit('live:chunk', buf); });
+    }
+  });
+
+  _liveReconnectMimeType = mimeType;
+  _liveWasReconnecting   = false;
+  _liveRtt               = null;
+  _liveBytesFromServer   = 0;
+
+  // If the user clicks the browser's native "Stop sharing" bar, end cleanly.
+  audioTracks[0].addEventListener('ended', () => {
+    if (liveMediaRecorder && liveMediaRecorder.state !== 'inactive') {
+      logActivity('📺 Tab sharing stopped by browser — ending broadcast');
+      stopLiveBroadcast();
+    }
+  });
+
+  socket.auth = { token: getAdminToken() };
+  const recordCheck = document.getElementById('live-record-check');
+  socket.emit('live:start', { title, artist, record: recordCheck ? recordCheck.checked : false, mimeType });
+
+  liveMediaRecorder.start(60);
+
+  setLiveUIState(true);
+  liveStartTime = Date.now();
+  liveTimerInterval = setInterval(updateLiveTimer, 1000);
+  logActivity('📺 Streaming tab audio live: "' + title + '"');
+}
+
 function stopLiveBroadcast() {
   if (liveMediaRecorder && liveMediaRecorder.state !== 'inactive') {
     liveMediaRecorder.stop();
@@ -4267,6 +4407,7 @@ function updateLiveTimer() {
 function setLiveUIState(on) {
   const chip       = document.getElementById('live-status-chip');
   const btnGo      = document.getElementById('btn-go-live');
+  const btnGoTab   = document.getElementById('btn-go-live-tab');
   const btnStop    = document.getElementById('btn-stop-live');
   const timerWrap  = document.getElementById('live-timer-wrap');
   const navDot     = document.getElementById('live-nav-dot');
@@ -4279,6 +4420,7 @@ function setLiveUIState(on) {
     chip.classList.add('live-status-chip-on');
     btnGo.disabled  = true;
     btnGo.style.opacity = '0.4';
+    if (btnGoTab) { btnGoTab.disabled = true; btnGoTab.style.opacity = '0.4'; }
     btnStop.disabled = false;
     btnStop.style.opacity = '1';
     timerWrap.style.display = 'block';
@@ -4291,6 +4433,7 @@ function setLiveUIState(on) {
     chip.classList.remove('live-status-chip-on');
     btnGo.disabled  = false;
     btnGo.style.opacity = '1';
+    if (btnGoTab) { btnGoTab.disabled = false; btnGoTab.style.opacity = '1'; }
     btnStop.disabled = true;
     btnStop.style.opacity = '0.4';
     timerWrap.style.display = 'none';
