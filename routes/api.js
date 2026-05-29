@@ -547,7 +547,55 @@ router.delete('/chat/:id', requireAdmin, (req, res) => {
   res.json({ success: true });
 });
 
-// ==================== REQUESTS ====================
+// Pin / unpin a chat message — broadcast to all listeners so the player
+// can show a prominent pinned-message banner.
+router.post('/chat/:id/pin', requireAdmin, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id) || id <= 0) return res.status(400).json({ error: 'Invalid id' });
+  const msg = db.prepare(`SELECT * FROM chat_messages WHERE id = ?`).get(id);
+  if (!msg) return res.status(404).json({ error: 'Message not found' });
+  if (_io) _io.emit('chat:pinned', { id: msg.id, username: msg.username, message: msg.message, color: msg.color || '#d4a843' });
+  res.json({ success: true });
+});
+router.delete('/chat/pin', requireAdmin, (req, res) => {
+  if (_io) _io.emit('chat:unpinned', {});
+  res.json({ success: true });
+});
+
+// Send a custom push notification (admin only)
+router.post('/push/send', requireAdmin, async (req, res) => {
+  const { title, body, url, icon } = req.body;
+  if (!title && !body) return res.status(400).json({ error: 'title or body required' });
+  const webpush = require('web-push');
+  const subs = db.prepare('SELECT * FROM push_subscriptions').all();
+  const payload = JSON.stringify({
+    title: title || 'LETW Radio',
+    body:  body  || '',
+    icon:  icon  || '/logo.png',
+    url:   url   || '/listen',
+  });
+  let sent = 0;
+  for (const sub of subs) {
+    try {
+      await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, payload);
+      sent++;
+    } catch (e) {
+      if (e.statusCode === 410) db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(sub.endpoint);
+    }
+  }
+  res.json({ success: true, sent });
+});
+
+// Search tracks by title / artist (for request fulfilment)
+router.get('/tracks/search', requireAdmin, (req, res) => {
+  const q = (req.query.q || '').trim();
+  if (!q) return res.json([]);
+  const rows = db.prepare(
+    `SELECT id, title, artist, duration, bitrate, file_path, tray FROM tracks
+     WHERE title LIKE ? OR artist LIKE ? LIMIT 8`
+  ).all(`%${q}%`, `%${q}%`);
+  res.json(rows);
+});
 router.get('/requests', (req, res) => {
   res.json(db.prepare(`SELECT * FROM requests ORDER BY created_at DESC`).all());
 });

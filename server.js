@@ -624,8 +624,9 @@ io.on('connection', (socket) => {
   }
 
   // Admin signals "going live"
-  socket.on('live:start', (data) => {
-    if (!isAdminSocket()) return;
+  // Accepts an optional ACK callback so the admin browser can confirm delivery.
+  socket.on('live:start', (data, ack) => {
+    if (!isAdminSocket()) { if (typeof ack === 'function') ack({ ok: false, error: 'not admin' }); return; }
     // A browser-mic / tab broadcast takes priority over the server-side relay:
     // stop the relay first so there is only ever one live source.
     if (youtubeStream.isActive) youtubeStream.stop();
@@ -651,6 +652,8 @@ io.on('connection', (socket) => {
         liveRecordingEnabled = false;
       }
     }
+    // Acknowledge delivery so the admin browser knows the server received it.
+    if (typeof ack === 'function') ack({ ok: true });
     // live:started is broadcast by audioEngine.on('liveStart') below — no double emit
   });
 

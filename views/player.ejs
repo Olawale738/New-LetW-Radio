@@ -1551,6 +1551,32 @@
     }
     .tab-panel.active { display: flex; }
 
+    /* ── Pinned Message Banner ────────────────────────────────── */
+    #pinned-banner {
+      display: none;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px 12px;
+      background: linear-gradient(90deg, rgba(212,168,67,0.18) 0%, rgba(212,168,67,0.07) 100%);
+      border-left: 3px solid var(--gold);
+      border-bottom: 1px solid rgba(212,168,67,0.15);
+      font-size: 12px;
+      color: var(--text);
+      cursor: default;
+      flex-shrink: 0;
+      animation: pin-slide-in 0.3s ease;
+    }
+    #pinned-banner.visible { display: flex; }
+    @keyframes pin-slide-in {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    #pinned-banner .pin-icon { color: var(--gold); font-size: 13px; flex-shrink: 0; margin-top: 1px; }
+    #pinned-banner .pin-body { flex: 1; min-width: 0; }
+    #pinned-banner .pin-label { font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--gold); margin-bottom: 2px; }
+    #pinned-banner .pin-user { font-weight: 700; color: var(--gold); margin-right: 5px; }
+    #pinned-banner .pin-text { word-break: break-word; white-space: pre-wrap; line-height: 1.4; }
+
     /* ── Chat Tab ─────────────────────────────────────────────── */
     #chat-messages {
       flex: 1;
@@ -2362,6 +2388,14 @@
 
       <!-- Chat Panel -->
       <div class="tab-panel active" id="tab-chat">
+        <!-- Pinned message banner (shown when admin pins a message) -->
+        <div id="pinned-banner" role="note" aria-live="polite">
+          <span class="pin-icon">📌</span>
+          <div class="pin-body">
+            <div class="pin-label">Pinned Message</div>
+            <div class="pin-text"><span class="pin-user" id="pinned-username"></span><span id="pinned-text"></span></div>
+          </div>
+        </div>
         <div id="chat-messages">
           <div class="chat-msg system">
             <div class="chat-text">Welcome to LETW Radio! Connect with believers around the world. 🙏</div>
@@ -2862,6 +2896,20 @@ socket.on('chat:cleared', () => {
 
 socket.on('chat:reaction', ({ emoji }) => spawnFloatingEmoji(emoji));
 
+socket.on('chat:pinned', ({ username, message }) => {
+  const banner = document.getElementById('pinned-banner');
+  document.getElementById('pinned-username').textContent = username ? username + ': ' : '';
+  document.getElementById('pinned-text').textContent = message || '';
+  banner.classList.add('visible');
+});
+
+socket.on('chat:unpinned', () => {
+  const banner = document.getElementById('pinned-banner');
+  banner.classList.remove('visible');
+  document.getElementById('pinned-username').textContent = '';
+  document.getElementById('pinned-text').textContent = '';
+});
+
 socket.on('ticker:update', ({ text, enabled }) => setTicker(text, enabled));
 
 socket.on('request:updated', ({ id, status, request_text }) => {
@@ -3284,6 +3332,14 @@ function _lwsConnect() {
       _lwsRtt  = Date.now() - (hi * 0x100000000 + lo);
       const el = document.getElementById('live-rtt-display');
       if (el) el.textContent = `${Math.round(_lwsRtt)} ms`;
+      // Update signal quality badge
+      const rtt = Math.round(_lwsRtt);
+      let quality;
+      if      (rtt < 80)  quality = 'Excellent';
+      else if (rtt < 180) quality = 'Good';
+      else if (rtt < 350) quality = 'Fair';
+      else                quality = 'Poor';
+      setSignal(`${quality} (${rtt}ms)`);
       return;
     }
     if (type === LWS_ENDED) {

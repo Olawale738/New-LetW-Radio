@@ -1107,9 +1107,13 @@
             <div id="sh-mem" style="font-size:17px;font-weight:700;color:#4caf82;font-family:var(--mono);">—</div>
             <div style="font-size:9px;color:var(--text3);letter-spacing:1px;margin-top:3px;text-transform:uppercase;">Heap Used</div>
           </div>
-          <div style="text-align:center;padding:12px 8px;background:rgba(212,168,67,0.06);border:1px solid rgba(212,168,67,0.2);border-radius:10px;">
+          <div style="text-align:center;padding:12px 8px;background:rgba(212,168,67,0.06);border:1px solid rgba(212,168,67,0.2);border-radius:10px;min-width:110px;">
             <div id="sh-rtt" style="font-size:17px;font-weight:700;color:var(--gold);font-family:var(--mono);">—</div>
             <div style="font-size:9px;color:var(--text3);letter-spacing:1px;margin-top:3px;text-transform:uppercase;">Latency (RTT)</div>
+            <svg id="rtt-sparkline" width="90" height="22" style="margin-top:6px;display:block;margin-left:auto;margin-right:auto;" viewBox="0 0 90 22" preserveAspectRatio="none">
+              <polyline id="rtt-sparkline-line" points="" fill="none" stroke="rgba(212,168,67,0.55)" stroke-width="1.5" stroke-linejoin="round"/>
+              <polyline id="rtt-sparkline-fill" points="" fill="rgba(212,168,67,0.08)" stroke="none"/>
+            </svg>
           </div>
           <div style="text-align:center;padding:12px 8px;background:rgba(107,79,174,0.06);border:1px solid rgba(107,79,174,0.2);border-radius:10px;">
             <div id="sh-watchdog" style="font-size:17px;font-weight:700;color:var(--purple);font-family:var(--mono);">—</div>
@@ -1774,13 +1778,45 @@
       <div class="card" style="margin-bottom:20px;">
         <div class="card-header"><div class="card-title">🔔 Push Notifications</div></div>
         <div style="padding:16px;">
-          <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+          <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:14px;">
             <div style="font-size:13px;color:var(--text3);">Active subscribers: <strong id="push-sub-count" style="color:var(--gold);">–</strong></div>
-            <button class="btn btn-secondary" style="padding:4px 12px;font-size:11px;" onclick="sendTestPush()">Send Test Push</button>
-            <span id="push-test-msg" style="font-size:12px;color:#4caf82;display:none;">Test sent!</span>
           </div>
-          <div style="margin-top:10px;font-size:11px;color:var(--text3);line-height:1.6;">
-            Push notifications are sent automatically when a live broadcast starts. Subscribers must have notifications enabled in their browser on the /listen page.
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <input class="form-control" id="push-custom-title" placeholder="Notification title (e.g. 🎙 LETW Radio is LIVE)" style="font-size:12px;">
+            <input class="form-control" id="push-custom-body" placeholder="Message body — what's happening?" style="font-size:12px;">
+            <input class="form-control" id="push-custom-url" placeholder="Tap URL (default: /listen)" style="font-size:12px;">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <button class="btn btn-primary" style="padding:6px 16px;font-size:12px;" onclick="sendCustomPush()">📣 Send to All Subscribers</button>
+              <span id="push-sent-msg" style="font-size:11px;color:#4caf82;display:none;"></span>
+            </div>
+          </div>
+          <div style="margin-top:10px;font-size:10px;color:var(--text3);line-height:1.6;">
+            Notifications are also sent automatically when a live broadcast starts. Subscribers must enable notifications on the /listen page.
+          </div>
+        </div>
+      </div>
+
+      <!-- Scheduled Announcement Card -->
+      <div class="card" style="margin-bottom:20px;">
+        <div class="card-header"><div class="card-title">⏰ Scheduled Announcement</div></div>
+        <div style="padding:16px;">
+          <div style="font-size:11px;color:var(--text3);margin-bottom:10px;">Write a message now and have it broadcast automatically at a chosen time.</div>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <input class="form-control" id="sched-announce-text" placeholder="Announcement text..." style="font-size:12px;">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <label style="font-size:11px;color:var(--text3);">Send in:</label>
+              <select class="form-control" id="sched-delay-select" style="width:auto;font-size:11px;padding:5px 10px;">
+                <option value="300000">5 minutes</option>
+                <option value="900000">15 minutes</option>
+                <option value="1800000" selected>30 minutes</option>
+                <option value="3600000">1 hour</option>
+                <option value="custom">Custom time…</option>
+              </select>
+              <input type="time" id="sched-custom-time" class="form-control" style="width:120px;font-size:11px;padding:5px 8px;display:none;">
+              <button class="btn btn-primary" style="padding:6px 14px;font-size:12px;" onclick="scheduleAnnouncement()">⏰ Schedule</button>
+              <button class="btn btn-secondary" style="padding:6px 14px;font-size:12px;" id="cancel-sched-btn" onclick="cancelScheduledAnnouncement()" style="display:none;">✕ Cancel</button>
+            </div>
+            <div id="sched-status" style="font-size:11px;color:#4caf82;display:none;"></div>
           </div>
         </div>
       </div>
@@ -2370,6 +2406,25 @@ window.addEventListener('online', () => {
 let _adminRtt    = 0;
 let _reconnCount = 0;
 
+// ── RTT history (last 30 pings) for sparkline ───────────────────────────────
+let _rttHistory      = [];
+let _rttCriticalRun  = 0;   // consecutive Critical readings — 3 in a row → auto-reconnect
+
+function _drawRttSparkline() {
+  const line = document.getElementById('rtt-sparkline-line');
+  const fill = document.getElementById('rtt-sparkline-fill');
+  if (!line || !fill || _rttHistory.length < 2) return;
+  const W = 90, H = 22, pad = 2;
+  const max = Math.max(..._rttHistory, 200);
+  const pts = _rttHistory.map((v, i) => {
+    const x = pad + (i / (_rttHistory.length - 1)) * (W - pad * 2);
+    const y = H - pad - ((v / max) * (H - pad * 2));
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  line.setAttribute('points', pts);
+  fill.setAttribute('points', `${pad},${H} ${pts} ${W - pad},${H}`);
+}
+
 // Generic latency probe result
 socket.on('admin:pong', ({ clientTs }) => {
   _adminRtt = Date.now() - clientTs;
@@ -2381,6 +2436,23 @@ socket.on('admin:pong', ({ clientTs }) => {
   if (rttEl)  { rttEl.textContent = _adminRtt + ' ms'; rttEl.style.color = rttColor; }
   if (topLbl) { topLbl.textContent = _adminRtt + ' ms · ' + rttGrade; topLbl.style.color = rttColor; }
   if (dot)    dot.style.background = rttColor;
+
+  // Sparkline
+  _rttHistory.push(_adminRtt);
+  if (_rttHistory.length > 30) _rttHistory.shift();
+  _drawRttSparkline();
+
+  // 3-strike watchdog: three consecutive Critical readings → force reconnect
+  if (_adminRtt >= 700) {
+    _rttCriticalRun++;
+    if (_rttCriticalRun >= 3) {
+      _rttCriticalRun = 0;
+      logActivity('⚡ Watchdog: 3 consecutive Critical readings — forcing reconnect');
+      reconnectAdmin();
+    }
+  } else {
+    _rttCriticalRun = 0;
+  }
 });
 
 // ── Single consolidated connect handler ───────────────────────────────────────
@@ -2410,8 +2482,11 @@ socket.on('connect', () => {
       artist:   document.getElementById('live-artist').value.trim() || 'LETW Radio',
       record:   false,  // recording file already open on server — don't open another
       mimeType: _liveReconnectMimeType
+    }, (ack) => {
+      if (ack?.ok) logActivity('✓ Server confirmed live broadcast resumed');
+      else         logActivity('⚠ Server did not confirm resume — check connection');
     });
-    logActivity('🔄 Socket reconnected — live broadcast resumed');
+    logActivity('🔄 Socket reconnected — live broadcast resuming…');
   } else if (liveMediaRecorder && liveMediaRecorder.state !== 'inactive') {
     // Edge case: still recording but flag not set (very fast reconnect)
     setLiveUIState(true);
@@ -2658,7 +2733,7 @@ async function emergencyStop() {
     // Stop scheduled playback
     await api('POST', '/player/stop').catch(() => {});
     // Stop YouTube relay
-    await api('DELETE', '/youtube-relay').catch(() => {});
+    await api('POST', '/youtube/stop').catch(() => {});
     toast('🛑 All broadcasts stopped', 'info');
     logActivity('🛑 Emergency stop: all broadcasts stopped by admin');
   } catch (e) { toast('Emergency stop partial: ' + e.message, 'error'); }
@@ -4212,7 +4287,10 @@ registerProcessor('letw-noise-gate', NoiseGateProcessor);
   // Send the admin token so server accepts live events
   socket.auth = { token: getAdminToken() };
   const recordCheck = document.getElementById('live-record-check');
-  socket.emit('live:start', { title, artist, record: recordCheck ? recordCheck.checked : false, mimeType });
+  socket.emit('live:start', { title, artist, record: recordCheck ? recordCheck.checked : false, mimeType }, (ack) => {
+    if (ack?.ok) logActivity('✓ Server confirmed live broadcast started');
+    else         logActivity('⚠ Server did not confirm start — check connection and retry');
+  });
 
   liveMediaRecorder.start(60); // 60 ms timeslice — ~40% lower end-to-end latency vs 100 ms
   // Note: going below 60 ms risks producing WebM clusters that Chrome can't
@@ -4363,7 +4441,10 @@ async function startTabBroadcast() {
 
   socket.auth = { token: getAdminToken() };
   const recordCheck = document.getElementById('live-record-check');
-  socket.emit('live:start', { title, artist, record: recordCheck ? recordCheck.checked : false, mimeType });
+  socket.emit('live:start', { title, artist, record: recordCheck ? recordCheck.checked : false, mimeType }, (ack) => {
+    if (ack?.ok) logActivity('✓ Server confirmed live broadcast started');
+    else         logActivity('⚠ Server did not confirm start — check connection and retry');
+  });
 
   liveMediaRecorder.start(60);
 
@@ -4736,6 +4817,8 @@ function setLiveUIState(on) {
 socket.on('request:new', () => {
   const badge = document.getElementById('community-badge');
   if (badge && state.currentPage !== 'community') badge.style.display = 'inline';
+  // Auto-refresh the requests table when the community page is already open
+  if (state.currentPage === 'community') loadRequestsAdmin();
 });
 
 socket.on('ban:new', () => {
@@ -5042,8 +5125,9 @@ async function loadChatMod() {
           '<div style="font-size:12px;color:var(--text3);word-break:break-word;">' + escHtml(msg.message) + '</div>' +
         '</div>' +
         '<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;">' +
-          '<button onclick="deleteChat(' + msg.id + ')" style="background:rgba(224,48,96,0.1);border:1px solid rgba(224,48,96,0.3);color:#e03060;border-radius:6px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:inherit;" onmouseenter="this.style.background=\'rgba(224,48,96,0.2)\'" onmouseleave="this.style.background=\'rgba(224,48,96,0.1)\'">Delete</button>' +
-          '<button onclick="banFromChat(\'' + escHtml(msg.username).replace(/'/g, "\\'") + '\')" style="background:rgba(150,30,50,0.12);border:1px solid rgba(180,40,60,0.35);color:#c05070;border-radius:6px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:inherit;" onmouseenter="this.style.background=\'rgba(150,30,50,0.22)\'" onmouseleave="this.style.background=\'rgba(150,30,50,0.12)\'">🚫 Ban</button>' +
+          '<button onclick="pinChatMessage(' + msg.id + ')" title="Pin for all listeners" style="background:rgba(212,168,67,0.1);border:1px solid rgba(212,168,67,0.3);color:#d4a843;border-radius:6px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:inherit;">📌 Pin</button>' +
+          '<button onclick="deleteChat(' + msg.id + ')" style="background:rgba(224,48,96,0.1);border:1px solid rgba(224,48,96,0.3);color:#e03060;border-radius:6px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:inherit;">Delete</button>' +
+          '<button onclick="banFromChat(\'' + escHtml(msg.username).replace(/'/g, "\\'") + '\')" style="background:rgba(150,30,50,0.12);border:1px solid rgba(180,40,60,0.35);color:#c05070;border-radius:6px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:inherit;">🚫 Ban</button>' +
         '</div>';
       container.appendChild(row);
     });
@@ -5099,7 +5183,11 @@ async function loadRequestsAdmin() {
           '<option value="played"'    + (req.status==='played'    ? ' selected' : '') + ' style="background:#0e0a0f;color:#d4a843;">Played</option>' +
           '<option value="rejected"'  + (req.status==='rejected'  ? ' selected' : '') + ' style="background:#0e0a0f;color:#e05070;">Rejected</option>' +
         '</select></td>' +
-        '<td style="padding:10px 14px;white-space:nowrap;"><button onclick="quickApprove(' + req.id + ')" style="background:rgba(76,175,130,0.12);border:1px solid rgba(76,175,130,0.3);color:#4caf82;border-radius:6px;padding:4px 10px;font-size:10px;cursor:pointer;font-family:inherit;margin-right:4px;">✓ Approve</button><button onclick="deleteRequest(' + req.id + ')" style="background:rgba(224,48,96,0.1);border:1px solid rgba(224,48,96,0.3);color:#e03060;border-radius:6px;padding:4px 10px;font-size:10px;cursor:pointer;font-family:inherit;" onmouseenter="this.style.background=\'rgba(224,48,96,0.2)\'" onmouseleave="this.style.background=\'rgba(224,48,96,0.1)\'">Delete</button></td>';
+        '<td style="padding:10px 14px;white-space:nowrap;display:flex;gap:4px;flex-wrap:wrap;">' +
+          (req.request_type === 'song' ? '<button onclick="playSongRequest(\'' + escHtml(req.request_text).replace(/'/g,"\\'") + '\')" style="background:rgba(76,175,130,0.12);border:1px solid rgba(76,175,130,0.3);color:#4caf82;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:inherit;" title="Search library and play now">▶ Play</button>' : '') +
+          '<button onclick="quickApprove(' + req.id + ')" style="background:rgba(74,127,212,0.12);border:1px solid rgba(74,127,212,0.3);color:#4a9fd4;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:inherit;">✓ OK</button>' +
+          '<button onclick="deleteRequest(' + req.id + ')" style="background:rgba(224,48,96,0.1);border:1px solid rgba(224,48,96,0.3);color:#e03060;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:inherit;">✕</button>' +
+        '</td>';
       tbody.appendChild(tr);
     });
   } catch(e) {
@@ -5270,6 +5358,102 @@ async function savePlaybackSettings() {
 async function quickApprove(id) {
   await updateRequest(id, 'approved');
   await loadRequestsAdmin();
+}
+
+// ── Play a requested song by searching the library ─────────────────────────
+async function playSongRequest(text) {
+  const q = text.trim().slice(0, 80);
+  try {
+    const res   = await apiFetch('/api/tracks/search?q=' + encodeURIComponent(q));
+    const tracks = await res.json();
+    if (!tracks.length) { toast('Track not found in library: "' + q + '"', 'error'); return; }
+    const t = tracks[0];
+    await api('POST', '/player/play-track/' + t.id);
+    toast('▶ Playing: ' + t.title + (t.artist ? ' — ' + t.artist : ''), 'success');
+    logActivity('▶ Song request played: ' + t.title);
+  } catch(e) { toast('Play failed: ' + (e.message || e), 'error'); }
+}
+
+// ── Chat message pinning ────────────────────────────────────────────────────
+async function pinChatMessage(id) {
+  try {
+    await apiFetch('/api/chat/' + id + '/pin', { method: 'POST' });
+    toast('📌 Message pinned for all listeners', 'success');
+    logActivity('📌 Chat message pinned (id ' + id + ')');
+  } catch(e) { toast('Pin failed: ' + (e.message || e), 'error'); }
+}
+async function unpinChat() {
+  try {
+    await apiFetch('/api/chat/pin', { method: 'DELETE' });
+    toast('📌 Pinned message cleared', 'info');
+    logActivity('📌 Pinned message cleared');
+  } catch(e) { toast('Unpin failed', 'error'); }
+}
+
+// ── Custom push notification composer ──────────────────────────────────────
+async function sendCustomPush() {
+  const title = document.getElementById('push-custom-title').value.trim();
+  const body  = document.getElementById('push-custom-body').value.trim();
+  const url   = document.getElementById('push-custom-url').value.trim() || '/listen';
+  if (!title && !body) { toast('Please enter a title or message body', 'error'); return; }
+  try {
+    const data = await api('POST', '/push/send', { title: title || 'LETW Radio', body, url });
+    const msgEl = document.getElementById('push-sent-msg');
+    if (msgEl) { msgEl.textContent = `✓ Sent to ${data.sent} subscriber${data.sent !== 1 ? 's' : ''}`; msgEl.style.display = 'inline'; setTimeout(() => { msgEl.style.display = 'none'; }, 4000); }
+    logActivity(`📣 Push notification sent to ${data.sent} subscriber${data.sent !== 1 ? 's' : ''}: "${title || body}"`);
+  } catch(e) { toast('Send failed: ' + (e.message || e), 'error'); }
+}
+
+// ── Scheduled announcement ──────────────────────────────────────────────────
+let _schedAnnounceTo = null;
+document.addEventListener('DOMContentLoaded', () => {
+  const sel = document.getElementById('sched-delay-select');
+  if (sel) sel.addEventListener('change', () => {
+    const custom = document.getElementById('sched-custom-time');
+    if (custom) custom.style.display = sel.value === 'custom' ? 'inline-block' : 'none';
+  });
+});
+function scheduleAnnouncement() {
+  const text = (document.getElementById('sched-announce-text').value || '').trim();
+  if (!text) { toast('Enter an announcement text first', 'error'); return; }
+  const sel = document.getElementById('sched-delay-select');
+  let delayMs;
+  if (sel.value === 'custom') {
+    const t = document.getElementById('sched-custom-time').value;
+    if (!t) { toast('Set a time for the custom schedule', 'error'); return; }
+    const [hh, mm] = t.split(':').map(Number);
+    const now = new Date();
+    const target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, 0, 0);
+    if (target <= now) target.setDate(target.getDate() + 1); // next day if past
+    delayMs = target - now;
+  } else {
+    delayMs = parseInt(sel.value, 10);
+  }
+  if (_schedAnnounceTo) { clearTimeout(_schedAnnounceTo); _schedAnnounceTo = null; }
+  const fireAt = new Date(Date.now() + delayMs).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+  _schedAnnounceTo = setTimeout(async () => {
+    _schedAnnounceTo = null;
+    const statusEl = document.getElementById('sched-status');
+    if (statusEl) { statusEl.textContent = '✓ Broadcast at ' + new Date().toLocaleTimeString(); statusEl.style.display = 'block'; }
+    document.getElementById('cancel-sched-btn').style.display = 'none';
+    // broadcast the announcement
+    document.getElementById('announce-text').value = text;
+    await broadcastAnnounce(true);
+    logActivity('⏰ Scheduled announcement fired: "' + text + '"');
+  }, delayMs);
+  const statusEl = document.getElementById('sched-status');
+  if (statusEl) { statusEl.textContent = `⏰ Scheduled for ${fireAt} (${Math.round(delayMs/60000)} min)`; statusEl.style.display = 'block'; }
+  document.getElementById('cancel-sched-btn').style.display = 'inline-flex';
+  toast(`⏰ Announcement scheduled for ${fireAt}`, 'success');
+  logActivity(`⏰ Announcement scheduled for ${fireAt}: "${text}"`);
+}
+function cancelScheduledAnnouncement() {
+  if (_schedAnnounceTo) { clearTimeout(_schedAnnounceTo); _schedAnnounceTo = null; }
+  const statusEl = document.getElementById('sched-status');
+  if (statusEl) statusEl.style.display = 'none';
+  document.getElementById('cancel-sched-btn').style.display = 'none';
+  toast('Scheduled announcement cancelled', 'info');
+  logActivity('⏰ Scheduled announcement cancelled');
 }
 
 // =================== QUEUE DRAG-AND-DROP ===================
