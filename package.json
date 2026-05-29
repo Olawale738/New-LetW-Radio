@@ -12,6 +12,7 @@
     "build": "cd nuxt && npm install && npm run build"
   },
   "dependencies": {
+    "@distube/ytdl-core": "^4.16.12",
     "cors": "^2.8.5",
     "ejs": "^6.0.1",
     "express": "^4.18.2",

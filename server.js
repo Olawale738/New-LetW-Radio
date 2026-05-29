@@ -15,6 +15,7 @@ const apiRoutes = require('./routes/api');
 const webpush = require('web-push');
 const { liveWs }    = require('./liveWs');
 const icecastIngest = require('./icecastIngest');
+const youtubeStream = require('./youtubeStream');
 
 const app = express();
 const server = http.createServer(app);
@@ -245,6 +246,40 @@ app.get('/api/server-health', (req, res) => {
     liveBytes:      _liveBytesSent,
     watchdogActive: !!_liveHeartbeatTimer,
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 📺  SERVER-SIDE YOUTUBE / URL RELAY  (admin only)
+// Pulls audio from a YouTube video / 24-7 live channel ON THE SERVER and pipes
+// it into the live broadcast pipeline.  Works from ANY admin device — desktop
+// app, web or phone — because no browser tab-capture is involved.
+// ─────────────────────────────────────────────────────────────────────────────
+app.post('/api/youtube/start', (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ error: 'Forbidden' });
+  // Block double-sourcing: a browser-mic / Icecast broadcast must stop first.
+  if (audioEngine.isLive && !youtubeStream.isActive) {
+    return res.status(409).json({ error: 'A broadcast is already live. Stop it first.' });
+  }
+  const s = getSettings();
+  const url = (req.body && req.body.url ? String(req.body.url) : '').trim() || (s.youtube_relay_url || '').trim();
+  if (!url) return res.status(400).json({ error: 'No YouTube/stream URL set. Add one in Settings → YouTube Live Relay.' });
+  const title  = (req.body && req.body.title  ? String(req.body.title)  : '').trim();
+  const artist = s.radio_name || 'Light Encounter Tabernacle Worldwide';
+  const ok = youtubeStream.start(url, title, artist);
+  if (!ok) return res.status(400).json({ error: youtubeStream.getStatus().lastError || 'Could not start relay' });
+  console.log(`[YouTube] Admin armed server-side relay → ${url}`);
+  res.json({ success: true, status: youtubeStream.getStatus() });
+});
+
+app.post('/api/youtube/stop', (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ error: 'Forbidden' });
+  youtubeStream.stop();
+  res.json({ success: true });
+});
+
+app.get('/api/youtube/status', (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ error: 'Forbidden' });
+  res.json(youtubeStream.getStatus());
 });
 
 // Auto-fill with random tracks when queue runs dry (Smart no-repeat: skip recently played)
@@ -536,6 +571,7 @@ let   _liveBytesSent      = 0;    // total bytes transmitted in current broadcas
 let   _liveListeners      = 0;    // WS clients that have signalled live:join
 let   _liveAdminLastPing  = 0;    // epoch ms of last live:ping (or live:chunk as implicit ping)
 let   _liveHeartbeatTimer = null; // setInterval handle for heartbeat watchdog
+let   _ytRelayActive      = false;// true while the server-side YouTube relay owns the live feed
 
 io.on('connection', (socket) => {
   _webListeners++;
@@ -569,6 +605,9 @@ io.on('connection', (socket) => {
   // Admin signals "going live"
   socket.on('live:start', (data) => {
     if (!isAdminSocket()) return;
+    // A browser-mic / tab broadcast takes priority over the server-side relay:
+    // stop the relay first so there is only ever one live source.
+    if (youtubeStream.isActive) youtubeStream.stop();
     const { title, artist, record, mimeType } = data || {};
     console.log(`[Live] Admin started live broadcast: "${title}" [${mimeType || 'default'}]`);
     audioEngine.startLive(title, artist, mimeType);
@@ -670,6 +709,13 @@ io.on('connection', (socket) => {
   // Admin ends the live broadcast
   socket.on('live:stop', () => {
     if (!isAdminSocket()) return;
+    // If the server-side YouTube relay is the active source, stop it and let its
+    // own 'stop' handler perform the full teardown (engine, buffers, recording).
+    if (youtubeStream.isActive) {
+      console.log('[Live] Admin stopped YouTube relay via Stop button');
+      youtubeStream.stop();
+      return;
+    }
     console.log('[Live] Admin stopped live broadcast');
     audioEngine.stopLive();
     // Force-disconnect any active Icecast encoder so butt/ffmpeg stops sending
@@ -764,6 +810,9 @@ audioEngine.on('liveStart', async (info) => {
   if (_liveHeartbeatTimer) clearInterval(_liveHeartbeatTimer);
   _liveHeartbeatTimer = setInterval(() => {
     if (!audioEngine.isLive) { clearInterval(_liveHeartbeatTimer); _liveHeartbeatTimer = null; return; }
+    // The server-side YouTube relay manages its own liveness (auto-reconnect with
+    // backoff). Never let the browser-tab watchdog kill it mid-reconnect.
+    if (_ytRelayActive) return;
     if (Date.now() - _liveAdminLastPing > 20000) {
       console.log('[Live] Admin heartbeat timeout — auto-stopping broadcast');
       audioEngine.stopLive();
@@ -959,6 +1008,82 @@ db.init().then(() => {
     liveWs.injectEnded();
     _finaliseIcecastRecording();
     _iceMimeType = '';
+  });
+
+  // ── Server-side YouTube / URL relay callbacks ──────────────────────────────
+  // Mirrors the Icecast ingest wiring: the relay produces WebM/Opus chunks
+  // exactly like the browser-mic path, so audioEngine, liveWs, the Socket.IO
+  // ring buffer and recording all work unchanged.
+  youtubeStream.on('start', (title, mimeType) => {
+    _ytRelayActive = true;
+    console.log(`[YouTube] ▶ Relay live: "${title}" [${mimeType}]`);
+    audioEngine.startLive(title, youtubeStream._artist, mimeType);
+    // Auto-record YouTube relays when the Icecast auto-record setting is on.
+    try {
+      const setting = db.prepare('SELECT value FROM settings WHERE key = ?').get('auto_record_icecast');
+      if (setting && setting.value === '1' && !liveRecordingEnabled) {
+        const recFile = path.join(__dirname, 'uploads', `youtube-${Date.now()}.webm`);
+        fs.mkdirSync(path.join(__dirname, 'uploads'), { recursive: true });
+        liveRecordingStream  = fs.createWriteStream(recFile);
+        liveRecordingFile    = recFile;
+        liveRecordingTitle   = title || 'YouTube Relay';
+        liveRecordingArtist  = youtubeStream._artist;
+        liveRecordingEnabled = true;
+        console.log(`[YouTube] Auto-recording to: ${recFile}`);
+      }
+    } catch (e) { console.error('[YouTube] Auto-record error:', e.message); }
+    io.emit('youtube:status', youtubeStream.getStatus());
+  });
+
+  youtubeStream.on('title', (title) => {
+    audioEngine.liveTitle = title;
+    io.emit('status', audioEngine.getStatus());
+    io.emit('youtube:status', youtubeStream.getStatus());
+  });
+
+  youtubeStream.on('chunk', (buf, isFirst) => {
+    if (!audioEngine.isLive) return;
+    _liveAdminLastPing = Date.now();   // keep heartbeat fed (watchdog is also guarded by _ytRelayActive)
+    _liveBytesSent    += buf.length;
+    audioEngine.broadcastLive(buf);                 // HTTP /live-stream clients
+    liveWs.injectChunk(buf, isFirst);               // binary-WS listeners (WebM: first chunk = init)
+    if (!isFirst) {                                 // Socket.IO catchup ring (skip init segment)
+      _liveRingBuffer.push(buf);
+      if (_liveRingBuffer.length > LIVE_RING_SIZE) _liveRingBuffer.shift();
+    }
+    if (liveRecordingEnabled && liveRecordingStream) {
+      try { liveRecordingStream.write(buf); } catch (e) {}
+    }
+  });
+
+  youtubeStream.on('reconnecting', (n) => {
+    console.log(`[YouTube] Source dropped — reconnecting (attempt ${n})…`);
+    io.emit('youtube:status', youtubeStream.getStatus());
+  });
+
+  youtubeStream.on('error', (msg) => {
+    console.warn('[YouTube] ' + msg);
+    io.emit('youtube:error', msg);
+    io.emit('youtube:status', youtubeStream.getStatus());
+  });
+
+  youtubeStream.on('stop', () => {
+    if (!_ytRelayActive) { io.emit('youtube:status', youtubeStream.getStatus()); return; }
+    _ytRelayActive = false;
+    console.log('[YouTube] ■ Relay stopped');
+    if (audioEngine.isLive) {
+      audioEngine.stopLive();
+      io.emit('live:ended');
+      io.emit('status', audioEngine.getStatus());
+    }
+    _liveRingBuffer    = [];
+    _liveBytesSent     = 0;
+    _liveListeners     = 0;
+    _liveAdminLastPing = 0;
+    if (_liveHeartbeatTimer) { clearInterval(_liveHeartbeatTimer); _liveHeartbeatTimer = null; }
+    liveWs.injectEnded();
+    _finaliseIcecastRecording();   // shared finaliser → saves to library + sermons
+    io.emit('youtube:status', youtubeStream.getStatus());
   });
 
   server.listen(PORT, () => {

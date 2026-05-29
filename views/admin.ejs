@@ -1541,6 +1541,11 @@
               style="background:linear-gradient(135deg,#8b1a35,#e05070);color:#fff;border:none;font-weight:700;padding:12px 28px;font-size:14px;letter-spacing:1px;">
               🔴 GO LIVE
             </button>
+            <button class="btn" id="btn-go-live-youtube" onclick="startYouTubeRelay()"
+              style="background:linear-gradient(135deg,#c4302b,#ff5252);color:#fff;border:none;font-weight:700;padding:12px 22px;font-size:14px;letter-spacing:0.5px;"
+              title="Broadcast the LETW YouTube live service to all listeners — runs on the server, works on every device">
+              ▶ Stream from YouTube
+            </button>
             <button class="btn" id="btn-go-live-tab" onclick="startTabBroadcast()"
               style="background:linear-gradient(135deg,#7a1fa2,#c2185b);color:#fff;border:none;font-weight:700;padding:12px 22px;font-size:14px;letter-spacing:0.5px;"
               title="Stream audio from a YouTube tab or any other browser tab to all listeners">
@@ -1552,12 +1557,20 @@
             <button class="btn btn-secondary" onclick="refreshMics()">🔄 Refresh Mics</button>
           </div>
 
-          <!-- Tab-audio how-to (Chrome / Edge desktop only) -->
-          <div style="margin-top:10px;padding:10px 12px;background:rgba(122,31,162,0.07);border:1px solid rgba(194,24,91,0.25);border-radius:8px;font-size:11px;color:var(--text2);line-height:1.6;">
-            <strong style="color:#e07ab8;">📺 Stream YouTube / Tab Audio:</strong>
-            Open YouTube (or any site) in another tab, click <strong>Stream Tab Audio</strong>, pick that tab in the browser picker, and
-            <strong>tick “Share tab audio”</strong>. Listeners hear it instantly.
-            <span style="color:var(--text3);">Works on Chrome / Edge desktop. Stream your own church videos to stay within copyright.</span>
+          <!-- Server-side YouTube relay status -->
+          <div id="yt-relay-status" style="display:none;margin-top:10px;padding:10px 13px;background:rgba(196,48,43,0.1);border:1px solid rgba(255,82,82,0.35);border-radius:8px;font-size:12px;color:#ff8a8a;line-height:1.6;">
+            <span id="yt-relay-status-text">📡 Connecting to YouTube…</span>
+          </div>
+
+          <!-- How-to: server relay (primary) + browser tab capture (desktop browsers) -->
+          <div style="margin-top:10px;padding:10px 12px;background:rgba(196,48,43,0.07);border:1px solid rgba(255,82,82,0.22);border-radius:8px;font-size:11px;color:var(--text2);line-height:1.6;">
+            <strong style="color:#ff7676;">▶ Stream from YouTube (recommended):</strong>
+            Set your LETW live URL in <strong>Settings → LETW YouTube Live Relay</strong>, then click <strong>Stream from YouTube</strong>.
+            The server pulls and re-streams it to all listeners — <span style="color:var(--green);">works on the desktop app and phones, no tab sharing required.</span>
+            <br>
+            <strong style="color:#e07ab8;">📺 Stream Tab Audio:</strong>
+            Browser-only alternative — open a tab, click the button and tick <strong>“Share tab audio.”</strong>
+            <span style="color:var(--text3);">Chrome / Edge desktop browser only (not the desktop app).</span>
           </div>
 
           <!-- Live duration counter + quality stats -->
@@ -1942,6 +1955,34 @@
             <input class="form-control" id="set-social-youtube" placeholder="https://youtube.com/watch?v=...">
           </div>
           <button class="btn btn-primary" onclick="saveSettings()">Save Changes</button>
+        </div>
+
+        <!-- LETW YouTube Live Relay (server-side broadcast source) -->
+        <div class="card" style="border:1px solid rgba(224,80,112,0.35);">
+          <div class="card-header"><div class="card-title">📡 LETW YouTube Live Relay</div></div>
+          <p style="font-size:12px;color:var(--text2);margin-bottom:6px;line-height:1.6;">
+            Broadcast the <strong>LETW YouTube live service</strong> (or any video) to every radio listener —
+            pulled and re-streamed <strong>entirely on the server</strong>.
+          </p>
+          <p style="font-size:11px;color:var(--green);margin-bottom:14px;line-height:1.6;">
+            ✓ Works from the desktop app, web and phone — no “Share tab audio” needed.
+            ✓ Auto-reconnects if the source drops. Start it from the <strong>Go Live</strong> page.
+          </p>
+          <div class="form-group">
+            <label class="form-label">LETW YouTube Live / Channel / Video URL</label>
+            <input class="form-control" id="set-youtube-relay-url" placeholder="https://www.youtube.com/@YourChannel/live  or  https://youtu.be/VIDEO_ID">
+          </div>
+          <div class="form-group">
+            <label style="font-size:13px;color:var(--text2);display:flex;align-items:center;gap:8px;cursor:pointer;">
+              <input type="checkbox" id="set-auto-record-relay" style="accent-color:var(--gold);width:15px;height:15px;">
+              Auto-record relayed broadcasts to the library &amp; sermons
+            </label>
+          </div>
+          <button class="btn btn-primary" onclick="saveSettings()">Save Changes</button>
+          <div style="margin-top:12px;padding:9px 11px;background:rgba(212,168,67,0.08);border:1px solid rgba(212,168,67,0.25);border-radius:7px;font-size:11px;color:var(--text3);line-height:1.6;">
+            <strong style="color:var(--gold);">Tip:</strong> Use the channel <em>/live</em> URL for a 24-7 service so it always follows the current broadcast.
+            For maximum robustness on Render, drop a <code>yt-dlp</code> binary on the disk and set the <code>YTDLP_PATH</code> env var.
+          </div>
         </div>
 
         <div class="card">
@@ -3418,6 +3459,11 @@ async function loadSettings() {
   // YouTube
   const ytEl = document.getElementById('set-social-youtube');
   if (ytEl) ytEl.value = s.social_youtube || 'https://www.youtube.com/watch?v=8wTuN77RZJ4';
+  // YouTube live relay (server-side broadcast source)
+  const ytRelayEl = document.getElementById('set-youtube-relay-url');
+  if (ytRelayEl) ytRelayEl.value = s.youtube_relay_url || '';
+  const ytRecEl = document.getElementById('set-auto-record-relay');
+  if (ytRecEl) ytRecEl.checked = s.auto_record_icecast === '1';
   // Moderation
   const banEnEl = document.getElementById('set-ban-enabled');
   const banWdEl = document.getElementById('set-banned-words');
@@ -3463,12 +3509,20 @@ async function saveSettings() {
   // YouTube
   const ytEl = document.getElementById('set-social-youtube');
   if (ytEl) data.social_youtube = ytEl.value.trim();
+  // YouTube live relay (server-side broadcast source)
+  const ytRelayEl = document.getElementById('set-youtube-relay-url');
+  if (ytRelayEl) data.youtube_relay_url = ytRelayEl.value.trim();
+  const ytRecEl = document.getElementById('set-auto-record-relay');
+  if (ytRecEl) data.auto_record_icecast = ytRecEl.checked ? '1' : '0';
   // Moderation
   const banEnEl  = document.getElementById('set-ban-enabled');
   const banWdEl  = document.getElementById('set-banned-words');
   if (banEnEl) data.chat_ban_enabled = banEnEl.checked ? '1' : '0';
   if (banWdEl) data.banned_words     = banWdEl.value.trim();
   await api('PUT', '/settings', data);
+  // Keep the in-page settings cache current so features that read window.__S
+  // (e.g. the YouTube relay URL) pick up changes without a page reload.
+  Object.assign(window.__S || (window.__S = {}), data);
   toast('Settings saved', 'success');
   document.getElementById('sidebar-radio-name').textContent = data.radio_name;
 }
@@ -3582,6 +3636,7 @@ let _liveRtt              = null;  // last measured round-trip time (ms)
 let _liveBytesFromServer  = 0;     // bytes sent, as reported back by server via live:pong
 let _liveWasReconnecting  = false; // true while socket is disconnected during a live broadcast
 let _liveReconnectMimeType = '';   // mimeType stored for socket reconnect
+let _ytRelayLocalActive   = false; // true while THIS admin started the server-side YouTube relay
 
 // Format byte count to a human-readable string (B / KB / MB)
 function _fmtBytes(b) {
@@ -4039,14 +4094,26 @@ registerProcessor('letw-noise-gate', NoiseGateProcessor);
 // MUSIC-optimised (stereo, no noise gate, no voice EQ) instead of voice-optimised.
 // Capture uses getDisplayMedia with "share tab audio"; Chrome / Edge desktop only.
 // ════════════════════════════════════════════════════════════════════════════
+// Detect the LETW desktop app wrapper (Electron / Nativefier), where the browser
+// getDisplayMedia tab-picker is unavailable. In that context we steer the admin
+// to the server-side YouTube relay, which needs no tab capture.
+function _isDesktopApp() {
+  try { return /electron|nativefier|letw-radio-admin-desktop/i.test(navigator.userAgent || ''); }
+  catch { return false; }
+}
+
 async function startTabBroadcast() {
   // Guard: refuse if a broadcast (mic or tab) is already running
   if (liveMediaRecorder && liveMediaRecorder.state !== 'inactive') {
     alert('A broadcast is already live. Stop it first before starting another.');
     return;
   }
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-    alert('Tab audio capture is not supported in this browser.\nPlease use Chrome or Edge on a desktop computer.');
+  // Desktop app / unsupported browser → offer the server-side relay instead of
+  // dead-ending with "Not supported".
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia || _isDesktopApp()) {
+    if (confirm('📺 Tab-audio capture is not available in the desktop app.\n\nUse “▶ Stream from YouTube” instead — it broadcasts the LETW YouTube service to all listeners directly from the server, and works on every device.\n\nStart the YouTube relay now?')) {
+      startYouTubeRelay();
+    }
     return;
   }
 
@@ -4068,6 +4135,13 @@ async function startTabBroadcast() {
   } catch (err) {
     // User cancelled the picker, or permission denied — not a real error
     if (err && err.name === 'NotAllowedError') { logActivity('📺 Tab capture cancelled'); return; }
+    // Desktop webviews throw NotSupportedError / "Not supported" — offer the relay.
+    if (err && (err.name === 'NotSupportedError' || /not supported/i.test(err.message || ''))) {
+      if (confirm('📺 Tab-audio capture is not supported here (this is usually the desktop app).\n\nUse the server-side “▶ Stream from YouTube” relay instead? It works on every device.\n\nStart it now?')) {
+        startYouTubeRelay();
+      }
+      return;
+    }
     alert('Could not capture tab audio:\n' + (err.message || err.name || 'unknown error'));
     return;
   }
@@ -4159,7 +4233,62 @@ async function startTabBroadcast() {
   logActivity('📺 Streaming tab audio live: "' + title + '"');
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// STREAM FROM YOUTUBE (server-side relay) → all public listeners
+// The server pulls + re-streams the YouTube audio, so this works from ANY admin
+// device — including the desktop app and phones where tab-capture is unavailable.
+// No MediaRecorder / AudioContext here: the relay produces the live feed itself.
+// ════════════════════════════════════════════════════════════════════════════
+async function startYouTubeRelay() {
+  if (liveMediaRecorder && liveMediaRecorder.state !== 'inactive') {
+    alert('A broadcast is already live. Stop it first before starting another.');
+    return;
+  }
+  const relayUrl = (window.__S && window.__S.youtube_relay_url || '').trim();
+
+  const statusEl  = document.getElementById('yt-relay-status');
+  const statusTxt = document.getElementById('yt-relay-status-text');
+  if (statusEl)  statusEl.style.display = 'block';
+  if (statusTxt) statusTxt.textContent = '📡 Connecting to YouTube…';
+
+  const title = document.getElementById('live-title').value.trim() || '';
+  try {
+    // Send the cached URL if we have one; the server falls back to the saved
+    // setting (single source of truth) when the body URL is empty.
+    await api('POST', '/youtube/start', { url: relayUrl, title });
+    _ytRelayLocalActive = true;
+    setLiveUIState(true);                      // server will also emit live:started
+    liveStartTime = Date.now();
+    if (liveTimerInterval) clearInterval(liveTimerInterval);
+    liveTimerInterval = setInterval(updateLiveTimer, 1000);
+    logActivity('▶ Streaming from YouTube (server relay)' + (relayUrl ? ': ' + relayUrl : ''));
+    if (statusTxt) statusTxt.textContent = '📡 Relay armed — fetching audio from YouTube…';
+  } catch (e) {
+    if (statusEl) statusEl.style.display = 'none';
+    const msg = e.message || String(e);
+    if (/no youtube|url set|settings/i.test(msg)) {
+      alert('No LETW YouTube URL is set yet.\n\nGo to Settings → 📡 LETW YouTube Live Relay, paste your channel /live URL (or a video link), Save, then try again.');
+      navigate('settings');
+      return;
+    }
+    alert('Could not start YouTube relay:\n' + msg);
+  }
+}
+
+async function stopYouTubeRelay() {
+  try { await api('POST', '/youtube/stop'); } catch (e) {}
+  _ytRelayLocalActive = false;
+  const statusEl = document.getElementById('yt-relay-status');
+  if (statusEl) statusEl.style.display = 'none';
+  if (liveTimerInterval) { clearInterval(liveTimerInterval); liveTimerInterval = null; }
+  setLiveUIState(false);
+  logActivity('⏹ Stopped YouTube relay');
+}
+
 function stopLiveBroadcast() {
+  // If the server-side YouTube relay is the active source, stop it via the API.
+  if (_ytRelayLocalActive) { stopYouTubeRelay(); return; }
+
   if (liveMediaRecorder && liveMediaRecorder.state !== 'inactive') {
     liveMediaRecorder.stop();
   }
@@ -4412,6 +4541,7 @@ function setLiveUIState(on) {
   const chip       = document.getElementById('live-status-chip');
   const btnGo      = document.getElementById('btn-go-live');
   const btnGoTab   = document.getElementById('btn-go-live-tab');
+  const btnGoYt    = document.getElementById('btn-go-live-youtube');
   const btnStop    = document.getElementById('btn-stop-live');
   const timerWrap  = document.getElementById('live-timer-wrap');
   const navDot     = document.getElementById('live-nav-dot');
@@ -4425,6 +4555,7 @@ function setLiveUIState(on) {
     btnGo.disabled  = true;
     btnGo.style.opacity = '0.4';
     if (btnGoTab) { btnGoTab.disabled = true; btnGoTab.style.opacity = '0.4'; }
+    if (btnGoYt)  { btnGoYt.disabled  = true; btnGoYt.style.opacity  = '0.4'; }
     btnStop.disabled = false;
     btnStop.style.opacity = '1';
     timerWrap.style.display = 'block';
@@ -4438,10 +4569,14 @@ function setLiveUIState(on) {
     btnGo.disabled  = false;
     btnGo.style.opacity = '1';
     if (btnGoTab) { btnGoTab.disabled = false; btnGoTab.style.opacity = '1'; }
+    if (btnGoYt)  { btnGoYt.disabled  = false; btnGoYt.style.opacity  = '1'; }
     btnStop.disabled = true;
     btnStop.style.opacity = '0.4';
     timerWrap.style.display = 'none';
     navDot.style.display = 'none';
+    var ytStatusEl = document.getElementById('yt-relay-status');
+    if (ytStatusEl) ytStatusEl.style.display = 'none';
+    _ytRelayLocalActive = false;
     if (document.getElementById('live-timer')) document.getElementById('live-timer').textContent = '00:00:00';
     // Reset stats
     const rttEl   = document.getElementById('live-rtt-display');
@@ -4482,6 +4617,31 @@ socket.on('live:started', (info) => {
     logActivity(`📡 Encoder broadcast started: "${info.title || 'Live Broadcast'}"`);
     setLiveUIState(true);
   }
+});
+
+// ── Server-side YouTube relay status / errors ────────────────────────────────
+socket.on('youtube:status', (st) => {
+  const statusEl  = document.getElementById('yt-relay-status');
+  const statusTxt = document.getElementById('yt-relay-status-text');
+  if (!st || !st.active) {
+    if (statusEl && !_ytRelayLocalActive) statusEl.style.display = 'none';
+    return;
+  }
+  _ytRelayLocalActive = true;
+  if (statusEl)  statusEl.style.display = 'block';
+  if (statusTxt) {
+    if (st.retry > 0) {
+      statusTxt.innerHTML = `📡 Reconnecting to YouTube… (attempt ${st.retry})`;
+    } else {
+      const up = st.uptime ? ` · ${Math.floor(st.uptime/60)}m ${st.uptime%60}s` : '';
+      statusTxt.innerHTML = `▶ Live from YouTube: <strong>${esc(st.title || 'LETW Live')}</strong>${up}`;
+    }
+  }
+});
+socket.on('youtube:error', (msg) => {
+  logActivity('⚠ YouTube relay: ' + msg);
+  const statusTxt = document.getElementById('yt-relay-status-text');
+  if (statusTxt && _ytRelayLocalActive) statusTxt.innerHTML = '⚠ ' + esc(String(msg));
 });
 
 // ── Live quality / health socket events ──────────────────────────────────────
