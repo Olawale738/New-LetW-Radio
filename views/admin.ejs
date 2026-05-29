@@ -3146,7 +3146,7 @@ function renderSermons() {
         </div>
         <div class="history-artist">${esc(s.speaker || '—')}${meta ? ' · ' + meta : ''}</div>
         ${tagHtml ? `<div style="margin-top:5px;display:flex;gap:5px;flex-wrap:wrap;">${tagHtml}</div>` : ''}
-        ${isPreviewing ? `<audio id="serm-audio-${s.id}" controls autoplay style="width:100%;margin-top:8px;height:36px;" src="${esc(s.file_path)}"></audio>` : ''}
+        ${isPreviewing ? `<audio id="serm-audio-${s.id}" controls autoplay style="width:100%;margin-top:8px;height:36px;" src="/api/sermons/${s.id}/audio"></audio>` : ''}
       </div>
       <div style="display:flex;gap:6px;flex-shrink:0;">
         <button class="btn btn-secondary btn-sm" onclick="editSermon('${s.id}')" title="Edit">✏️</button>

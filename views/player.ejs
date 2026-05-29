@@ -5208,8 +5208,9 @@ async function playSermon(id) {
   const searchVal = (document.getElementById('sermon-search') || {}).value || '';
   filterSermons(searchVal);
 
-  // Load and play
-  audio.src = `/api/tracks/${id}/preview`;
+  // Load and play. Use the sermon audio endpoint (correct MIME for WebM/Opus
+  // recordings as well as MP3) rather than the track-preview route.
+  audio.src = `/api/sermons/${id}/audio`;
   audio.load();
   try {
     await audio.play();

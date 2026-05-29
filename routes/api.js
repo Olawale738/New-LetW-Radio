@@ -219,33 +219,11 @@ router.delete('/tracks/:id', requireAdmin, (req, res) => {
 
 // Preview track (stream audio file)
 router.get('/tracks/:id/preview', (req, res) => {
-  const track = db.prepare(`SELECT * FROM tracks WHERE id = ?`).get(req.params.id);
-  if (!track || !fs.existsSync(track.file_path)) return res.status(404).send('Not found');
-  
-  const stat = fs.statSync(track.file_path);
-  const range = req.headers.range;
-
-  if (range) {
-    const parts = range.replace(/bytes=/, '').split('-');
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
-    const chunkSize = end - start + 1;
-    const fileStream = fs.createReadStream(track.file_path, { start, end });
-    res.writeHead(206, {
-      'Content-Range': `bytes ${start}-${end}/${stat.size}`,
-      'Accept-Ranges': 'bytes',
-      'Content-Length': chunkSize,
-      'Content-Type': 'audio/mpeg',
-    });
-    fileStream.pipe(res);
-  } else {
-    res.writeHead(200, {
-      'Content-Length': stat.size,
-      'Content-Type': 'audio/mpeg',
-      'Accept-Ranges': 'bytes',
-    });
-    fs.createReadStream(track.file_path).pipe(res);
-  }
+  const track = db.prepare(`SELECT file_path FROM tracks WHERE id = ?`).get(req.params.id);
+  const file  = track && _resolveMedia(track.file_path);
+  if (!file) return res.status(404).send('Not found');
+  try { _streamFile(req, res, file); }
+  catch (e) { res.status(500).send('Stream error'); }
 });
 
 // ==================== PLAYLISTS ====================
@@ -810,6 +788,69 @@ router.get('/nowplaying', (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // SERMONS — On-demand recordings (DCLM-style sermon archive)
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// ── Shared media-serving helpers ─────────────────────────────────────────────
+// Correct Content-Type per container.  Recordings from the in-browser "Go Live"
+// button are WebM/Opus; encoder recordings (SAM/butt) are usually MP3.  Serving
+// a .webm file as audio/mpeg (the old hard-coded type) makes the browser refuse
+// to decode it — a key reason recordings "wouldn't play".
+function _audioType(file) {
+  switch (path.extname(file).toLowerCase()) {
+    case '.mp3':  return 'audio/mpeg';
+    case '.webm': return 'audio/webm';
+    case '.ogg':
+    case '.oga':  return 'audio/ogg';
+    case '.aac':  return 'audio/aac';
+    case '.m4a':
+    case '.mp4':  return 'audio/mp4';
+    case '.wav':  return 'audio/wav';
+    case '.flac': return 'audio/flac';
+    default:      return 'application/octet-stream';
+  }
+}
+
+// Resolve a stored file_path to a real on-disk file.  Handles absolute paths
+// (recordings store these), web-relative paths like /uploads/x.webm, and falls
+// back to matching by basename inside uploads/ if the absolute path moved.
+function _resolveMedia(p) {
+  if (!p) return null;
+  let abs = p;
+  if (!path.isAbsolute(abs)) abs = path.join(__dirname, '..', abs.replace(/^\/+/, ''));
+  if (fs.existsSync(abs)) return abs;
+  const alt = path.join(__dirname, '..', 'uploads', path.basename(p));
+  return fs.existsSync(alt) ? alt : null;
+}
+
+// Stream a file with HTTP range support so the browser can play AND seek.
+function _streamFile(req, res, file) {
+  const stat  = fs.statSync(file);
+  const type  = _audioType(file);
+  const range = req.headers.range;
+  if (range) {
+    const parts = range.replace(/bytes=/, '').split('-');
+    let start = parseInt(parts[0], 10); if (isNaN(start) || start < 0) start = 0;
+    let end   = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+    if (isNaN(end) || end >= stat.size) end = stat.size - 1;
+    if (start > end) { start = 0; end = stat.size - 1; }
+    res.writeHead(206, {
+      'Content-Range':  `bytes ${start}-${end}/${stat.size}`,
+      'Accept-Ranges':  'bytes',
+      'Content-Length': end - start + 1,
+      'Content-Type':   type,
+      'Cache-Control':  'public, max-age=86400',
+    });
+    fs.createReadStream(file, { start, end }).pipe(res);
+  } else {
+    res.writeHead(200, {
+      'Content-Length': stat.size,
+      'Content-Type':   type,
+      'Accept-Ranges':  'bytes',
+      'Cache-Control':  'public, max-age=86400',
+    });
+    fs.createReadStream(file).pipe(res);
+  }
+}
+
 router.get('/sermons', (req, res) => {
   try {
     // Admins can request the FULL archive (including unpublished) with ?all=1 so
@@ -833,7 +874,9 @@ router.get('/sermons/rss', (req, res) => {
 
   const items = sermons.map(s => {
     const pub = s.recorded_at ? new Date(s.recorded_at).toUTCString() : new Date().toUTCString();
-    const fileUrl = s.file_path.startsWith('http') ? s.file_path : (siteUrl + s.file_path);
+    // Always route podcast enclosures through the audio endpoint so they resolve
+    // regardless of how file_path was stored (absolute disk path vs web path).
+    const fileUrl = s.file_path && s.file_path.startsWith('http') ? s.file_path : `${siteUrl}/api/sermons/${s.id}/audio`;
     const dur = s.duration ? Math.round(s.duration) : 0;
     const hh = Math.floor(dur / 3600), mm = Math.floor((dur % 3600) / 60), ss = dur % 60;
     const itunesDur = (hh ? hh + ':' : '') + String(mm).padStart(2,'0') + ':' + String(ss).padStart(2,'0');
@@ -871,6 +914,18 @@ router.get('/sermons/rss', (req, res) => {
     <itunes:explicit>false</itunes:explicit>${items}
   </channel>
 </rss>`);
+});
+
+// Stream a recording's audio to the browser with the correct MIME + range/seek.
+// Used by the public Sermons tab, the admin preview, and the podcast RSS feed —
+// so playback works regardless of how/where the file_path was stored.
+router.get('/sermons/:id/audio', (req, res) => {
+  let s;
+  try { s = db.prepare(`SELECT file_path FROM sermons WHERE id = ?`).get(req.params.id); } catch {}
+  const file = s && _resolveMedia(s.file_path);
+  if (!file) return res.status(404).send('Recording not found');
+  try { _streamFile(req, res, file); }
+  catch (e) { res.status(500).send('Stream error'); }
 });
 
 router.post('/sermons', requireAdmin, (req, res) => {
