@@ -2295,43 +2295,6 @@ window.addEventListener('online', () => {
 });
 
 // ── Broadcast resilience: recover live session after socket reconnect ──────────
-// Socket.IO auto-reconnects silently. When it does, the server sees a NEW socket
-// object and fires io.on('connection') again.  We must re-announce the live session
-// so the new socket is authorised to send live:chunk events.
-// We do NOT re-start recording (record:false) because liveRecordingStream on the
-// server side is still open from the original session.
-socket.on('connect', () => {
-  // When _liveWasReconnecting is true, the second connect handler (near the Go Live
-  // section) will re-announce with the correct mimeType.  Skip here to avoid
-  // emitting live:start twice on reconnect, which resets the server's init chunk
-  // and confuses listeners who are already streaming.
-  if (typeof _liveWasReconnecting !== 'undefined' && _liveWasReconnecting) return;
-  if (liveMediaRecorder && liveMediaRecorder.state === 'recording') {
-    const title       = document.getElementById('live-title').value.trim()  || 'Live Broadcast';
-    const artist      = document.getElementById('live-artist').value.trim() || 'Light Encounter Tabernacle Worldwide';
-    socket.auth = { token: getAdminToken() };
-    // Re-register the live session — server resets init chunk so late joiners
-    // get a fresh WebM header; existing listeners on /live-stream are unaffected.
-    socket.emit('live:start', { title, artist, record: false });
-    setLiveUIState(true);  // restore on-air chip state in case it showed a warning
-    logActivity('✓ Connection restored — broadcast continuing');
-  }
-});
-
-socket.on('disconnect', (reason) => {
-  // If we're live when the socket drops, warn the admin immediately.
-  if (liveMediaRecorder && liveMediaRecorder.state === 'recording') {
-    const chip = document.getElementById('live-status-chip');
-    if (chip) {
-      chip.textContent  = '⚠ RECONNECTING…';
-      chip.style.background   = 'rgba(212,168,67,0.15)';
-      chip.style.borderColor  = 'rgba(212,168,67,0.50)';
-      chip.style.color        = '#d4a843';
-    }
-    logActivity('⚠ Server connection lost — reconnecting… (broadcast may be interrupted)');
-  }
-});
-
 // ── Station & Connection Health ───────────────────────────────────────────────
 let _adminRtt    = 0;
 let _reconnCount = 0;
@@ -2347,20 +2310,46 @@ socket.on('admin:pong', ({ clientTs }) => {
   if (dot) dot.style.background  = _adminRtt < 150 ? '#4caf82' : _adminRtt < 400 ? '#d4a843' : '#e05070';
 });
 
-// Track every (re)connect for status bar
+// ── Single consolidated connect handler ───────────────────────────────────────
+// Handles: station health topbar + live broadcast reconnect-resume.
+// ALL socket.on('connect') logic lives here — do not add another one elsewhere.
 socket.on('connect', () => {
+  // 1. Station health UI
   const statusEl  = document.getElementById('sh-socket-status');
   const dot       = document.getElementById('admin-conn-dot');
-  const topLbl    = document.getElementById('admin-conn-label');
   const reconnBtn = document.getElementById('admin-reconn-btn');
-  if (statusEl)  { statusEl.textContent = '● Connected';  statusEl.style.color = '#4caf82'; }
+  if (statusEl)  { statusEl.textContent = '● Connected'; statusEl.style.color = '#4caf82'; }
   if (dot)       dot.style.background = '#4caf82';
   if (reconnBtn) reconnBtn.style.display = 'none';
-  // Immediately probe latency after reconnect
-  socket.emit('admin:ping', Date.now());
+  socket.emit('admin:ping', Date.now());  // refresh latency reading
+
+  // 2. Live broadcast reconnect — re-signal the server with the correct mimeType
+  // so existing listeners keep streaming without interruption.
+  // Only re-emit if the disconnect handler flagged us as reconnecting (_liveWasReconnecting).
+  if (_liveWasReconnecting && liveMediaRecorder && liveMediaRecorder.state !== 'inactive') {
+    _liveWasReconnecting = false;
+    const w = document.getElementById('live-conn-warning');
+    if (w) w.style.display = 'none';
+    socket.auth = { token: getAdminToken() };
+    socket.emit('live:start', {
+      title:    document.getElementById('live-title').value.trim()  || 'Live Broadcast',
+      artist:   document.getElementById('live-artist').value.trim() || 'LETW Radio',
+      record:   false,  // recording file already open on server — don't open another
+      mimeType: _liveReconnectMimeType
+    });
+    logActivity('🔄 Socket reconnected — live broadcast resumed');
+  } else if (liveMediaRecorder && liveMediaRecorder.state !== 'inactive') {
+    // Edge case: still recording but flag not set (very fast reconnect)
+    setLiveUIState(true);
+    logActivity('✓ Connection restored — broadcast continuing');
+  }
 });
 
+// ── Single consolidated disconnect handler ────────────────────────────────────
+// Handles: station health topbar + live broadcast warning + reconnect flag.
+// ALL socket.on('disconnect') logic lives here — do not add another one elsewhere.
 socket.on('disconnect', (reason) => {
+  // 1. Station health UI
   const statusEl  = document.getElementById('sh-socket-status');
   const dot       = document.getElementById('admin-conn-dot');
   const topLbl    = document.getElementById('admin-conn-label');
@@ -2369,6 +2358,21 @@ socket.on('disconnect', (reason) => {
   if (dot)       dot.style.background = '#e05070';
   if (topLbl)    topLbl.textContent = '---';
   if (reconnBtn) reconnBtn.style.display = '';
+
+  // 2. Live broadcast warning
+  if (liveMediaRecorder && liveMediaRecorder.state !== 'inactive') {
+    _liveWasReconnecting = true;
+    const chip = document.getElementById('live-status-chip');
+    if (chip) {
+      chip.textContent       = '⚠ RECONNECTING…';
+      chip.style.background  = 'rgba(212,168,67,0.15)';
+      chip.style.borderColor = 'rgba(212,168,67,0.50)';
+      chip.style.color       = '#d4a843';
+    }
+    const w = document.getElementById('live-conn-warning');
+    if (w) w.style.display = 'block';
+    logActivity('⚠ Server connection lost — reconnecting… (broadcast may be interrupted)');
+  }
 });
 
 socket.on('reconnect_attempt', (n) => {
@@ -4515,32 +4519,7 @@ socket.on('live:admin-timeout', () => {
   alert('⚠ Live broadcast was auto-stopped because the server lost contact with your browser for more than 20 seconds.');
 });
 
-// Socket disconnects while admin is live — show warning, allow auto-reconnect
-socket.on('disconnect', () => {
-  if (liveMediaRecorder && liveMediaRecorder.state !== 'inactive') {
-    _liveWasReconnecting = true;
-    const w = document.getElementById('live-conn-warning');
-    if (w) w.style.display = 'block';
-  }
-});
-
-// Socket reconnected — if we were live, re-signal the server
-socket.on('connect', () => {
-  if (_liveWasReconnecting && liveMediaRecorder && liveMediaRecorder.state !== 'inactive') {
-    _liveWasReconnecting = false;
-    const w = document.getElementById('live-conn-warning');
-    if (w) w.style.display = 'none';
-    // Re-authenticate and re-announce to the server
-    socket.auth = { token: getAdminToken() };
-    socket.emit('live:start', {
-      title:    document.getElementById('live-title').value.trim()  || 'Live Broadcast',
-      artist:   document.getElementById('live-artist').value.trim() || 'LETW Radio',
-      record:   false, // don't re-create a recording file — recording was for the original session
-      mimeType: _liveReconnectMimeType
-    });
-    logActivity('🔄 Socket reconnected — live broadcast resumed');
-  }
-});
+// connect / disconnect handlers are consolidated earlier in the file (Station Health section)
 
 // ── Activity Log ──────────────────────────────────────────────────────────────
 function logActivity(msg) {
