@@ -2351,10 +2351,11 @@ const socket = io({
   upgrade:              true,
   rememberUpgrade:      true,   // go straight to WS on subsequent connects
   reconnection:         true,
-  reconnectionAttempts: Infinity,  // never give up — admin may run for hours
-  reconnectionDelay:    1000,      // first retry after 1 s
-  reconnectionDelayMax: 3000,      // cap at 3 s so live broadcast gaps are tiny
-  timeout:              20000,
+  reconnectionAttempts: Infinity,   // never give up — admin may run for hours
+  reconnectionDelay:    400,        // first retry in 400 ms — minimise live gap
+  reconnectionDelayMax: 2000,       // cap at 2 s for near-instant recovery
+  randomizationFactor:  0.2,        // add ±20 % jitter to avoid thundering herd
+  timeout:              15000,      // fail fast and retry rather than hang for 20 s
 });
 
 // Force an immediate reconnect the moment connectivity returns (network switch,
@@ -2394,6 +2395,7 @@ socket.on('connect', () => {
   if (dot)       dot.style.background = '#4caf82';
   if (reconnBtn) reconnBtn.style.display = 'none';
   socket.emit('admin:ping', Date.now());  // refresh latency reading
+  _flushOfflineChunks();                  // replay any chunks that were queued while offline
 
   // 2. Live broadcast reconnect — re-signal the server with the correct mimeType
   // so existing listeners keep streaming without interruption.
@@ -2484,8 +2486,9 @@ async function loadServerHealth() {
   } catch {}
 }
 
-// Periodic ping (every 5 s) + health poll (every 30 s)
-setInterval(() => { if (socket && socket.connected) socket.emit('admin:ping', Date.now()); }, 5000);
+// Periodic ping (every 3 s) + health poll (every 30 s)
+// 3 s matches the new server pingInterval of 8 s — admin always has fresh RTT data.
+setInterval(() => { if (socket && socket.connected) socket.emit('admin:ping', Date.now()); }, 3000);
 setInterval(loadServerHealth, 30000);
 setTimeout(() => { loadServerHealth(); socket.emit('admin:ping', Date.now()); }, 1500);
 
@@ -3693,6 +3696,11 @@ let liveGainNode      = null;   // pre-gain (main loudness)
 let liveBassNode      = null;   // low-shelf EQ (bass warmth)
 let livePresenceNode  = null;   // peaking EQ (voice clarity)
 let _liveChunksSent   = 0;      // chunks emitted to socket since last timer tick
+// Offline chunk buffer: when the admin socket is briefly disconnected during a
+// live broadcast, chunks are queued here and flushed when the socket reconnects.
+// Capped at MAX_OFFLINE_CHUNKS to prevent unbounded memory growth during long outages.
+const MAX_OFFLINE_CHUNKS = 80;  // ~8 s of audio at 100 ms timeslice
+let   _offlineChunks    = [];   // Array<ArrayBuffer>
 let liveTrebleNode    = null;   // high-shelf EQ (soprano / air)
 let liveNoiseGateNode = null;   // AudioWorkletNode (or ScriptProcessorNode fallback) noise gate
 let liveDestStream    = null;   // processed MediaStream from MediaStreamDestination (for monitor)
@@ -3724,6 +3732,33 @@ function _fmtBytes(b) {
 }
 
 // Update the quality badge colour & text based on chunk rate and RTT
+// Emit a live audio chunk, buffering it if the socket is temporarily disconnected.
+// On reconnect, _flushOfflineChunks() drains the queue so listeners hear continuous
+// audio instead of a gap.  Chunks older than the ring-buffer window are harmless
+// duplicates for listeners who already received them via the server ring buffer.
+function _emitLiveChunk(buf) {
+  if (socket && socket.connected) {
+    // Drain any buffered chunks first so order is preserved
+    if (_offlineChunks.length > 0) {
+      _offlineChunks.forEach(b => socket.emit('live:chunk', b));
+      _offlineChunks = [];
+    }
+    socket.emit('live:chunk', buf);
+  } else {
+    // Socket momentarily offline — buffer chunk, evict oldest if over cap
+    _offlineChunks.push(buf);
+    if (_offlineChunks.length > MAX_OFFLINE_CHUNKS) _offlineChunks.shift();
+  }
+}
+
+function _flushOfflineChunks() {
+  if (_offlineChunks.length === 0) return;
+  const queued = _offlineChunks.length;
+  _offlineChunks.forEach(b => socket.emit('live:chunk', b));
+  _offlineChunks = [];
+  if (queued > 0) logActivity(`🔄 Flushed ${queued} buffered chunk${queued > 1 ? 's' : ''} after reconnect`);
+}
+
 function _updateLiveQuality(chunkRate, rtt) {
   const badge = document.getElementById('live-quality-badge');
   if (!badge) return;
@@ -4163,7 +4198,7 @@ registerProcessor('letw-noise-gate', NoiseGateProcessor);
     if (e.data && e.data.size > 0) {
       _liveChunksSent++;
       e.data.arrayBuffer().then(buf => {
-        socket.emit('live:chunk', buf);
+        _emitLiveChunk(buf);
       });
     }
   });
@@ -4309,7 +4344,7 @@ async function startTabBroadcast() {
   liveMediaRecorder.addEventListener('dataavailable', e => {
     if (e.data && e.data.size > 0) {
       _liveChunksSent++;
-      e.data.arrayBuffer().then(buf => { socket.emit('live:chunk', buf); });
+      e.data.arrayBuffer().then(buf => { _emitLiveChunk(buf); });
     }
   });
 
@@ -4418,6 +4453,7 @@ function stopLiveBroadcast() {
   document.getElementById('mic-level-bar').style.width = '0%';
   document.getElementById('mic-peak-label').textContent = '—';
   _liveChunksSent      = 0;
+  _offlineChunks       = [];  // discard buffered chunks — broadcast is over
   _liveRtt             = null;
   _liveBytesFromServer = 0;
   _liveWasReconnecting = false;

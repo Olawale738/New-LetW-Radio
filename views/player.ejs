@@ -2623,8 +2623,9 @@ const LWS_HELLO = 0x01, LWS_INIT = 0x02, LWS_AUDIO = 0x03,
       LWS_ENDED = 0x04, LWS_PING  = 0x05, LWS_PONG  = 0x06;
 const LWS_HDR   = 13; // header size in bytes
 let   _lws      = null;  // WebSocket to /live-ws
-let   _lwsTimer = null;  // reconnect timer
-let   _lwsSeq   = 0;     // last received sequence number
+let   _lwsTimer   = null;  // reconnect timer
+let   _lwsRetries = 0;     // consecutive reconnect attempts (for exponential backoff)
+let   _lwsSeq     = 0;     // last received sequence number
 let   _lwsRtt   = null;  // latest RTT measurement (ms)
 let   _lwsPingTs = 0;    // client timestamp when last ping was sent
 
@@ -2732,8 +2733,12 @@ function setVinylPlaying(on) {
 const socket = io({
   transports:           ['websocket', 'polling'],
   rememberUpgrade:      true,
-  reconnectionDelayMax: 3000,
-  timeout:              20000,
+  reconnection:         true,
+  reconnectionAttempts: Infinity,     // never give up — listener may be offline for hours
+  reconnectionDelay:    400,          // first retry in 400 ms
+  reconnectionDelayMax: 2000,         // cap at 2 s — fast recovery for live listeners
+  randomizationFactor:  0.3,          // add ±30 % jitter to avoid thundering herd
+  timeout:              15000,        // shorter connect timeout — fail fast and retry
 });
 
 socket.on('connect', () => {
@@ -3256,7 +3261,8 @@ function _lwsConnect() {
 
   _lws.onopen = () => {
     console.log('[LiveWS] Binary WebSocket connected ✓');
-    _lwsSeq = 0;
+    _lwsSeq    = 0;
+    _lwsRetries = 0;  // reset backoff on successful connect
     _lwsPingLoop();
   };
 
@@ -3302,7 +3308,12 @@ function _lwsConnect() {
   _lws.onclose = (ev) => {
     console.log(`[LiveWS] Binary WS closed (${ev.code})`);
     _lws = null;
-    if (isLive) _lwsTimer = setTimeout(_lwsConnect, 1000);
+    if (isLive) {
+      // Exponential backoff: 300ms → 600 → 1200 → 2400 → max 5000ms
+      _lwsRetries++;
+      const delay = Math.min(300 * Math.pow(2, _lwsRetries - 1), 5000);
+      _lwsTimer = setTimeout(_lwsConnect, delay);
+    }
   };
   _lws.onerror = (ev) => { console.warn('[LiveWS] WebSocket error', ev.message || ''); };
 }
@@ -3322,7 +3333,7 @@ function _lwsPingLoop() {
       clearInterval(_lwsPingInterval); _lwsPingInterval = null; return;
     }
     _lws.send(_lwsMakePing());
-  }, 4000);
+  }, 2500);
 }
 
 /**
@@ -4021,7 +4032,7 @@ window.addEventListener('offline', () => {
   setSignal('Disconnected');
 });
 
-// Keepalive: every 10 s, check for the zombie state where the player is
+// Keepalive: every 6 s, check for the zombie state where the player is
 // logically on but the audio element is silently paused.
 // This catches autoplay-policy kills and silent network drops with no error event.
 // For live mode we only trigger if BOTH isLive AND isPlaying — if the user
@@ -4031,13 +4042,40 @@ setInterval(() => {
   if (audio.paused && !reconnectTO) {
     if (isLive && isPlaying) {
       console.warn('[Keepalive] Live audio paused silently — reconnecting');
-      scheduleLiveReconnect(500);
+      scheduleLiveReconnect(400);
     } else if (isPlaying && !isLive) {
       console.warn('[Keepalive] Audio paused while active — reconnecting');
       scheduleReconnect();
     }
   }
-}, 10000);
+  // Binary WS stall guard: if live mode is active but binary WS is not open, reopen it
+  if (isLive && isPlaying && (!_lws || _lws.readyState === WebSocket.CLOSED) && !_lwsTimer) {
+    _lwsRetries = Math.max(0, _lwsRetries - 1); // reduce backoff on timed wakeup
+    _lwsConnect();
+  }
+}, 6000);
+
+// Audio stall detector: the 'waiting' event fires when the browser has run out
+// of audio data.  If it persists for more than 3 seconds we force a reconnect
+// rather than letting the user sit in silence indefinitely.
+let _stallTimer = null;
+audio.addEventListener('waiting', () => {
+  if (!isPlaying || reconnectTO) return;
+  if (_stallTimer) return; // already waiting
+  _stallTimer = setTimeout(() => {
+    _stallTimer = null;
+    if (!isPlaying || reconnectTO || !audio.paused) return;
+    console.warn('[Stall] Audio waiting >3 s — forcing reconnect');
+    if (isLive) scheduleLiveReconnect(200);
+    else        reconnectAudio(_activeStreamUrl);
+  }, 3000);
+});
+audio.addEventListener('playing', () => {
+  if (_stallTimer) { clearTimeout(_stallTimer); _stallTimer = null; }
+});
+audio.addEventListener('canplay', () => {
+  if (_stallTimer) { clearTimeout(_stallTimer); _stallTimer = null; }
+});
 
 // ── Volume ────────────────────────────────────────────────────
 const volSlider = document.getElementById('vol-slider');
@@ -4868,6 +4906,14 @@ document.addEventListener('visibilitychange', () => {
     // The browser may have silently killed the stream while backgrounded and
     // throttled our keepalive — verify the audio is still flowing, reconnect if not.
     _verifyPlaybackHealth();
+    // Force Socket.IO reconnect immediately — don't wait for its own backoff timer.
+    if (socket && socket.disconnected) { try { socket.connect(); } catch(_) {} }
+    // Force binary WS reconnect for live mode
+    if (isLive && (!_lws || _lws.readyState !== WebSocket.OPEN)) {
+      if (_lwsTimer) { clearTimeout(_lwsTimer); _lwsTimer = null; }
+      _lwsRetries = 0;
+      _lwsConnect();
+    }
   } else {
     // Tab hidden — pause canvas animation to reduce CPU/battery drain
     if (vizRaf) { cancelAnimationFrame(vizRaf); vizRaf = null; }

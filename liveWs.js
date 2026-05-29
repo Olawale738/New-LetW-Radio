@@ -61,7 +61,9 @@ const HEADER_SIZE = 13; // type(1) + seq(4) + ts(8)
 
 // Maximum bytes allowed in a single client's outgoing send buffer before we
 // skip a frame to avoid head-of-line blocking on a slow connection.
-const MAX_BACKPRESSURE = 512 * 1024; // 512 KB
+// 256 KB ≈ 16 s of 128 kbps audio — slow clients are evicted well before they
+// can cause head-of-line blocking for everyone else.
+const MAX_BACKPRESSURE = 256 * 1024; // 256 KB
 
 // ─── Frame builder ──────────────────────────────────────────────────────────
 function makeFrame(type, seq, payload) {
@@ -84,7 +86,7 @@ class LiveWsServer {
     this._seq          = 0;           // global frame sequence counter
     this._initFrame    = null;        // cached INIT frame for new connections
     this._ringBuffer   = [];          // Array<Buffer> — pre-framed AUDIO frames
-    this._ringSize     = 120;         // ~12 s at 100 ms timeslice / ~24 s at 50 ms
+    this._ringSize     = 300;         // ~30 s at 100 ms timeslice / ~15 s at 50 ms
     this._isLive       = false;
     this._bytesSent    = 0;           // total payload bytes sent (approx)
     this._audioEngine  = null;        // set by server.js after audioEngine init
@@ -116,14 +118,17 @@ class LiveWsServer {
 
     this._wss.on('connection', (ws, req) => this._onConnect(ws, req));
 
-    // ── Heartbeat: ping every 10 s, drop unresponsive after two misses ──
+    // ── Heartbeat: ping every 6 s, drop unresponsive after three misses ──
+    // 3 × 6 s = 18 s max to evict a dead socket.  Three-miss threshold avoids
+    // false-positive disconnects on mobile networks where a single ping may be
+    // delayed by an LTE handoff without the TCP session actually dying.
     this._heartbeatTimer = setInterval(() => {
       for (const ws of (this._wss?.clients || [])) {
-        if (ws._hbMissed >= 2) { ws.terminate(); continue; }
+        if (ws._hbMissed >= 3) { ws.terminate(); continue; }
         ws._hbMissed = (ws._hbMissed || 0) + 1;
         try { ws.ping(); } catch (_) {}
       }
-    }, 10000);
+    }, 6000);
 
     console.log('[LiveWS] ⚡ Binary WebSocket server attached → /live-ws');
     return this;
@@ -195,9 +200,9 @@ class LiveWsServer {
     // Disable Nagle algorithm: flush every frame immediately without waiting
     // for the kernel to coalesce small packets.  Critical for real-time audio.
     if (ws._socket) {
-      ws._socket.setNoDelay(true);
-      ws._socket.setKeepAlive(true, 5000);
-      ws._socket.setTimeout(0); // disable Node's idle-connection timeout
+      ws._socket.setNoDelay(true);          // flush every frame immediately — critical for real-time audio
+      ws._socket.setKeepAlive(true, 2000);  // 2 s TCP keepalive — detects dead NAT sessions faster
+      ws._socket.setTimeout(0);             // disable Node's idle-connection timeout
     }
 
     ws._role    = 'listener';

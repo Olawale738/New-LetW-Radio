@@ -21,23 +21,27 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors:                { origin: '*', methods: ['GET', 'POST'] },
-  // Ping every 20 s; allow 20 s for a pong before declaring the socket dead.
-  // 20+20 = 40 s total tolerance — covers mobile network hand-offs, subway gaps,
-  // and Render's own keep-alive window without false-positive evictions.
-  pingInterval:        20000,
-  pingTimeout:         20000,
-  // Large buffer for binary audio chunks (default 1 MB is too small for
-  // high-quality webm frames sent in a burst on reconnect).
+  // Ping every 8 s; allow 8 s for a pong before declaring the socket dead.
+  // 8+8 = 16 s total — fast enough to detect mobile handoffs and dead NAT
+  // sessions without false-positive evictions on slow connections.
+  pingInterval:        8000,
+  pingTimeout:         8000,
+  // Large buffer for binary audio chunks.
   maxHttpBufferSize:   10 * 1024 * 1024,  // 10 MB
-  upgradeTimeout:      10000,
-  connectTimeout:      45000,
+  upgradeTimeout:      15000,
+  connectTimeout:      60000,
+  allowEIO3:           true,   // accept older Socket.IO v3 clients (some apps/Electron)
   // Prefer WebSocket — skip the long-polling handshake round-trip.
+  // Keep polling as fallback for networks that block WebSocket upgrades.
   transports:          ['websocket', 'polling'],
-  // Session recovery: if admin or listener reconnects within 2 min, the server
-  // replays missed events (status, trackStart, live:started etc.) automatically.
-  // The client socket ID stays the same so no extra client-side logic is needed.
+  // Disable per-message compression for audio-heavy traffic: saves CPU and
+  // latency at the cost of ~5 % more bandwidth.  Audio is already compressed.
+  perMessageDeflate:   false,
+  // Session recovery: replay missed events after reconnect up to 5 minutes.
+  // Extended from 2 min so a page-reload or brief network gap doesn't lose
+  // now-playing state, live:started, or unread chat messages.
   connectionStateRecovery: {
-    maxDisconnectionDuration: 2 * 60 * 1000,
+    maxDisconnectionDuration: 5 * 60 * 1000,
     skipMiddlewares:          true,
   },
 });
