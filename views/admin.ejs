@@ -2140,7 +2140,21 @@ let state = {
 const COLORS = ['#00e5ff','#ff6d3b','#00e676','#d500f9','#ffea00','#ff1744','#7c4dff','#76ff03'];
 
 // =================== SOCKET ===================
-const socket = io({ auth: { token: getAdminToken() } });
+const socket = io({
+  auth: { token: getAdminToken() },
+  reconnection: true,
+  reconnectionAttempts: Infinity,  // never give up — admin may run for hours
+  reconnectionDelay: 1000,         // first retry after 1 s
+  reconnectionDelayMax: 5000,      // cap backoff at 5 s so recovery stays snappy
+  timeout: 20000,
+});
+
+// Force an immediate reconnect the moment connectivity returns (network switch,
+// laptop wakes from sleep, leaving a dead zone) instead of waiting for the
+// backoff timer — critical when a live broadcast is in progress.
+window.addEventListener('online', () => {
+  if (socket && socket.disconnected) { try { socket.connect(); } catch(_) {} }
+});
 
 // ── Broadcast resilience: recover live session after socket reconnect ──────────
 // Socket.IO auto-reconnects silently. When it does, the server sees a NEW socket

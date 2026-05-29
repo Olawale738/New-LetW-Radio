@@ -242,12 +242,19 @@ app.get('/stream', (req, res) => {
   console.log(`[Stream] Client connected: ${clientId} | ICY: ${wantsIcy}`);
   audioEngine.addClient(clientId, res, wantsIcy, settings);
 
-  // Keep-alive: write a single null byte every 15 s so Render's 30 s idle proxy
-  // timeout never fires during the brief gap between tracks.  Buffer.alloc(0) sends
-  // no TCP data in chunked mode (zero-length chunk = end-of-stream signal), so
-  // we must write at least one byte to actually flush a packet.  A null byte
-  // between MP3 frames is discarded by all standard decoders.
+  // Keep-alive: write a single null byte so Render's 30 s idle proxy timeout
+  // never fires during a silent gap (between tracks, or while a live broadcast
+  // has paused the scheduled stream).  Buffer.alloc(0) sends no TCP data in
+  // chunked mode (zero-length chunk = end-of-stream signal), so we must write at
+  // least one byte to actually flush a packet.
+  //
+  // IMPORTANT: only inject the byte when NO audio has flowed for >10 s.  During
+  // active playback the audio itself keeps the socket alive, and a stray null
+  // byte landing mid-MP3-frame can cause an audible click on some decoders — so
+  // we never touch the stream while it's actually carrying audio.
   const kaTimer = setInterval(() => {
+    const silentFor = Date.now() - (audioEngine._lastChunkTime || 0);
+    if (silentFor < 10000) return; // audio is flowing — no keepalive needed
     try { res.write(Buffer.alloc(1)); } catch(e) { clearInterval(kaTimer); }
   }, 15000);
   res.on('close', () => clearInterval(kaTimer));

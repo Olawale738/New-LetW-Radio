@@ -3798,18 +3798,29 @@ function stopPlayback() {
   clearStallTimer();
 }
 
+// Append a cache-buster so each (re)connect opens a BRAND-NEW TCP socket.
+// Without this, mobile browsers frequently reuse a half-open / dead keep-alive
+// connection after a network change (Wi-Fi↔cellular) or after the tab was
+// backgrounded — so audio.play() resumes a stale buffer and immediately stalls
+// again, making the "reconnect" silently fail.  A fresh query string guarantees
+// the browser performs a real new GET to /stream.
+function _bust(url) {
+  if (!url || url.startsWith('blob:')) return url;   // MediaSource object URLs
+  return url + (url.includes('?') ? '&' : '?') + '_=' + Date.now();
+}
+
 function reconnectAudio(url) {
   clearTimeout(reconnectTO);
   reconnectTO = null;
   clearStallTimer();
   const was = isPlaying;
   audio.pause();
-  // If already pre-loaded with the same URL, skip the reload for instant play
-  const alreadyLoaded = audio.src && audio.src.includes(url) && audio.readyState >= 2;
-  if (!alreadyLoaded) {
-    audio.src = url;
-    audio.load();
-  }
+  // Always tear down and re-open with a fresh URL.  The previous "skip reload if
+  // already loaded" optimisation broke reconnect-after-drop: a dead stream can
+  // still report readyState >= 2 from its leftover buffer, so we'd replay stale
+  // audio and stall instead of actually reconnecting.
+  audio.src = _bust(url);
+  audio.load();
   audio.play().catch(() => {
     if (isLive) scheduleLiveReconnect(1000);
     else if (was) scheduleReconnect();
@@ -3832,7 +3843,7 @@ function scheduleReconnect() {
     if (isLive) { scheduleLiveReconnect(0); return; } // live mode started mid-backoff
     reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
     if (isPlaying) {
-      audio.src = getStreamUrl();
+      audio.src = _bust(getStreamUrl());
       audio.load();
       audio.play().catch(() => scheduleReconnect());
     }
@@ -3940,7 +3951,7 @@ function startStallTimer() {
     // If readyState recovered to 3 or 4 while the timer was pending, the stall
     // resolved itself and we must NOT tear down a working stream.
     if (isPlaying && !isLive && audio.readyState < 3) {
-      audio.src = getStreamUrl();
+      audio.src = _bust(getStreamUrl());
       audio.load();
       audio.play().catch(() => scheduleReconnect());
     }
@@ -3963,6 +3974,47 @@ function startLiveStallTimer() {
 function clearStallTimer() {
   if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
 }
+
+// Verify audio is genuinely progressing and reconnect if it died silently.
+// Mobile browsers frequently kill the stream socket while the tab is backgrounded
+// (and throttle our keepalive interval) WITHOUT firing 'error'/'ended', so on
+// return-to-foreground or network-recovery the player thinks it's playing while
+// the audio clock is frozen.  This catches that zombie state.
+function _verifyPlaybackHealth() {
+  if (!isPlaying || reconnectTO) return;  // not playing, or a reconnect already pending
+  if (audio.paused) {                     // obviously dead
+    if (isLive) scheduleLiveReconnect(300);
+    else        reconnectAudio(_activeStreamUrl);
+    return;
+  }
+  // Not paused — confirm the playback position actually advances.
+  const t0 = audio.currentTime;
+  setTimeout(() => {
+    if (!isPlaying || reconnectTO) return;
+    if (!audio.paused && audio.currentTime === t0) {
+      // Position frozen while "playing" → silent stream death.
+      if (isLive) scheduleLiveReconnect(300);
+      else        reconnectAudio(_activeStreamUrl);
+    }
+  }, 1500);
+}
+
+// ── Network change recovery ───────────────────────────────────
+// Reconnect the moment connectivity returns (e.g. phone leaves a dead zone or
+// switches Wi-Fi↔cellular).  Without this the listener waits for the slow
+// exponential-backoff timer (up to 20 s) before audio resumes.
+window.addEventListener('online', () => {
+  setSignal('Connected');
+  if (isPlaying) {
+    if (isLive) scheduleLiveReconnect(300);
+    else        reconnectAudio(_activeStreamUrl);
+  }
+  // Nudge Socket.IO to reconnect now instead of waiting for its own backoff.
+  if (socket && socket.disconnected) { try { socket.connect(); } catch(_) {} }
+});
+window.addEventListener('offline', () => {
+  setSignal('Disconnected');
+});
 
 // Keepalive: every 10 s, check for the zombie state where the player is
 // logically on but the audio element is silently paused.
@@ -4808,6 +4860,9 @@ document.addEventListener('visibilitychange', () => {
     if (isPlaying) requestWakeLock();
     // Resume the visualizer that was paused to save battery
     if ((isPlaying || isLive) && !vizRaf && analyser) drawAnalyserBars();
+    // The browser may have silently killed the stream while backgrounded and
+    // throttled our keepalive — verify the audio is still flowing, reconnect if not.
+    _verifyPlaybackHealth();
   } else {
     // Tab hidden — pause canvas animation to reduce CPU/battery drain
     if (vizRaf) { cancelAnimationFrame(vizRaf); vizRaf = null; }

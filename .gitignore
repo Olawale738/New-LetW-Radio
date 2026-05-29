@@ -6,6 +6,7 @@ uploads/*.ogg
 uploads/*.aac
 uploads/*.flac
 uploads/*.m4a
+uploads/.db/
 .env
 *.log
 .DS_Store
