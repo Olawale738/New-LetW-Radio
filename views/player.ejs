@@ -2882,6 +2882,24 @@ socket.on('live:ended', () => {
   exitLiveMode();
 });
 
+// Server detected no audio chunks for >5s during an active broadcast.
+// Request a re-sync immediately; if audio is already paused do a full reconnect.
+socket.on('live:stalling', () => {
+  if (!isLive || !isPlaying) return;
+  clearTimeout(window._liveStallTO);
+  if (audio.paused) {
+    console.warn('[Live] Stall detected by server — reconnecting');
+    scheduleLiveReconnect(200);
+  } else {
+    socket.emit('live:sync');
+    // If audio is still paused after 2.5s, the sync didn't help — full reconnect
+    window._liveStallTO = setTimeout(() => {
+      window._liveStallTO = null;
+      if (audio.paused && isLive && isPlaying) scheduleLiveReconnect(200);
+    }, 2500);
+  }
+});
+
 // ── Live audio delivered via Socket.IO (primary path) ─────────
 // The server broadcasts each MediaRecorder chunk via socket.broadcast.emit
 // so every connected listener receives it over the existing WebSocket.
@@ -3824,6 +3842,16 @@ audio.addEventListener('playing', () => {
   hideStreamErrorBanner();
   reconnectDelay = 150;
   _hidePill();
+  clearTimeout(window._liveStallTO); window._liveStallTO = null;
+  // Pre-warm standby 30s into stable regular playback so it's always
+  // available at track boundaries even if trackWillEnd fires very late.
+  if (!isLive && !_sermonActive) {
+    clearTimeout(window._preWarmTimer);
+    window._preWarmTimer = setTimeout(() => {
+      window._preWarmTimer = null;
+      if (!isLive && !_sermonActive && isPlaying) _warmStandby();
+    }, 30000);
+  }
   document.getElementById('play-icon').textContent = '⏸';
   document.getElementById('play-btn').classList.add('playing');
   if (isLive) {
@@ -3844,6 +3872,7 @@ audio.addEventListener('playing', () => {
 
 audio.addEventListener('pause', () => {
   isPlaying = false;
+  clearTimeout(window._preWarmTimer); window._preWarmTimer = null;
   document.getElementById('play-icon').textContent = '▶';
   document.getElementById('play-btn').classList.remove('playing');
   setStatusBadge(false);
@@ -4334,6 +4363,7 @@ audio.addEventListener('waiting', () => {
 });
 audio.addEventListener('playing', () => {
   if (_stallTimer) { clearTimeout(_stallTimer); _stallTimer = null; }
+  clearTimeout(window._liveStallTO); window._liveStallTO = null;
 });
 audio.addEventListener('canplay', () => {
   if (_stallTimer) { clearTimeout(_stallTimer); _stallTimer = null; }

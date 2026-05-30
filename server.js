@@ -591,12 +591,21 @@ let   _liveRingBuffer     = [];   // Array<Buffer>
 let   _liveBytesSent      = 0;    // total bytes transmitted in current broadcast
 let   _liveListeners      = 0;    // WS clients that have signalled live:join
 let   _liveAdminLastPing  = 0;    // epoch ms of last live:ping (or live:chunk as implicit ping)
+let   _liveLastChunkAt    = 0;    // epoch ms of last chunk from any source (stall detection)
 let   _liveHeartbeatTimer = null; // setInterval handle for heartbeat watchdog
 let   _ytRelayActive      = false;// true while the server-side YouTube relay owns the live feed
 
 io.on('connection', (socket) => {
   _webListeners++;
   _broadcastListenerCount();
+  // Auto-join 'admin' room for authenticated sockets so targeted events
+  // (like youtube:tick) don't get broadcast to all public listeners.
+  {
+    const _tok = socket.handshake.auth?.token || socket.handshake.headers['x-admin-token'] || '';
+    const _ch  = (socket.handshake.headers.cookie || '').match(/admin_token=([^;]+)/);
+    const _ct  = _ch ? (() => { try { return decodeURIComponent(_ch[1]).trim(); } catch { return ''; } })() : '';
+    if ((_tok || _ct) === SESSION_TOKEN) socket.join('admin');
+  }
   socket.emit('status', audioEngine.getStatus());
   // If a live broadcast is already in progress, send the WebM init chunk and
   // the last ~3 s of audio from the ring buffer so the client can join smoothly.
@@ -665,6 +674,7 @@ io.on('connection', (socket) => {
 
     _liveBytesSent     += buf.length;
     _liveAdminLastPing  = Date.now(); // each chunk counts as an implicit heartbeat
+    _liveLastChunkAt    = Date.now();
 
     audioEngine.broadcastLive(buf);                 // HTTP /live-stream clients
 
@@ -765,6 +775,7 @@ io.on('connection', (socket) => {
     _liveBytesSent      = 0;
     _liveListeners      = 0;
     _liveAdminLastPing  = 0;
+    _liveLastChunkAt    = 0;
     if (_liveHeartbeatTimer) { clearInterval(_liveHeartbeatTimer); _liveHeartbeatTimer = null; }
     // Notify binary-WS listeners
     liveWs.injectEnded();
@@ -843,9 +854,15 @@ audioEngine.on('liveStart', async (info) => {
   // don't hear dead air.  Each live:chunk also updates _liveAdminLastPing so
   // a healthy broadcast never triggers this.
   _liveAdminLastPing  = Date.now();
+  _liveLastChunkAt    = Date.now();
   if (_liveHeartbeatTimer) clearInterval(_liveHeartbeatTimer);
   _liveHeartbeatTimer = setInterval(() => {
     if (!audioEngine.isLive) { clearInterval(_liveHeartbeatTimer); _liveHeartbeatTimer = null; return; }
+    // Stalling check: if no chunk has arrived from any source for >5s, notify
+    // listeners so they can re-sync or fall back to HTTP instead of silently stalling.
+    if (_liveLastChunkAt > 0 && Date.now() - _liveLastChunkAt > 5000) {
+      io.emit('live:stalling');
+    }
     // The server-side YouTube relay manages its own liveness (auto-reconnect with
     // backoff). Never let the browser-tab watchdog kill it mid-reconnect.
     if (_ytRelayActive) return;
@@ -861,6 +878,7 @@ audioEngine.on('liveStart', async (info) => {
       _liveRingBuffer     = [];
       _liveBytesSent      = 0;
       _liveListeners      = 0;
+      _liveLastChunkAt    = 0;
       // Finalise any active recording
       if (liveRecordingEnabled && liveRecordingStream) {
         liveRecordingEnabled = false;
@@ -928,6 +946,7 @@ db.init().then(() => {
     // Called when admin uploads via binary WS fast path (in addition to Socket.IO)
     _liveAdminLastPing = Date.now();   // feed the heartbeat watchdog
     _liveBytesSent    += buf.length;
+    _liveLastChunkAt   = Date.now();
     if (liveRecordingEnabled && liveRecordingStream) {
       try { liveRecordingStream.write(buf); } catch(e) {}
     }
@@ -975,6 +994,7 @@ db.init().then(() => {
     if (!audioEngine.isLive) return;
     _liveAdminLastPing = Date.now();   // feed the heartbeat watchdog
     _liveBytesSent    += buf.length;
+    _liveLastChunkAt   = Date.now();
 
     audioEngine.broadcastLive(buf);   // HTTP /live-stream clients
 
@@ -1043,6 +1063,7 @@ db.init().then(() => {
     _liveBytesSent     = 0;
     _liveListeners     = 0;
     _liveAdminLastPing = 0;
+    _liveLastChunkAt   = 0;
     if (_liveHeartbeatTimer) { clearInterval(_liveHeartbeatTimer); _liveHeartbeatTimer = null; }
     liveWs.injectEnded();
     _finaliseIcecastRecording();
@@ -1084,6 +1105,7 @@ db.init().then(() => {
     if (!audioEngine.isLive) return;
     _liveAdminLastPing = Date.now();   // keep heartbeat fed (watchdog is also guarded by _ytRelayActive)
     _liveBytesSent    += buf.length;
+    _liveLastChunkAt   = Date.now();
     audioEngine.broadcastLive(buf);                 // HTTP /live-stream clients
     liveWs.injectChunk(buf, isFirst);               // binary-WS listeners (WebM: first chunk = init)
     if (!isFirst) {                                 // Socket.IO catchup ring (skip init segment)
@@ -1108,8 +1130,8 @@ db.init().then(() => {
   });
 
   youtubeStream.on('tick', ({ uptime, chunkRate }) => {
-    // Lightweight heartbeat to admin — do not broadcast to all listeners
-    io.emit('youtube:tick', { uptime, chunkRate, listeners: _liveListeners });
+    // Lightweight heartbeat — admin room only, never broadcast to all listeners
+    io.to('admin').emit('youtube:tick', { uptime, chunkRate, listeners: _liveListeners });
   });
 
   youtubeStream.on('error', (msg) => {
@@ -1131,6 +1153,7 @@ db.init().then(() => {
     _liveBytesSent     = 0;
     _liveListeners     = 0;
     _liveAdminLastPing = 0;
+    _liveLastChunkAt   = 0;
     if (_liveHeartbeatTimer) { clearInterval(_liveHeartbeatTimer); _liveHeartbeatTimer = null; }
     liveWs.injectEnded();
     _finaliseIcecastRecording();   // shared finaliser → saves to library + sermons

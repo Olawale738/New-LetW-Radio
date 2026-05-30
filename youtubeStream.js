@@ -86,6 +86,7 @@ class YouTubeStream extends EventEmitter {
     this._chunkRateTimer = null;
     // Reconnect history: [{ at: epochMs, attempt: n, reason: str }]
     this._history      = [];
+    this._silenceTimer = null;  // rolling silence detector — fires 20s after last chunk
   }
 
   get isActive() { return this._active; }
@@ -139,6 +140,7 @@ class YouTubeStream extends EventEmitter {
     if (this._retryTimer)     { clearTimeout(this._retryTimer);       this._retryTimer = null; }
     if (this._urlRefreshTimer){ clearTimeout(this._urlRefreshTimer);  this._urlRefreshTimer = null; }
     if (this._chunkRateTimer) { clearInterval(this._chunkRateTimer);  this._chunkRateTimer = null; }
+    this._clearSilenceWatchdog();
     this._stopFlush();
     this._clearDataWatchdog();
     this._killFf();
@@ -321,6 +323,7 @@ class YouTubeStream extends EventEmitter {
     const out = this._buf.length === 1 ? this._buf[0] : Buffer.concat(this._buf, this._bufLen);
     this._buf = []; this._bufLen = 0;
     if (!this._gotData) { this._gotData = true; this._clearDataWatchdog(); }
+    this._armSilenceWatchdog(); // reset rolling silence detector on each emitted chunk
     const isFirst = this._firstChunk;
     this._firstChunk = false;
     try { this.emit('chunk', out, isFirst); } catch (e) { /* listener error must not kill ffmpeg */ }
@@ -341,10 +344,29 @@ class YouTubeStream extends EventEmitter {
     if (this._dataWatchdog) { clearTimeout(this._dataWatchdog); this._dataWatchdog = null; }
   }
 
+  // After the first audio data arrives, reset a 20s rolling timer on every chunk.
+  // If no chunk arrives for 20s (ffmpeg connected but stream silently died), kill
+  // and reconnect — prevents the "connected but broadcasting silence" failure mode.
+  _armSilenceWatchdog() {
+    if (!this._active) return;
+    if (this._silenceTimer) clearTimeout(this._silenceTimer);
+    this._silenceTimer = setTimeout(() => {
+      this._silenceTimer = null;
+      if (!this._active || !this._gotData) return;
+      this._lastError = 'Stream went silent — recycling connection';
+      console.log('[YouTube] Silence watchdog fired — recycling ffmpeg');
+      this._killFf(); // → 'close' → _scheduleReconnect
+    }, 20000);
+  }
+  _clearSilenceWatchdog() {
+    if (this._silenceTimer) { clearTimeout(this._silenceTimer); this._silenceTimer = null; }
+  }
+
   _scheduleReconnect() {
     if (!this._active) return;
     this._retry++;
-    const delay = Math.min(MAX_BACKOFF, 1000 * Math.pow(2, Math.min(this._retry, 4))); // 2s,4s,8s,16s→cap
+    const jitter = 0.8 + Math.random() * 0.4; // ±20% — prevents thundering herd when source bounces
+    const delay = Math.min(MAX_BACKOFF, Math.round(1000 * Math.pow(2, Math.min(this._retry, 4)) * jitter)); // 2s,4s,8s,16s→cap
     // Record in reconnect history
     this._history.unshift({ at: Date.now(), attempt: this._retry, reason: this._lastError || 'source dropped', delayMs: delay });
     if (this._history.length > MAX_HISTORY) this._history.length = MAX_HISTORY;
@@ -354,6 +376,7 @@ class YouTubeStream extends EventEmitter {
   }
 
   _killFf() {
+    this._clearSilenceWatchdog();
     if (this._urlRefreshTimer) { clearTimeout(this._urlRefreshTimer); this._urlRefreshTimer = null; }
     if (this._chunkRateTimer)  { clearInterval(this._chunkRateTimer);  this._chunkRateTimer = null; }
     if (this._ff) {
