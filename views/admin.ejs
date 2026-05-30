@@ -1587,9 +1587,40 @@
             <button class="btn btn-secondary" onclick="refreshMics()">🔄 Refresh Mics</button>
           </div>
 
-          <!-- Server-side YouTube relay status -->
-          <div id="yt-relay-status" style="display:none;margin-top:10px;padding:10px 13px;background:rgba(196,48,43,0.1);border:1px solid rgba(255,82,82,0.35);border-radius:8px;font-size:12px;color:#ff8a8a;line-height:1.6;">
-            <span id="yt-relay-status-text">📡 Connecting to YouTube…</span>
+          <!-- Server-side YouTube relay status panel -->
+          <div id="yt-relay-status" style="display:none;margin-top:10px;padding:0;background:rgba(196,48,43,0.1);border:1px solid rgba(255,82,82,0.35);border-radius:10px;overflow:hidden;">
+            <!-- Status row -->
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 13px;border-bottom:1px solid rgba(255,82,82,0.18);">
+              <div style="display:flex;align-items:center;gap:7px;flex:1;min-width:0;">
+                <span id="yt-status-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#888;flex-shrink:0;"></span>
+                <span id="yt-relay-status-text" style="font-size:12px;color:#ff8a8a;line-height:1.4;word-break:break-word;">📡 Connecting to YouTube…</span>
+              </div>
+              <button onclick="forceYtReconnect()" title="Force re-resolve the YouTube URL and restart the relay" style="flex-shrink:0;padding:3px 10px;font-size:10px;background:rgba(255,82,82,0.15);border:1px solid rgba(255,82,82,0.4);color:#ff8a8a;border-radius:6px;cursor:pointer;letter-spacing:0.5px;">↺ Reconnect</button>
+            </div>
+            <!-- Stats grid -->
+            <div id="yt-stats-row" style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;border-bottom:1px solid rgba(255,82,82,0.12);">
+              <div style="text-align:center;padding:7px 4px;border-right:1px solid rgba(255,82,82,0.12);">
+                <div id="yt-stat-uptime" style="font-size:12px;color:#d4a843;font-family:var(--mono);font-weight:700;">0:00</div>
+                <div style="font-size:8px;color:rgba(255,255,255,0.3);letter-spacing:1px;margin-top:1px;">UPTIME</div>
+              </div>
+              <div style="text-align:center;padding:7px 4px;border-right:1px solid rgba(255,82,82,0.12);">
+                <div id="yt-stat-chunks" style="font-size:12px;color:#d4a843;font-family:var(--mono);font-weight:700;">—</div>
+                <div style="font-size:8px;color:rgba(255,255,255,0.3);letter-spacing:1px;margin-top:1px;">CHUNKS/S</div>
+              </div>
+              <div style="text-align:center;padding:7px 4px;border-right:1px solid rgba(255,82,82,0.12);">
+                <div id="yt-stat-retry" style="font-size:12px;color:#d4a843;font-family:var(--mono);font-weight:700;">0</div>
+                <div style="font-size:8px;color:rgba(255,255,255,0.3);letter-spacing:1px;margin-top:1px;">RECONNECTS</div>
+              </div>
+              <div style="text-align:center;padding:7px 4px;">
+                <div id="yt-stat-quality" style="font-size:11px;color:#4caf82;font-weight:700;">—</div>
+                <div style="font-size:8px;color:rgba(255,255,255,0.3);letter-spacing:1px;margin-top:1px;">QUALITY</div>
+              </div>
+            </div>
+            <!-- Reconnect history log -->
+            <div id="yt-history-wrap" style="display:none;padding:7px 13px;max-height:90px;overflow-y:auto;">
+              <div style="font-size:9px;letter-spacing:1.5px;color:rgba(255,255,255,0.3);text-transform:uppercase;margin-bottom:4px;">Reconnect Log</div>
+              <div id="yt-history-list" style="font-size:10px;color:#ff8a8a;font-family:var(--mono);line-height:1.6;"></div>
+            </div>
           </div>
 
           <!-- How-to: server relay (primary) + browser tab capture (desktop browsers) -->
@@ -4478,6 +4509,17 @@ async function startYouTubeRelay() {
     // setting (single source of truth) when the body URL is empty.
     await api('POST', '/youtube/start', { url: relayUrl, title });
     _ytRelayLocalActive = true;
+    _ytUptimeBase   = Date.now();
+    _ytServerUptime = 0;
+    _ytStartUptimeTicker();
+    // Reset stats panel
+    const retryEl = document.getElementById('yt-stat-retry');
+    const qualEl  = document.getElementById('yt-stat-quality');
+    const chkEl   = document.getElementById('yt-stat-chunks');
+    if (retryEl) { retryEl.textContent = '0'; retryEl.style.color = '#4caf82'; }
+    if (qualEl)  { qualEl.textContent  = '—'; qualEl.style.color  = '#888'; }
+    if (chkEl)   { chkEl.textContent   = '—'; }
+    document.getElementById('yt-history-wrap') && (document.getElementById('yt-history-wrap').style.display = 'none');
     setLiveUIState(true);                      // server will also emit live:started
     liveStartTime = Date.now();
     if (liveTimerInterval) clearInterval(liveTimerInterval);
@@ -4499,11 +4541,25 @@ async function startYouTubeRelay() {
 async function stopYouTubeRelay() {
   try { await api('POST', '/youtube/stop'); } catch (e) {}
   _ytRelayLocalActive = false;
+  _ytStopUptimeTicker();
   const statusEl = document.getElementById('yt-relay-status');
   if (statusEl) statusEl.style.display = 'none';
   if (liveTimerInterval) { clearInterval(liveTimerInterval); liveTimerInterval = null; }
   setLiveUIState(false);
   logActivity('⏹ Stopped YouTube relay');
+}
+
+async function forceYtReconnect() {
+  try {
+    await api('POST', '/youtube/stop');
+    await new Promise(r => setTimeout(r, 800));
+    const relayUrl = (window.__S && window.__S.youtube_relay_url || '').trim();
+    const title = document.getElementById('live-title').value.trim() || '';
+    await api('POST', '/youtube/start', { url: relayUrl, title });
+    logActivity('↺ Forced YouTube relay reconnect');
+  } catch (e) {
+    logActivity('⚠ Force reconnect failed: ' + (e.message || e));
+  }
 }
 
 function stopLiveBroadcast() {
@@ -4851,26 +4907,129 @@ socket.on('live:push-sent', ({ count }) => {
 });
 
 // ── Server-side YouTube relay status / errors ────────────────────────────────
-socket.on('youtube:status', (st) => {
+// Local uptime ticker for the YouTube status panel (avoids depending on server events)
+let _ytUptimeBase    = 0;  // epoch ms when relay became active on THIS client
+let _ytUptimeTicker  = null;
+let _ytServerUptime  = 0;  // uptime (s) as last reported by server
+
+function _ytFmtUptime(s) {
+  if (!s && !_ytUptimeBase) return '0:00';
+  const total = _ytServerUptime + (_ytUptimeBase ? Math.floor((Date.now() - _ytUptimeBase) / 1000) : 0);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  return h ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}` : `${m}:${String(sec).padStart(2,'0')}`;
+}
+function _ytStartUptimeTicker() {
+  if (_ytUptimeTicker) return;
+  _ytUptimeTicker = setInterval(() => {
+    const el = document.getElementById('yt-stat-uptime');
+    if (el) el.textContent = _ytFmtUptime();
+  }, 1000);
+}
+function _ytStopUptimeTicker() {
+  if (_ytUptimeTicker) { clearInterval(_ytUptimeTicker); _ytUptimeTicker = null; }
+  _ytUptimeBase = 0; _ytServerUptime = 0;
+}
+
+function _ytApplyStatus(st) {
   const statusEl  = document.getElementById('yt-relay-status');
   const statusTxt = document.getElementById('yt-relay-status-text');
+  const dot       = document.getElementById('yt-status-dot');
+  const statsRow  = document.getElementById('yt-stats-row');
+  const retryEl   = document.getElementById('yt-stat-retry');
+  const qualEl    = document.getElementById('yt-stat-quality');
+
   if (!st || !st.active) {
     if (statusEl && !_ytRelayLocalActive) statusEl.style.display = 'none';
+    _ytStopUptimeTicker();
     return;
   }
   _ytRelayLocalActive = true;
-  if (statusEl)  statusEl.style.display = 'block';
-  if (statusTxt) {
-    if (st.waiting) {
-      statusTxt.innerHTML = '⏳ Waiting for the channel to go live — the broadcast will start automatically.';
-    } else if (st.retry > 0) {
-      statusTxt.innerHTML = `📡 Reconnecting to YouTube… (attempt ${st.retry})`;
-    } else {
-      const up = st.uptime ? ` · ${Math.floor(st.uptime/60)}m ${st.uptime%60}s` : '';
-      statusTxt.innerHTML = `▶ Live from YouTube: <strong>${esc(st.title || 'LETW Live')}</strong>${up}`;
+  if (statusEl) statusEl.style.display = 'block';
+
+  // Update status text + dot colour
+  if (st.waiting) {
+    if (statusTxt) statusTxt.innerHTML = '⏳ <strong>Waiting for channel to go live</strong> — will start automatically when broadcast begins';
+    if (dot) { dot.style.background = '#d4a843'; dot.style.animation = 'live-dot-pulse 1.4s ease-in-out infinite'; }
+    if (qualEl) { qualEl.textContent = 'WAITING'; qualEl.style.color = '#d4a843'; }
+  } else if (st.retry > 0) {
+    if (statusTxt) statusTxt.innerHTML = `📡 Reconnecting to YouTube… (attempt ${st.retry})`;
+    if (dot) { dot.style.background = '#e07030'; dot.style.animation = 'live-dot-pulse 0.8s ease-in-out infinite'; }
+    if (qualEl) { qualEl.textContent = 'RECONNECTING'; qualEl.style.color = '#e07030'; }
+  } else {
+    const titleStr = esc(st.title || 'LETW Live');
+    if (statusTxt) statusTxt.innerHTML = `▶ Live from YouTube: <strong style="color:#ff8a8a;">${titleStr}</strong>`;
+    if (dot) { dot.style.background = '#4caf82'; dot.style.animation = 'live-dot-pulse 1.1s ease-in-out infinite'; }
+  }
+
+  // Stats
+  if (retryEl) {
+    retryEl.textContent = st.retry || '0';
+    retryEl.style.color = st.retry > 2 ? '#e05070' : st.retry > 0 ? '#d4a843' : '#4caf82';
+  }
+
+  // Uptime — hand server value to local ticker
+  if (st.uptime && st.uptime > _ytServerUptime) {
+    _ytServerUptime = st.uptime;
+    if (!_ytUptimeBase) _ytUptimeBase = Date.now();
+    _ytStartUptimeTicker();
+  }
+  if (st.chunkRate !== undefined) {
+    const chunkEl = document.getElementById('yt-stat-chunks');
+    if (chunkEl) chunkEl.textContent = st.chunkRate ? st.chunkRate + '/s' : '—';
+    // Derive quality from chunk rate (ideally ~10/s at 100ms flush)
+    if (qualEl && !st.waiting && st.retry === 0) {
+      const qRaw = st.chunkRate;
+      const qStr = qRaw >= 8 ? 'EXCELLENT' : qRaw >= 5 ? 'GOOD' : qRaw >= 2 ? 'FAIR' : 'POOR';
+      const qCol = qRaw >= 8 ? '#4caf82' : qRaw >= 5 ? '#d4a843' : '#e05070';
+      qualEl.textContent = qStr;
+      qualEl.style.color = qCol;
     }
   }
+
+  // Reconnect history
+  _ytRenderHistory(st.history || []);
+}
+
+function _ytRenderHistory(history) {
+  const wrap = document.getElementById('yt-history-wrap');
+  const list = document.getElementById('yt-history-list');
+  if (!wrap || !list) return;
+  if (!history || !history.length) { wrap.style.display = 'none'; return; }
+  wrap.style.display = 'block';
+  list.innerHTML = history.map(h => {
+    const t = new Date(h.at);
+    const ts = t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const reason = esc(String(h.reason || 'source dropped').slice(0, 60));
+    return `<div style="border-bottom:1px solid rgba(255,82,82,0.08);padding:1px 0;">[${ts}] #${h.attempt} — ${reason}</div>`;
+  }).join('');
+}
+
+socket.on('youtube:status', _ytApplyStatus);
+
+socket.on('youtube:tick', ({ uptime, chunkRate, listeners }) => {
+  _ytServerUptime = uptime;
+  if (!_ytUptimeBase) { _ytUptimeBase = Date.now(); _ytStartUptimeTicker(); }
+  const chunkEl = document.getElementById('yt-stat-chunks');
+  if (chunkEl) chunkEl.textContent = chunkRate ? chunkRate + '/s' : '—';
+  const qualEl = document.getElementById('yt-stat-quality');
+  if (qualEl && _ytRelayLocalActive) {
+    const qStr = chunkRate >= 8 ? 'EXCELLENT' : chunkRate >= 5 ? 'GOOD' : chunkRate >= 2 ? 'FAIR' : '—';
+    const qCol = chunkRate >= 8 ? '#4caf82'   : chunkRate >= 5 ? '#d4a843' : chunkRate >= 2 ? '#e07030' : '#888';
+    qualEl.textContent = qStr; qualEl.style.color = qCol;
+  }
+  const wsEl = document.getElementById('live-ws-listeners');
+  if (wsEl && listeners !== undefined) wsEl.textContent = listeners;
 });
+
+socket.on('youtube:reconnecting', ({ attempt, reason, history }) => {
+  logActivity(`⚠ YouTube relay reconnecting (attempt ${attempt}): ${reason || 'source dropped'}`);
+  const retryEl = document.getElementById('yt-stat-retry');
+  if (retryEl) { retryEl.textContent = attempt; retryEl.style.color = attempt > 2 ? '#e05070' : '#d4a843'; }
+  _ytRenderHistory(history || []);
+});
+
 socket.on('youtube:error', (msg) => {
   logActivity('⚠ YouTube relay: ' + msg);
   const statusTxt = document.getElementById('yt-relay-status-text');

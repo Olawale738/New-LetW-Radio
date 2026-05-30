@@ -47,35 +47,45 @@ const fs   = require('fs');
 const path = require('path');
 const ffmpegPath = require('ffmpeg-static');
 
-const OUTPUT_MIME   = 'audio/webm;codecs=opus';
-const FLUSH_MS      = 100;          // coalesce stdout into ~100 ms frames
-const MAX_BACKOFF   = 15000;        // cap reconnect delay at 15 s
-const RESOLVE_TMO   = 30000;        // yt-dlp / ytdl resolve timeout
-const NO_DATA_TMO   = parseInt(process.env.YT_NODATA_MS, 10) || 35000; // recycle if ffmpeg connects but sends no audio
+const OUTPUT_MIME      = 'audio/webm;codecs=opus';
+const FLUSH_MS         = 100;          // coalesce stdout into ~100 ms frames
+const MAX_BACKOFF      = 15000;        // cap reconnect delay at 15 s
+const RESOLVE_TMO      = 30000;        // yt-dlp / ytdl resolve timeout
+const NO_DATA_TMO      = parseInt(process.env.YT_NODATA_MS, 10) || 35000; // recycle if ffmpeg connects but sends no audio
+const URL_REFRESH_MS   = 5.5 * 60 * 60 * 1000; // proactive re-resolve 5h30m after spawn (YouTube URLs expire ~6h)
+const MAX_HISTORY      = 8;            // reconnect history entries to keep
 
 class YouTubeStream extends EventEmitter {
   constructor() {
     super();
-    this._active      = false;   // admin wants the relay running
-    this._ff          = null;    // ffmpeg child process
-    this._url         = '';      // YouTube page URL
-    this._mediaUrl    = '';      // resolved direct media / HLS URL
-    this._isLiveSource = false;  // true = continuous (HLS/live) → reconnect forever
-    this._title       = 'LETW Live';
-    this._artist      = 'Light Encounter Tabernacle Worldwide';
-    this._firstChunk  = true;    // next emitted chunk is the init segment
-    this._buf         = [];      // pending stdout bytes awaiting flush
-    this._bufLen      = 0;
-    this._flushTimer  = null;
-    this._retry       = 0;       // consecutive reconnect attempts
-    this._retryTimer  = null;
-    this._startedAt   = 0;
-    this._lastError   = '';
-    this._stderrTail  = '';      // last bit of ffmpeg stderr for diagnostics
-    this._announced   = false;   // emitted 'start' yet?
-    this._waiting     = false;   // armed on a channel that is not live yet
-    this._dataWatchdog = null;   // detects "connected but silent" sources
-    this._gotData     = false;   // any chunk seen since the current spawn?
+    this._active       = false;   // admin wants the relay running
+    this._ff           = null;    // ffmpeg child process
+    this._url          = '';      // YouTube page URL
+    this._mediaUrl     = '';      // resolved direct media / HLS URL
+    this._isLiveSource = false;   // true = continuous (HLS/live) → reconnect forever
+    this._title        = 'LETW Live';
+    this._artist       = 'Light Encounter Tabernacle Worldwide';
+    this._firstChunk   = true;    // next emitted chunk is the init segment
+    this._buf          = [];      // pending stdout bytes awaiting flush
+    this._bufLen       = 0;
+    this._flushTimer   = null;
+    this._retry        = 0;       // consecutive reconnect attempts
+    this._retryTimer   = null;
+    this._startedAt    = 0;
+    this._spawnedAt    = 0;       // when current ffmpeg was spawned (URL expiry tracking)
+    this._lastError    = '';
+    this._stderrTail   = '';      // last bit of ffmpeg stderr for diagnostics
+    this._announced    = false;   // emitted 'start' yet?
+    this._waiting      = false;   // armed on a channel that is not live yet
+    this._dataWatchdog = null;    // detects "connected but silent" sources
+    this._gotData      = false;   // any chunk seen since the current spawn?
+    this._urlRefreshTimer = null; // proactive re-resolve before URL expires
+    // Chunk-rate tracking (chunks per second, averaged over 5s windows)
+    this._chunkCount   = 0;
+    this._chunkRate    = 0;
+    this._chunkRateTimer = null;
+    // Reconnect history: [{ at: epochMs, attempt: n, reason: str }]
+    this._history      = [];
   }
 
   get isActive() { return this._active; }
@@ -92,6 +102,8 @@ class YouTubeStream extends EventEmitter {
       uptime:    this._startedAt ? Math.floor((Date.now() - this._startedAt) / 1000) : 0,
       retry:     this._retry,
       lastError: this._lastError,
+      chunkRate: this._chunkRate,
+      history:   this._history.slice(),
     };
   }
 
@@ -124,12 +136,18 @@ class YouTubeStream extends EventEmitter {
     if (!this._active && !this._ff) return;
     this._active = false;
     this._waiting = false;
-    if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; }
+    if (this._retryTimer)     { clearTimeout(this._retryTimer);       this._retryTimer = null; }
+    if (this._urlRefreshTimer){ clearTimeout(this._urlRefreshTimer);  this._urlRefreshTimer = null; }
+    if (this._chunkRateTimer) { clearInterval(this._chunkRateTimer);  this._chunkRateTimer = null; }
     this._stopFlush();
     this._clearDataWatchdog();
     this._killFf();
     this._buf = []; this._bufLen = 0;
     this._startedAt = 0;
+    this._spawnedAt = 0;
+    this._chunkCount = 0;
+    this._chunkRate  = 0;
+    this._history = [];
     this.emit('stop');
   }
 
@@ -151,7 +169,7 @@ class YouTubeStream extends EventEmitter {
       this._waiting = true;
       this.emit('waiting');
       if (this._retryTimer) clearTimeout(this._retryTimer);
-      this._retryTimer = setTimeout(() => { this._retryTimer = null; this._connect(); }, 20000);
+      this._retryTimer = setTimeout(() => { this._retryTimer = null; this._connect(); }, 12000);
       return;
     }
     this._waiting = false;
@@ -177,22 +195,25 @@ class YouTubeStream extends EventEmitter {
     this._firstChunk = true;
     this._buf = []; this._bufLen = 0;
 
-    // Input flags:
-    //   • HLS live: reconnect at EOF (playlist refresh stalls), on network errors;
-    //     long timeouts tolerate slow segment CDNs without spurious disconnects.
-    //   • Plain HTTPS: reconnect on drops; shorter timeout is fine for non-HLS.
-    //   • -re: for finite VODs only, pace at realtime to avoid instant rebroadcast.
+    // Input flags — HLS live needs more aggressive reconnect options than plain HTTPS.
+    // `-reconnect_on_http_error "4xx,5xx"` handles expired CDN tokens (403/410) by
+    // asking ffmpeg to retry rather than bailing immediately (requires ffmpeg ≥4.4).
+    // `-max_reload 999` lets HLS reload the playlist indefinitely during brief gaps.
     const reconnect = isHls
       ? ['-reconnect', '1', '-reconnect_at_eof', '1', '-reconnect_streamed', '1',
-         '-reconnect_on_network_error', '1', '-reconnect_delay_max', '5',
-         '-timeout', '60000000', '-rw_timeout', '30000000']
+         '-reconnect_on_network_error', '1', '-reconnect_on_http_error', '403,410,500,502,503,504',
+         '-reconnect_delay_max', '8', '-max_reload', '999',
+         '-timeout', '60000000', '-rw_timeout', '30000000',
+         '-analyzeduration', '2000000', '-probesize', '1000000']
       : ['-reconnect', '1', '-reconnect_streamed', '1',
-         '-reconnect_delay_max', '5', '-timeout', '30000000'];
+         '-reconnect_on_network_error', '1', '-reconnect_delay_max', '5',
+         '-timeout', '30000000',
+         '-analyzeduration', '1000000', '-probesize', '500000'];
     const realtime  = this._isLiveSource ? [] : ['-re'];
     const inputArgs = [...reconnect, ...realtime, '-i', mediaUrl];
 
     const args = [
-      '-hide_banner', '-loglevel', 'error',
+      '-hide_banner', '-loglevel', 'warning',
       '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       ...inputArgs,
       '-vn',                                // drop any video
@@ -200,7 +221,10 @@ class YouTubeStream extends EventEmitter {
       '-ar', '48000', '-ac', '2',
       '-application', 'audio',              // libopus: optimise for music
       '-frame_drop_threshold', '999.0',     // never drop frames; tolerate timing jitter
+      '-af', 'aresample=async=1000',        // smooth over short clock drift / gaps
       '-f', 'webm',
+      '-cluster_size_limit', '2M',          // smaller clusters = lower listener latency
+      '-cluster_time_limit', '500',         // 500ms max cluster duration
       '-flush_packets', '1',
       'pipe:1',
     ];
@@ -238,10 +262,26 @@ class YouTubeStream extends EventEmitter {
     });
 
     // Successful spawn — reset backoff and start the flush cadence.
-    this._retry = 0;
-    this._gotData = false;
+    this._retry    = 0;
+    this._gotData  = false;
+    this._spawnedAt = Date.now();
     this._startFlush();
     this._armDataWatchdog();
+    this._startChunkRateTimer();
+    // Proactively re-resolve URL 5h30m after spawn (before YouTube's ~6h expiry).
+    // This replaces ffmpeg without interrupting the stream for more than a single
+    // WebM cluster gap that listeners auto-buffer past.
+    if (isHls && this._urlRefreshTimer) clearTimeout(this._urlRefreshTimer);
+    if (isHls) {
+      this._urlRefreshTimer = setTimeout(() => {
+        this._urlRefreshTimer = null;
+        if (!this._active) return;
+        console.log('[YouTube] Proactive URL refresh (5h30m checkpoint)…');
+        this._killFf();
+        // _connect will re-resolve and respawn; _announced stays true → no duplicate 'start'
+        this._connect();
+      }, URL_REFRESH_MS);
+    }
 
     if (!this._announced) {
       this._announced = true;
@@ -252,6 +292,7 @@ class YouTubeStream extends EventEmitter {
   _onStdout(chunk) {
     this._buf.push(chunk);
     this._bufLen += chunk.length;
+    this._chunkCount++;
     // Flush early if a single burst is large so latency stays low.
     if (this._bufLen >= 48 * 1024) this._flush();
   }
@@ -262,6 +303,17 @@ class YouTubeStream extends EventEmitter {
   }
   _stopFlush() {
     if (this._flushTimer) { clearInterval(this._flushTimer); this._flushTimer = null; }
+  }
+
+  _startChunkRateTimer() {
+    if (this._chunkRateTimer) clearInterval(this._chunkRateTimer);
+    this._chunkCount = 0;
+    this._chunkRateTimer = setInterval(() => {
+      // Average chunks/sec over the last 5-second window
+      this._chunkRate = parseFloat((this._chunkCount / 5).toFixed(1));
+      this._chunkCount = 0;
+      this.emit('tick', { uptime: this._startedAt ? Math.floor((Date.now() - this._startedAt) / 1000) : 0, chunkRate: this._chunkRate });
+    }, 5000);
   }
 
   _flush() {
@@ -293,12 +345,17 @@ class YouTubeStream extends EventEmitter {
     if (!this._active) return;
     this._retry++;
     const delay = Math.min(MAX_BACKOFF, 1000 * Math.pow(2, Math.min(this._retry, 4))); // 2s,4s,8s,16s→cap
+    // Record in reconnect history
+    this._history.unshift({ at: Date.now(), attempt: this._retry, reason: this._lastError || 'source dropped', delayMs: delay });
+    if (this._history.length > MAX_HISTORY) this._history.length = MAX_HISTORY;
     this.emit('reconnecting', this._retry);
     if (this._retryTimer) clearTimeout(this._retryTimer);
     this._retryTimer = setTimeout(() => { this._retryTimer = null; this._connect(); }, delay);
   }
 
   _killFf() {
+    if (this._urlRefreshTimer) { clearTimeout(this._urlRefreshTimer); this._urlRefreshTimer = null; }
+    if (this._chunkRateTimer)  { clearInterval(this._chunkRateTimer);  this._chunkRateTimer = null; }
     if (this._ff) {
       const ff = this._ff; this._ff = null;
       // Destroy (don't just unlisten) the stdio streams: an un-consumed, paused

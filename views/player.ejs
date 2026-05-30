@@ -2205,6 +2205,9 @@
           </div>
         </div>
 
+        <!-- YouTube source badge (shown when relay is active) -->
+        <div id="yt-source-badge" style="display:none;align-items:center;gap:5px;margin-top:4px;padding:3px 10px;border-radius:20px;background:rgba(196,48,43,0.18);border:1px solid rgba(255,82,82,0.5);font-size:10px;color:#ff8a8a;letter-spacing:0.8px;font-weight:600;transition:all 0.3s;"></div>
+
         <!-- Live broadcast timer — shown while broadcasting -->
         <div id="live-timer" aria-live="off"></div>
         <!-- Binary WS RTT indicator (visible in live mode only) -->
@@ -2606,6 +2609,7 @@ let reconnectDelay = 500;          // start fast; doubles on each failure
 const MAX_RECONNECT_DELAY = 20000; // cap at 20 s
 let isPlaying     = false;
 let isLive        = false;
+let _isYtRelay    = false;   // true while server-side YouTube relay is the live source
 let currentVolume = parseFloat(localStorage.getItem('letw_volume') || '0.85');
 let isMuted       = false;
 let sleepTick     = null;
@@ -2819,11 +2823,22 @@ socket.on('listenerChange', count => updateListeners(count));
 
 socket.on('live:started', info => {
   isLive = true;
+  clearTimeout(window._liveEndedTO);  // cancel any pending YouTube relay "ended" timer
   if (info && info.mimeType) liveMimeType = info.mimeType;
   switchToLiveMode(info);
 });
 
 socket.on('live:ended', () => {
+  // If this is a YouTube relay that's reconnecting, the server will re-emit
+  // live:started shortly. Wait 4s before tearing down so listeners don't
+  // experience a full stop-start cycle for brief network blips.
+  if (_isYtRelay) {
+    clearTimeout(window._liveEndedTO);
+    window._liveEndedTO = setTimeout(() => {
+      if (!isLive) { isLive = false; _isYtRelay = false; clearTimeout(window._liveConnectTO); exitLiveMode(); }
+    }, 4000);
+    return;
+  }
   isLive = false;
   clearTimeout(window._liveConnectTO);
   exitLiveMode();
@@ -2908,6 +2923,37 @@ socket.on('chat:unpinned', () => {
   banner.classList.remove('visible');
   document.getElementById('pinned-username').textContent = '';
   document.getElementById('pinned-text').textContent = '';
+});
+
+// YouTube relay status — update source badge and improve reconnect UX
+socket.on('youtube:status', (st) => {
+  _isYtRelay = !!(st && st.active);
+  const srcBadge = document.getElementById('yt-source-badge');
+  if (!srcBadge) return;
+  if (!_isYtRelay) { srcBadge.style.display = 'none'; return; }
+  srcBadge.style.display = 'inline-flex';
+  if (st.waiting) {
+    srcBadge.textContent = '▷ YouTube — Waiting for live…';
+    srcBadge.style.background = 'rgba(212,168,67,0.18)';
+    srcBadge.style.borderColor = 'rgba(212,168,67,0.5)';
+  } else if (st.retry > 0) {
+    srcBadge.textContent = '▷ YouTube — Reconnecting…';
+    srcBadge.style.background = 'rgba(224,112,48,0.18)';
+    srcBadge.style.borderColor = 'rgba(224,112,48,0.5)';
+  } else {
+    srcBadge.textContent = '▷ YouTube LIVE';
+    srcBadge.style.background = 'rgba(196,48,43,0.18)';
+    srcBadge.style.borderColor = 'rgba(255,82,82,0.5)';
+  }
+});
+
+socket.on('youtube:reconnecting', () => {
+  if (!_isYtRelay) return;
+  // Don't show "stream ended" toast — show "reconnecting" instead
+  const badge = document.getElementById('status-badge');
+  const text  = document.getElementById('status-text');
+  if (badge) badge.className = 'status-badge live-reconnecting';
+  if (text)  text.textContent = 'RECONNECTING…';
 });
 
 socket.on('ticker:update', ({ text, enabled }) => setTicker(text, enabled));

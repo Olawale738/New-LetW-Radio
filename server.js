@@ -1085,12 +1085,19 @@ db.init().then(() => {
 
   youtubeStream.on('reconnecting', (n) => {
     console.log(`[YouTube] Source dropped — reconnecting (attempt ${n})…`);
-    io.emit('youtube:status', youtubeStream.getStatus());
+    const st = youtubeStream.getStatus();
+    io.emit('youtube:reconnecting', { attempt: n, reason: st.lastError || 'source dropped', history: st.history });
+    io.emit('youtube:status', st);
   });
 
   youtubeStream.on('waiting', () => {
     console.log('[YouTube] Channel armed but not live yet — waiting…');
     io.emit('youtube:status', youtubeStream.getStatus());
+  });
+
+  youtubeStream.on('tick', ({ uptime, chunkRate }) => {
+    // Lightweight heartbeat to admin — do not broadcast to all listeners
+    io.emit('youtube:tick', { uptime, chunkRate, listeners: _liveListeners });
   });
 
   youtubeStream.on('error', (msg) => {
