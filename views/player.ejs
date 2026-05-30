@@ -1058,10 +1058,12 @@
       margin-bottom: 6px;
       max-width: 100%;
       word-break: break-word;
-      transition: all 0.55s;
+      transition: opacity 0.3s ease, transform 0.3s ease, all 0.55s;
       color: var(--text);
       text-shadow: 0 2px 20px rgba(212,168,67,0.12);
     }
+    .track-title.changing { opacity: 0; transform: translateY(-7px); }
+    .track-artist.changing { opacity: 0; transform: translateY(-5px); }
     .track-title.on-air {
       background: linear-gradient(90deg, #e8e0ff 0%, #f0c85a 25%, #ffe8a0 50%, #f0c85a 75%, #e8e0ff 100%);
       background-size: 220% 100%;
@@ -1079,9 +1081,32 @@
       color: var(--gold);
       text-align: center;
       margin-bottom: 18px;
-      transition: all 0.55s;
+      transition: opacity 0.3s ease, transform 0.3s ease, all 0.55s;
       letter-spacing: 0.5px;
       opacity: 0.9;
+    }
+
+    /* ── Next-track loading pill ──────────────────────────────── */
+    #next-track-pill {
+      display: none;
+      align-items: center;
+      gap: 5px;
+      justify-content: center;
+      margin: -10px 0 10px;
+      font-size: 10px;
+      letter-spacing: 1px;
+      color: var(--gold);
+      opacity: 0;
+      transition: opacity 0.4s;
+    }
+    #next-track-pill.visible { display: flex; opacity: 1; }
+    #next-track-pill::before {
+      content: '';
+      display: inline-block;
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: var(--gold);
+      animation: blink 0.9s ease-in-out infinite;
     }
 
     /* ── Visualizer ───────────────────────────────────────────── */
@@ -2244,6 +2269,7 @@
         <div class="now-broadcasting-label">Now Broadcasting</div>
         <div class="track-title" id="track-title">LETW Radio</div>
         <div class="track-artist" id="track-artist">Light Encounter Tabernacle Worldwide</div>
+        <div id="next-track-pill">LOADING NEXT TRACK</div>
         <div class="now-playing-progress" id="now-playing-progress"></div>
 
         <canvas id="visualizer" height="48"></canvas>
@@ -2592,6 +2618,8 @@
 
 <!-- Hidden audio element -->
 <audio id="audio-element" preload="none"></audio>
+<!-- Warm standby: silently pre-buffering the stream so reconnects are instant -->
+<audio id="audio-standby" preload="none" style="display:none;"></audio>
 
 <script src="/socket.io/socket.io.js"></script>
 <script>
@@ -2605,7 +2633,7 @@ const STREAM_URL  = '/stream';
 const LIVE_URL    = '/live-stream';
 
 // ── State ─────────────────────────────────────────────────────
-let reconnectDelay = 500;          // start fast; doubles on each failure
+let reconnectDelay = 150;          // start fast; doubles on each failure
 const MAX_RECONNECT_DELAY = 20000; // cap at 20 s
 let isPlaying     = false;
 let isLive        = false;
@@ -2807,12 +2835,22 @@ socket.on('trackStart', track => {
     track.title  || 'LETW Radio',
     track.artist || 'Light Encounter Tabernacle Worldwide'
   );
-  // Show album art if provided (e.g. from NowPlaying API or track metadata)
   if (typeof updateAlbumArt === 'function') updateAlbumArt(track.cover_art_url || track.art || '');
-  // Update like button for the new track
   resetLikeBtn();
   currentTrackId = track.id || null;
-  // Crossfade: fade in volume
+
+  // Health guard: if audio is stalled/paused when the next track starts, reconnect immediately.
+  // This happens when the stream TCP connection dropped silently between tracks.
+  if (isPlaying && !isLive && !_sermonActive) {
+    const stalled = audio.paused || audio.readyState < 2 /* HAVE_CURRENT_DATA */;
+    if (stalled) {
+      // Try the pre-warmed standby first (zero-gap), fall back to fresh reconnect
+      if (!_swapToStandby()) reconnectAudio(_activeStreamUrl);
+      return; // volume restore happens in audio.addEventListener('playing')
+    }
+  }
+
+  // Stream is flowing fine — just crossfade the volume back up
   if (isPlaying && !isMuted) {
     audio.volume = 0;
     fadeTo(currentVolume, crossfadeSecs * 1000);
@@ -2970,10 +3008,10 @@ socket.on('flash:alert', ({ message, color }) => {
 
 socket.on('trackWillEnd', ({ secondsLeft }) => {
   crossfadeSecs = secondsLeft || 3;
-  // Crossfade: fade out volume before track ends
-  if (isPlaying && !isMuted) {
-    fadeTo(0, (secondsLeft || 3) * 1000);
-  }
+  if (isPlaying && !isMuted) fadeTo(0, (secondsLeft || 3) * 1000);
+  if (isPlaying && !isLive)  _showPill();
+  // Pre-warm standby connection ~crossfadeSecs before the track ends
+  if (!isLive && !_sermonActive) _warmStandby();
 });
 
 // ── Status helpers ────────────────────────────────────────────
@@ -3047,10 +3085,25 @@ function _stopStatusPoll() {
 }
 
 function updateTrackInfo(title, artist) {
-  document.getElementById('track-title').textContent  = title;
-  document.getElementById('track-artist').textContent = artist;
-  document.getElementById('onair-title').textContent  = title;
-  document.getElementById('onair-artist').textContent = artist;
+  const titleEl  = document.getElementById('track-title');
+  const artistEl = document.getElementById('track-artist');
+
+  // Only animate if text is actually changing (avoid flicker on identical updates)
+  const sameTitle  = titleEl  && titleEl.textContent  === title;
+  const sameArtist = artistEl && artistEl.textContent === artist;
+  if (sameTitle && sameArtist) { _hidePill(); return; }
+
+  if (titleEl)  titleEl.classList.add('changing');
+  if (artistEl) artistEl.classList.add('changing');
+
+  setTimeout(() => {
+    if (titleEl)  { titleEl.textContent  = title;  titleEl.classList.remove('changing'); }
+    if (artistEl) { artistEl.textContent = artist; artistEl.classList.remove('changing'); }
+    document.getElementById('onair-title').textContent  = title;
+    document.getElementById('onair-artist').textContent = artist;
+    _hidePill();
+  }, 300); // match CSS transition duration
+
   updateFavBtn(title, artist);
   if ('mediaSession' in navigator) {
     navigator.mediaSession.metadata = new MediaMetadata({
@@ -3058,6 +3111,21 @@ function updateTrackInfo(title, artist) {
       artwork: [{ src: '/logo.png', sizes: '512x512', type: 'image/png' }],
     });
   }
+}
+
+// Show/hide the "LOADING NEXT TRACK" pill
+let _pillTimer = null;
+function _showPill() {
+  const pill = document.getElementById('next-track-pill');
+  if (!pill) return;
+  pill.classList.add('visible');
+  if (_pillTimer) clearTimeout(_pillTimer);
+  _pillTimer = setTimeout(_hidePill, 6000); // auto-hide after 6s if trackStart never arrives
+}
+function _hidePill() {
+  const pill = document.getElementById('next-track-pill');
+  if (pill) pill.classList.remove('visible');
+  if (_pillTimer) { clearTimeout(_pillTimer); _pillTimer = null; }
 }
 
 function updateListeners(count) {
@@ -3617,6 +3685,8 @@ function switchToLiveMode(info) {
     return;
   }
   hideLiveJoinBanner();
+  _teardownStandby(); // live mode takes over the audio element — no standby needed
+  _hidePill();
 
   // Already playing live stream (either via MediaSource or HTTP) — nothing to do.
   if (!audio.paused && (_liveUseMS || (audio.src && audio.src.includes('/live-stream')))) return;
@@ -3681,6 +3751,48 @@ function getStreamUrl() { return isLive ? LIVE_URL : STREAM_URL; }
 
 // ── Audio ─────────────────────────────────────────────────────
 const audio = document.getElementById('audio-element');
+
+// ── Warm standby: keep a silent secondary connection pre-buffered ─────────────
+// When trackWillEnd fires, we connect the standby element to /stream.
+// If the primary audio stalls at a track boundary, _swapToStandby() switches
+// to the already-buffered connection in ~50ms instead of a 300ms fresh reconnect.
+const _standby = document.getElementById('audio-standby');
+let   _standbyReady = false;
+let   _standbyTimer = null;
+
+function _warmStandby() {
+  if (isLive || _sermonActive || _standbyReady || !_standby) return;
+  _standby.src    = _bust(_activeStreamUrl);
+  _standby.volume = 0;
+  _standby.preload = 'auto';
+  _standby.load();
+  _standby.play().catch(() => {});
+  _standby.oncanplay = () => { _standbyReady = true; };
+  // Auto-teardown after 10s (track transition window is over)
+  if (_standbyTimer) clearTimeout(_standbyTimer);
+  _standbyTimer = setTimeout(_teardownStandby, 10000);
+}
+
+function _teardownStandby() {
+  _standbyReady = false;
+  if (_standbyTimer) { clearTimeout(_standbyTimer); _standbyTimer = null; }
+  if (_standby) { _standby.pause(); _standby.src = ''; _standby.oncanplay = null; }
+}
+
+// Swap the standby in as the primary stream — returns true if swapped.
+function _swapToStandby() {
+  if (!_standbyReady || !_standby || !_standby.src) return false;
+  const url = _standby.src;
+  _teardownStandby();
+  // Point primary audio at the same already-connected stream URL
+  audio.src = url;
+  audio.volume = 0;
+  audio.load();
+  audio.play().catch(() => scheduleReconnect());
+  fadeTo(currentVolume, 250); // quick fade in
+  return true;
+}
+
 audio.volume = currentVolume;
 
 audio.addEventListener('playing', () => {
@@ -3688,7 +3800,8 @@ audio.addEventListener('playing', () => {
   _wasEverPlaying = true;
   _streamErrorCount = 0;
   hideStreamErrorBanner();
-  reconnectDelay = 2000;
+  reconnectDelay = 150;
+  _hidePill();
   document.getElementById('play-icon').textContent = '⏸';
   document.getElementById('play-btn').classList.add('playing');
   if (isLive) {
@@ -3889,6 +4002,8 @@ function startPlayback() {
 }
 
 function stopPlayback() {
+  _teardownStandby();
+  _hidePill();
   audio.pause();
   audio.src = '';
   isPlaying = false;
@@ -3898,7 +4013,7 @@ function stopPlayback() {
   // Cancel any pending reconnect so the user's stop action is respected
   clearTimeout(reconnectTO);
   reconnectTO = null;
-  reconnectDelay = 2000; // reset backoff for next play session
+  reconnectDelay = 150; // reset backoff for next play session
   document.getElementById('play-icon').textContent = '▶';
   document.getElementById('play-btn').classList.remove('playing');
   // Clear sermon mode UI if active
@@ -3951,6 +4066,10 @@ function scheduleReconnect() {
 
   clearTimeout(reconnectTO);
   clearStallTimer();
+
+  // If standby is ready, swap immediately (no visible "RECONNECTING" flash)
+  if (_swapToStandby()) return;
+
   const badge = document.getElementById('status-badge');
   const text  = document.getElementById('status-text');
   const heroStatus = document.getElementById('hero-status');
@@ -4155,7 +4274,7 @@ setInterval(() => {
     _lwsRetries = Math.max(0, _lwsRetries - 1); // reduce backoff on timed wakeup
     _lwsConnect();
   }
-}, 6000);
+}, 3000);
 
 // Audio stall detector: the 'waiting' event fires when the browser has run out
 // of audio data.  If it persists for more than 3 seconds we force a reconnect
@@ -4167,10 +4286,13 @@ audio.addEventListener('waiting', () => {
   _stallTimer = setTimeout(() => {
     _stallTimer = null;
     if (!isPlaying || reconnectTO || !audio.paused) return;
-    console.warn('[Stall] Audio waiting >3 s — forcing reconnect');
+    console.warn('[Stall] Audio waiting >0.8 s — forcing reconnect');
     if (isLive) scheduleLiveReconnect(200);
-    else        reconnectAudio(_activeStreamUrl);
-  }, 3000);
+    else {
+      // Try standby swap first — faster than a full reconnect
+      if (!_swapToStandby()) reconnectAudio(_activeStreamUrl);
+    }
+  }, 800);
 });
 audio.addEventListener('playing', () => {
   if (_stallTimer) { clearTimeout(_stallTimer); _stallTimer = null; }
