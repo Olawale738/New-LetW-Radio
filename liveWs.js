@@ -86,7 +86,7 @@ class LiveWsServer {
     this._seq          = 0;           // global frame sequence counter
     this._initFrame    = null;        // cached INIT frame for new connections
     this._ringBuffer   = [];          // Array<Buffer> — pre-framed AUDIO frames
-    this._ringSize     = 300;         // ~30 s at 100 ms timeslice / ~15 s at 50 ms
+    this._ringSize     = 400;         // ~40 s at 100 ms timeslice — more headroom for late/slow joiners
     this._isLive       = false;
     this._bytesSent    = 0;           // total payload bytes sent (approx)
     this._audioEngine  = null;        // set by server.js after audioEngine init
@@ -118,17 +118,15 @@ class LiveWsServer {
 
     this._wss.on('connection', (ws, req) => this._onConnect(ws, req));
 
-    // ── Heartbeat: ping every 6 s, drop unresponsive after three misses ──
-    // 3 × 6 s = 18 s max to evict a dead socket.  Three-miss threshold avoids
-    // false-positive disconnects on mobile networks where a single ping may be
-    // delayed by an LTE handoff without the TCP session actually dying.
+    // ── Heartbeat: ping every 4 s, drop unresponsive after three misses ──
+    // 3 × 4 s = 12 s max to evict a dead socket (was 18 s).
     this._heartbeatTimer = setInterval(() => {
       for (const ws of (this._wss?.clients || [])) {
         if (ws._hbMissed >= 3) { ws.terminate(); continue; }
         ws._hbMissed = (ws._hbMissed || 0) + 1;
         try { ws.ping(); } catch (_) {}
       }
-    }, 6000);
+    }, 4000);
 
     console.log('[LiveWS] ⚡ Binary WebSocket server attached → /live-ws');
     return this;
@@ -239,10 +237,19 @@ class LiveWsServer {
       // ── Send catchup if mid-broadcast ────────────────────────────────
       if (this._isLive && this._initFrame) {
         this._safeSend(ws, this._initFrame);
-        // Send ring buffer in one shot — each frame is already binary-framed
-        for (const frame of this._ringBuffer) {
-          this._safeSend(ws, frame);
-        }
+        // Stagger the ring buffer delivery: send first 8 frames immediately
+        // so the browser's MSE pipeline can start decoding, then deliver the
+        // rest in 32-frame batches on the next event loop tick.  This avoids
+        // flooding the listener's SourceBuffer before it has had a chance to
+        // open its 'sourceopen' handler and call appendBuffer() the first time.
+        const ring = this._ringBuffer.slice(); // snapshot so live writes don't race
+        const BATCH = 32;
+        const sendBatch = (i) => {
+          const end = Math.min(i + BATCH, ring.length);
+          for (; i < end; i++) this._safeSend(ws, ring[i]);
+          if (i < ring.length) setImmediate(() => sendBatch(i));
+        };
+        sendBatch(0);
       }
     }
 

@@ -3166,25 +3166,42 @@ function cleanupLiveMS() {
   // the audio element briefly pointing to a dead blob URL.
 }
 
-/** Drain one pending chunk into the SourceBuffer (called after each updateend). */
+/** Drain pending chunks into the SourceBuffer (called after each updateend). */
 function _liveFlush() {
   if (!_liveSB || _liveSB.updating || _livePending.length === 0) return;
-  // Guard against stale/closed MediaSource — appendBuffer throws InvalidStateError
-  // if the MediaSource is not in 'open' state (e.g. after cleanupLiveMS was called
-  // on the previous session but sourceopen fired late on the orphaned object).
+  // Guard against stale/closed MediaSource
   if (!_liveMS || _liveMS.readyState !== 'open') return;
   try {
-    // Keep buffer lean: max 3 s total, keep only last 1 s.
-    // Tighter limits = less latency between admin voice and listener ear.
+    // Keep buffer lean: max 3 s total, trim to last 1 s.
     if (_liveSB.buffered.length > 0) {
       const end   = _liveSB.buffered.end(_liveSB.buffered.length - 1);
       const start = _liveSB.buffered.start(0);
       if (end - start > 3) {
         _liveSB.remove(start, Math.max(start + 0.1, end - 1));
-        return; // updateend will re-call _liveFlush
+        return; // updateend re-calls _liveFlush
       }
     }
-    _liveSB.appendBuffer(_livePending.shift());
+    // Batch: merge all pending chunks into one appendBuffer call.
+    // WebM clusters are contiguous binary data and safe to concatenate.
+    // One call vs. N calls reduces MSE round-trips from potentially 60+
+    // (on a large catchup replay) down to 1 — join latency drops ~10×.
+    if (_livePending.length === 1) {
+      _liveSB.appendBuffer(_livePending.shift());
+    } else {
+      let totalLen = 0;
+      for (const b of _livePending) totalLen += (b.byteLength || b.length || 0);
+      const merged = new Uint8Array(totalLen);
+      let off = 0;
+      for (const b of _livePending) {
+        const arr = (b instanceof ArrayBuffer)
+          ? new Uint8Array(b)
+          : new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
+        merged.set(arr, off);
+        off += arr.length;
+      }
+      _livePending = [];
+      _liveSB.appendBuffer(merged.buffer);
+    }
   } catch(e) {
     if (e.name === 'QuotaExceededError' || e.name === 'InvalidStateError') {
       console.warn('[Live] SourceBuffer error', e.name, '— falling back to HTTP');
@@ -3423,9 +3440,14 @@ function _lwsConnect() {
 
   _lws.onopen = () => {
     console.log('[LiveWS] Binary WebSocket connected ✓');
-    _lwsSeq    = 0;
+    _lwsSeq     = 0;
     _lwsRetries = 0;  // reset backoff on successful connect
     _lwsPingLoop();
+    // If binary WS reconnected mid-broadcast (Socket.IO was already up),
+    // request a fresh sync so we get init + recent ring without a full restart.
+    if (isLive && _liveUseMS) {
+      socket.emit('live:sync');
+    }
   };
 
   _lws.onmessage = ({ data }) => {
@@ -3616,7 +3638,7 @@ function scheduleLiveReconnect(delayMs) {
       startLiveViaMS();
     }
     audio.play().catch(err => {
-      if (err.name !== 'AbortError') scheduleLiveReconnect(2000);
+      if (err.name !== 'AbortError') scheduleLiveReconnect(300);
     });
   }, delayMs);
 }
@@ -3706,7 +3728,7 @@ function switchToLiveMode(info) {
   // _connectLiveWorklet() is called inside startLiveViaMS sourceopen handler.
 
   startLiveViaMS();             // try MediaSource first; falls back to HTTP inside
-  audio.play().catch(err => { if (err.name !== 'AbortError') scheduleLiveReconnect(800); });
+  audio.play().catch(err => { if (err.name !== 'AbortError') scheduleLiveReconnect(200); });
   // Tell server this listener has joined live — used for live-listener count display in admin
   socket.emit('live:join');
 }
@@ -4150,15 +4172,16 @@ function stopLiveEdgeMonitor() {
 // and show a feedback badge so the user knows what's happening.
 function startLiveJoinTimeout() {
   clearLiveJoinTimeout();
+  // 4 s to first audio — tighter than the old 10 s so failures surface faster
   _liveJoinTO = setTimeout(() => {
     if (isLive && !isPlaying) {
       const badge = document.getElementById('status-badge');
       const text  = document.getElementById('status-text');
       if (badge) badge.className = 'status-badge live-reconnecting';
       if (text)  text.textContent = 'RETRYING…';
-      scheduleLiveReconnect(500);
+      scheduleLiveReconnect(200);
     }
-  }, 10000);
+  }, 4000);
 }
 function clearLiveJoinTimeout() {
   if (_liveJoinTO) { clearTimeout(_liveJoinTO); _liveJoinTO = null; }
@@ -4195,17 +4218,14 @@ function startStallTimer() {
   }, 4000);
 }
 
-// Live-stream stall watchdog — 5 s grace period.
-// The normal decoder-init gap between the WebM header and the first audio
-// cluster is ~100–300 ms.  5 s catches genuine network stalls faster than the
-// previous 8 s while still being well above the normal buffering gap.
-// The MediaSource race conditions that used to cause false positives here have
-// been fixed (stale-session guard in startLiveViaMS), so 5 s is safe.
+// Live-stream stall watchdog — 3 s grace period.
+// The decoder-init gap is ~100–300 ms; 3 s gives plenty of margin while
+// catching genuine network stalls 2s faster than the old 5s.
 function startLiveStallTimer() {
   clearStallTimer();
   stallTimer = setTimeout(() => {
     if (isLive) scheduleLiveReconnect(0);
-  }, 5000);
+  }, 3000);
 }
 
 function clearStallTimer() {
@@ -4263,10 +4283,10 @@ setInterval(() => {
   if (audio.paused && !reconnectTO) {
     if (isLive && isPlaying) {
       console.warn('[Keepalive] Live audio paused silently — reconnecting');
-      scheduleLiveReconnect(400);
+      scheduleLiveReconnect(200);   // was 400ms — faster live recovery
     } else if (isPlaying && !isLive) {
       console.warn('[Keepalive] Audio paused while active — reconnecting');
-      scheduleReconnect();
+      if (!_swapToStandby()) scheduleReconnect();
     }
   }
   // Binary WS stall guard: if live mode is active but binary WS is not open, reopen it
@@ -4275,6 +4295,24 @@ setInterval(() => {
     _lwsConnect();
   }
 }, 3000);
+
+// Extra fast-tick for live streams only: check every 2 s that we still have
+// buffered data ahead of the playhead.  If not, force a binary WS re-sync so
+// the next chunk arrives within one heartbeat interval (2.5 s) rather than
+// waiting for the 3 s general keepalive above.
+setInterval(() => {
+  if (!isLive || !isPlaying || !_liveMS || !_liveSB || audio.paused) return;
+  if (!audio.buffered || audio.buffered.length === 0) return;
+  try {
+    const bufEnd = _liveSB.buffered.length
+      ? _liveSB.buffered.end(_liveSB.buffered.length - 1)
+      : 0;
+    // If less than 200ms of audio is buffered ahead, request a fresh sync
+    if (bufEnd - audio.currentTime < 0.2 && !reconnectTO) {
+      socket.emit('live:sync');
+    }
+  } catch(_) {}
+}, 2000);
 
 // Audio stall detector: the 'waiting' event fires when the browser has run out
 // of audio data.  If it persists for more than 3 seconds we force a reconnect

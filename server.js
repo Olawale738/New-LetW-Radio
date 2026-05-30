@@ -24,8 +24,8 @@ const io = new Server(server, {
   // Ping every 8 s; allow 8 s for a pong before declaring the socket dead.
   // 8+8 = 16 s total — fast enough to detect mobile handoffs and dead NAT
   // sessions without false-positive evictions on slow connections.
-  pingInterval:        8000,
-  pingTimeout:         8000,
+  pingInterval:        5000,   // detect dead sockets 3s faster than before
+  pingTimeout:         4000,   // declare dead after 4s of no pong (was 8s)
   // Large buffer for binary audio chunks.
   maxHttpBufferSize:   10 * 1024 * 1024,  // 10 MB
   upgradeTimeout:      15000,
@@ -586,7 +586,7 @@ function _broadcastListenerCount() {
 // Ring buffer: keep last 30 chunks (~3 s at 100 ms timeslice) so late-joining
 // listeners receive a small catchup payload and MediaSource can decode immediately
 // instead of waiting for the next keyframe.
-const LIVE_RING_SIZE      = 60; // ~6 s at 100 ms timeslice (binary WS has its own 120-chunk ring)
+const LIVE_RING_SIZE      = 90; // ~9 s at 100 ms timeslice — more catchup headroom for late joiners
 let   _liveRingBuffer     = [];   // Array<Buffer>
 let   _liveBytesSent      = 0;    // total bytes transmitted in current broadcast
 let   _liveListeners      = 0;    // WS clients that have signalled live:join
@@ -727,6 +727,18 @@ io.on('connection', (socket) => {
       if (_liveRingBuffer.length > 0) {
         socket.emit('live:catchup', _liveRingBuffer.slice());
       }
+    }
+  });
+
+  // Listener requests a full mid-broadcast re-sync (e.g. binary WS reconnected
+  // but Socket.IO was already up, so the normal on-connect catchup never fired).
+  // Sends init + current ring so the MSE pipeline can continue without a full restart.
+  socket.on('live:sync', () => {
+    if (!audioEngine.isLive || !audioEngine.liveInitChunk) return;
+    socket.emit('live:init', audioEngine.liveInitChunk);
+    if (_liveRingBuffer.length > 0) {
+      // Send as individual chunks so the client can batch-append them efficiently
+      socket.emit('live:catchup', _liveRingBuffer.slice());
     }
   });
 
